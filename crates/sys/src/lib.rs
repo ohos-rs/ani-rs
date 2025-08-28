@@ -2,6 +2,14 @@
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+pub const ANI_VERSION_1: u32 = 1;
+pub const ANI_FALSE: u32 = 0;
+pub const ANI_TRUE: u32 = 1;
+pub const ANI_LOGLEVEL_FATAL: u32 = 0;
+pub const ANI_LOGLEVEL_ERROR: u32 = 1;
+pub const ANI_LOGLEVEL_WARNING: u32 = 2;
+pub const ANI_LOGLEVEL_INFO: u32 = 3;
+pub const ANI_LOGLEVEL_DEBUG: u32 = 4;
 pub type va_list = __builtin_va_list;
 pub type ani_size = usize;
 pub type ani_boolean = u8;
@@ -230,6 +238,26 @@ const _: () = {
     ["Offset of field: __ani_vm_api::DetachCurrentThread"]
         [::std::mem::offset_of!(__ani_vm_api, DetachCurrentThread) - 56usize];
 };
+unsafe extern "C" {
+    pub fn ANI_CreateVM(
+        options: *const ani_options,
+        version: u32,
+        result: *mut *mut ani_vm,
+    ) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_GetCreatedVMs(
+        vms_buffer: *mut *mut ani_vm,
+        vms_buffer_length: ani_size,
+        result: *mut ani_size,
+    ) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_Constructor(vm: *mut ani_vm, result: *mut u32) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_Destructor(vm: *mut ani_vm) -> ani_status;
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __ani_interaction_api {

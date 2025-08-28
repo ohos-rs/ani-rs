@@ -9,6 +9,9 @@ version = "0.0.1-alpha.1"
 [[package]]
 name = "ani-rs"
 version = "0.0.1-alpha.1"
+dependencies = [
+ "ani-sys",
+]
 
 [[package]]
 name = "ani-sys"
