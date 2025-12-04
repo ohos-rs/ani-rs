@@ -2,6 +2,14 @@
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+pub const ANI_VERSION_1: u32 = 1;
+pub const ANI_FALSE: u32 = 0;
+pub const ANI_TRUE: u32 = 1;
+pub const ANI_LOGLEVEL_FATAL: u32 = 0;
+pub const ANI_LOGLEVEL_ERROR: u32 = 1;
+pub const ANI_LOGLEVEL_WARNING: u32 = 2;
+pub const ANI_LOGLEVEL_INFO: u32 = 3;
+pub const ANI_LOGLEVEL_DEBUG: u32 = 4;
 pub type va_list = __builtin_va_list;
 pub type ani_size = usize;
 pub type ani_boolean = u8;
@@ -30,7 +38,6 @@ pub type ani_arraybuffer = ani_object;
 pub type ani_string = ani_object;
 pub type ani_class = ani_type;
 pub type ani_enum = ani_type;
-pub type ani_union = ani_type;
 pub type ani_array = ani_object;
 pub type ani_array_boolean = ani_array;
 pub type ani_array_char = ani_array;
@@ -41,6 +48,16 @@ pub type ani_array_long = ani_array;
 pub type ani_array_float = ani_array;
 pub type ani_array_double = ani_array;
 pub type ani_array_ref = ani_array;
+pub type ani_fixedarray = ani_object;
+pub type ani_fixedarray_boolean = ani_fixedarray;
+pub type ani_fixedarray_char = ani_fixedarray;
+pub type ani_fixedarray_byte = ani_fixedarray;
+pub type ani_fixedarray_short = ani_fixedarray;
+pub type ani_fixedarray_int = ani_fixedarray;
+pub type ani_fixedarray_long = ani_fixedarray;
+pub type ani_fixedarray_float = ani_fixedarray;
+pub type ani_fixedarray_double = ani_fixedarray;
+pub type ani_fixedarray_ref = ani_fixedarray;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __ani_wref {
@@ -89,9 +106,6 @@ pub struct __ani_resolver {
     _unused: [u8; 0],
 }
 pub type ani_resolver = *mut __ani_resolver;
-pub type ani_finalizer = ::std::option::Option<
-    unsafe extern "C" fn(data: *mut ::std::os::raw::c_void, hint: *mut ::std::os::raw::c_void),
->;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union ani_value {
@@ -105,20 +119,6 @@ pub union ani_value {
     pub d: ani_double,
     pub r: ani_ref,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of ani_value"][::std::mem::size_of::<ani_value>() - 8usize];
-    ["Alignment of ani_value"][::std::mem::align_of::<ani_value>() - 8usize];
-    ["Offset of field: ani_value::z"][::std::mem::offset_of!(ani_value, z) - 0usize];
-    ["Offset of field: ani_value::c"][::std::mem::offset_of!(ani_value, c) - 0usize];
-    ["Offset of field: ani_value::b"][::std::mem::offset_of!(ani_value, b) - 0usize];
-    ["Offset of field: ani_value::s"][::std::mem::offset_of!(ani_value, s) - 0usize];
-    ["Offset of field: ani_value::i"][::std::mem::offset_of!(ani_value, i) - 0usize];
-    ["Offset of field: ani_value::l"][::std::mem::offset_of!(ani_value, l) - 0usize];
-    ["Offset of field: ani_value::f"][::std::mem::offset_of!(ani_value, f) - 0usize];
-    ["Offset of field: ani_value::d"][::std::mem::offset_of!(ani_value, d) - 0usize];
-    ["Offset of field: ani_value::r"][::std::mem::offset_of!(ani_value, r) - 0usize];
-};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ani_native_function {
@@ -126,17 +126,6 @@ pub struct ani_native_function {
     pub signature: *const ::std::os::raw::c_char,
     pub pointer: *const ::std::os::raw::c_void,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of ani_native_function"][::std::mem::size_of::<ani_native_function>() - 24usize];
-    ["Alignment of ani_native_function"][::std::mem::align_of::<ani_native_function>() - 8usize];
-    ["Offset of field: ani_native_function::name"]
-        [::std::mem::offset_of!(ani_native_function, name) - 0usize];
-    ["Offset of field: ani_native_function::signature"]
-        [::std::mem::offset_of!(ani_native_function, signature) - 8usize];
-    ["Offset of field: ani_native_function::pointer"]
-        [::std::mem::offset_of!(ani_native_function, pointer) - 16usize];
-};
 pub type ani_vm = *const __ani_vm_api;
 pub type ani_env = *const __ani_interaction_api;
 pub const ani_status_ANI_OK: ani_status = 0;
@@ -161,28 +150,12 @@ pub struct ani_option {
     pub option: *const ::std::os::raw::c_char,
     pub extra: *mut ::std::os::raw::c_void,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of ani_option"][::std::mem::size_of::<ani_option>() - 16usize];
-    ["Alignment of ani_option"][::std::mem::align_of::<ani_option>() - 8usize];
-    ["Offset of field: ani_option::option"][::std::mem::offset_of!(ani_option, option) - 0usize];
-    ["Offset of field: ani_option::extra"][::std::mem::offset_of!(ani_option, extra) - 8usize];
-};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ani_options {
     pub nr_options: usize,
     pub options: *const ani_option,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of ani_options"][::std::mem::size_of::<ani_options>() - 16usize];
-    ["Alignment of ani_options"][::std::mem::align_of::<ani_options>() - 8usize];
-    ["Offset of field: ani_options::nr_options"]
-        [::std::mem::offset_of!(ani_options, nr_options) - 0usize];
-    ["Offset of field: ani_options::options"]
-        [::std::mem::offset_of!(ani_options, options) - 8usize];
-};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __ani_vm_api {
@@ -209,27 +182,26 @@ pub struct __ani_vm_api {
     pub DetachCurrentThread:
         ::std::option::Option<unsafe extern "C" fn(vm: *mut ani_vm) -> ani_status>,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of __ani_vm_api"][::std::mem::size_of::<__ani_vm_api>() - 64usize];
-    ["Alignment of __ani_vm_api"][::std::mem::align_of::<__ani_vm_api>() - 8usize];
-    ["Offset of field: __ani_vm_api::reserved0"]
-        [::std::mem::offset_of!(__ani_vm_api, reserved0) - 0usize];
-    ["Offset of field: __ani_vm_api::reserved1"]
-        [::std::mem::offset_of!(__ani_vm_api, reserved1) - 8usize];
-    ["Offset of field: __ani_vm_api::reserved2"]
-        [::std::mem::offset_of!(__ani_vm_api, reserved2) - 16usize];
-    ["Offset of field: __ani_vm_api::reserved3"]
-        [::std::mem::offset_of!(__ani_vm_api, reserved3) - 24usize];
-    ["Offset of field: __ani_vm_api::DestroyVM"]
-        [::std::mem::offset_of!(__ani_vm_api, DestroyVM) - 32usize];
-    ["Offset of field: __ani_vm_api::GetEnv"]
-        [::std::mem::offset_of!(__ani_vm_api, GetEnv) - 40usize];
-    ["Offset of field: __ani_vm_api::AttachCurrentThread"]
-        [::std::mem::offset_of!(__ani_vm_api, AttachCurrentThread) - 48usize];
-    ["Offset of field: __ani_vm_api::DetachCurrentThread"]
-        [::std::mem::offset_of!(__ani_vm_api, DetachCurrentThread) - 56usize];
-};
+unsafe extern "C" {
+    pub fn ANI_CreateVM(
+        options: *const ani_options,
+        version: u32,
+        result: *mut *mut ani_vm,
+    ) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_GetCreatedVMs(
+        vms_buffer: *mut *mut ani_vm,
+        vms_buffer_length: ani_size,
+        result: *mut ani_size,
+    ) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_Constructor(vm: *mut ani_vm, result: *mut u32) -> ani_status;
+}
+unsafe extern "C" {
+    pub fn ANI_Destructor(vm: *mut ani_vm) -> ani_status;
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __ani_interaction_api {
@@ -893,6 +865,305 @@ pub struct __ani_interaction_api {
             result: *mut ani_ref,
         ) -> ani_status,
     >,
+    #[doc = " @brief Creates a new array\n\n This function creates a new array of the specified length.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the array to be created.\n @param[in] initial_element Element the array will be initialized with\n @param[out] result A pointer to store the created array.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Array_New: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            initial_element: ani_ref,
+            result: *mut ani_array,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a value to an array.\n\n This function sets a value to array from an ani_ref value.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The array to retrieve values from.\n @param[in] index The index of element to retrieve.\n @param[in] ref Value to set\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Array_Set: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_array,
+            index: ani_size,
+            ref_: ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a value from an array.\n\n This function retrieves a value from array into an ani_ref pointer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The array to retrieve values from.\n @param[in] index The index of element to retrieve.\n @param[out] result A pointer to store the retrieved value.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Array_Get: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_array,
+            index: ani_size,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Push a value to the end of array.\n\n This function pushes value from an ani_ref to the end of array.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The array to retrieve values from.\n @param[in] ref Value to set\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Array_Push: ::std::option::Option<
+        unsafe extern "C" fn(env: *mut ani_env, array: ani_array, ref_: ani_ref) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves the last element and erases it from array.\n\n This function retrieves the last element and erases it from array.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The array whose last element is to be retrieved.\n @param[out] result A pointer to store the last element of the array.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Array_Pop: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_array,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves the length of an fixedarray.\n\n This function retrieves the length of the specified array.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray whose length is to be retrieved.\n @param[out] result A pointer to store the length of the fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetLength: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray,
+            result: *mut ani_size,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of booleans.\n\n This function creates a new fixedarray of the specified length for boolean values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Boolean: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_boolean,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of characters.\n\n This function creates a new fixedarray of the specified length for character values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Char: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_char,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of bytes.\n\n This function creates a new fixedarray of the specified length for byte values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Byte: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_byte,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of shorts.\n\n This function creates a new fixedarray of the specified length for short integer values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Short: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_short,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of integers.\n\n This function creates a new fixedarray of the specified length for integer values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Int: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_int,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of long integers.\n\n This function creates a new fixedarray of the specified length for long integer values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Long: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_long,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of floats.\n\n This function creates a new fixedarray of the specified length for float values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Float: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_float,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of doubles.\n\n This function creates a new fixedarray of the specified length for double values.\n\n @param[in] env A pointer to the environment structure.\n @param[in] length The length of the fixedarray to be created.\n @param[out] result A pointer to store the created fixedarray.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Double: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            length: ani_size,
+            result: *mut ani_fixedarray_double,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of boolean values from an fixedarray.\n\n This function retrieves a portion of the specified boolean fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved boolean values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Boolean: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_boolean,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_boolean,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of character values from an fixedarray.\n\n This function retrieves a portion of the specified character fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved character values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Char: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_char,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_char,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of byte values from an fixedarray.\n\n This function retrieves a portion of the specified byte fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved byte values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Byte: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_byte,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_byte,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of short values from an fixedarray.\n\n This function retrieves a portion of the specified short fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved short values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Short: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_short,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_short,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of integer values from an fixedarray.\n\n This function retrieves a portion of the specified integer fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved integer values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Int: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_int,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_int,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of long integer values from an fixedarray.\n\n This function retrieves a portion of the specified long integer fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved long integer values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Long: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_long,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_long,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of float values from an fixedarray.\n\n This function retrieves a portion of the specified float fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved float values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Float: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_float,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_float,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a region of double values from an fixedarray.\n\n This function retrieves a portion of the specified double fixedarray into a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to retrieve values from.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to retrieve.\n @param[out] native_buffer A buffer to store the retrieved double values.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_GetRegion_Double: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_double,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *mut ani_double,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of boolean values in an fixedarray.\n\n This function sets a portion of the specified boolean fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the boolean values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Boolean: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_boolean,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_boolean,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of character values in an fixedarray.\n\n This function sets a portion of the specified character fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the character values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Char: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_char,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_char,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of byte values in an fixedarray.\n\n This function sets a portion of the specified byte fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the byte values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Byte: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_byte,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_byte,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of short values in an fixedarray.\n\n This function sets a portion of the specified short fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the short values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Short: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_short,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_short,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of integer values in an fixedarray.\n\n This function sets a portion of the specified integer fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the integer values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Int: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_int,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_int,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of long integer values in an fixedarray.\n\n This function sets a portion of the specified long integer fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the long integer values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Long: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_long,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_long,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of float values in an fixedarray.\n\n This function sets a portion of the specified float fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the float values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Float: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_float,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_float,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a region of double values in an fixedarray.\n\n This function sets a portion of the specified double fixedarray using a native buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray to set values in.\n @param[in] offset The starting offset of the region.\n @param[in] length The number of elements to set.\n @param[in] native_buffer A buffer containing the double values to set.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_SetRegion_Double: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_double,
+            offset: ani_size,
+            length: ani_size,
+            native_buffer: *const ani_double,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Creates a new fixedarray of references.\n\n This function creates a new fixedarray of references, optionally initializing it with an initial_element ref.\n\n @param[in] env A pointer to the environment structure.\n @param[in] type The type of the elements of the fixedarray.\n @param[in] length The length of the fixedarray to be created.\n @param[in] initial_element An optional reference to initialize the fixedarray. Can be null.\n @param[out] result A pointer to store the created fixedarray of references.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_New_Ref: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            type_: ani_type,
+            length: ani_size,
+            initial_element: ani_ref,
+            result: *mut ani_fixedarray_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a reference at a specific index in an fixedarray.\n\n This function sets the value of a reference at the specified index in the fixedarray.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The array of references to modify.\n @param[in] index The index at which to set the reference.\n @param[in] ref The reference to set at the specified index.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_Set_Ref: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_ref,
+            index: ani_size,
+            ref_: ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Retrieves a reference from a specific index in an fixedarray.\n\n This function retrieves the value of a reference at the specified index in the fixedarray.\n\n @param[in] env A pointer to the environment structure.\n @param[in] array The fixedarray of references to query.\n @param[in] index The index from which to retrieve the reference.\n @param[out] result A pointer to store the retrieved reference.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub FixedArray_Get_Ref: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            array: ani_fixedarray_ref,
+            index: ani_size,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
     #[doc = " @brief Retrieves an enum item by its name.\n\n This function retrieves an enum item associated with the specified name.\n\n @param[in] env A pointer to the environment structure.\n @param[in] enm The enum to search within.\n @param[in] name The name of the enum item to retrieve.\n @param[out] result A pointer to store the retrieved enum item.\n @return Returns a status code of type `ani_status` indicating success or failure."]
     pub Enum_GetEnumItemByName: ::std::option::Option<
         unsafe extern "C" fn(
@@ -951,7 +1222,7 @@ pub struct __ani_interaction_api {
             result: *mut ani_size,
         ) -> ani_status,
     >,
-    #[doc = " @brief Invokes a functional object.\n\n This function invokes a functional object (e.g., a function or callable object) with the specified arguments.\n\n @param[in] env A pointer to the environment structure.\n @param[in] fn The functional object to invoke.\n @param[in] argc The number of arguments being passed to the functional object.\n @param[in] argv A pointer to an array of references representing the arguments. Can be null if `argc` is 0.\n @param[out] result A pointer to store the result of the invocation. Can be null if the functional object does not\n return a value.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    #[doc = " @brief Invokes a functional object.\n\n This function invokes a functional object (e.g., a function or callable object) with the specified arguments.\n\n @param[in] env A pointer to the environment structure.\n @param[in] fn The functional object to invoke.\n @param[in] argc The number of arguments being passed to the functional object.\n @param[in] argv A pointer to an array of references representing the arguments. Can be null if `argc` is 0.\n @param[out] result A pointer to store the result of the invocation. Must be non null.\n @return Returns a status code of type `ani_status` indicating success or failure."]
     pub FunctionalObject_Call: ::std::option::Option<
         unsafe extern "C" fn(
             env: *mut ani_env,
@@ -3707,17 +3978,6 @@ pub struct __ani_interaction_api {
             arraybuffer_result: *mut ani_arraybuffer,
         ) -> ani_status,
     >,
-    #[doc = " @brief Creates a new array buffer using external data.\n\n This function creates an array buffer that uses external data. The provided finalizer will be called when the\n array buffer is no longer needed.\n\n @param[in] env A pointer to the environment structure.\n @param[in] external_data A pointer to the external data to be used by the array buffer.\n @param[in] length The length of the external data in bytes.\n @param[in] finalizer A callback function to be called when the array buffer is finalized. Can be nullptr.\n @param[in] hint A user-defined hint to be passed to the finalizer. Can be nullptr.\n @param[out] result A pointer to store the created array buffer object.\n @return Returns a status code of type `ani_status` indicating success or failure."]
-    pub CreateArrayBufferExternal: ::std::option::Option<
-        unsafe extern "C" fn(
-            env: *mut ani_env,
-            external_data: *mut ::std::os::raw::c_void,
-            length: usize,
-            finalizer: ani_finalizer,
-            hint: *mut ::std::os::raw::c_void,
-            result: *mut ani_arraybuffer,
-        ) -> ani_status,
-    >,
     #[doc = " @brief Retrieves information about an array buffer.\n\n This function retrieves the data pointer and length of the specified array buffer.\n\n @param[in] env A pointer to the environment structure.\n @param[in] arraybuffer The array buffer to query.\n @param[out] data_result A pointer to store the data of the array buffer.\n @param[out] length_result A pointer to store the length of the array buffer in bytes.\n @return Returns a status code of type `ani_status` indicating success or failure."]
     pub ArrayBuffer_GetInfo: ::std::option::Option<
         unsafe extern "C" fn(
@@ -3751,917 +4011,108 @@ pub struct __ani_interaction_api {
             rejection: ani_error,
         ) -> ani_status,
     >,
+    #[doc = " @brief Checks if Any reference is an instance of a specified Any type.\n\n This function checks whether the given Any reference is an instance of the specified Any type.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference to check.\n @param[in] type The type to compare against.\n @param[out] result A pointer to store the boolean result (true if the reference is an instance of the type,\n false otherwise).\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_InstanceOf: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            type_: ani_ref,
+            result: *mut ani_boolean,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Gets a property of an Any reference by name.\n\n This function retrieves the value of a named property from the given Any reference.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference from which to retrieve the property.\n @param[in] name The name of the property to retrieve.\n @param[out] result A pointer to store the retrieved property value.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_GetProperty: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            name: *const ::std::os::raw::c_char,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a property of an Any reference by name.\n\n This function sets the value of a named property on the given Any reference.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference on which to set the property.\n @param[in] name The name of the property to set.\n @param[in] value The value to assign to the property.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_SetProperty: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            name: *const ::std::os::raw::c_char,
+            value: ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Gets an element of an Any reference by index.\n\n This function retrieves the value at a specific index from the given Any reference.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference from which to retrieve the element.\n @param[in] index The index of the element to retrieve.\n @param[out] result A pointer to store the retrieved value.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_GetByIndex: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            index: ani_size,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets an element of an Any reference by index.\n\n This function sets the value at a specific index on the given Any reference.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference on which to set the element.\n @param[in] index The index of the element to set.\n @param[in] value The value to assign to the specified index.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_SetByIndex: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            index: ani_size,
+            value: ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Gets a property of an Any reference by key reference.\n\n This function retrieves the value of a property using another Any reference as the key.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference from which to retrieve the property.\n @param[in] key The key reference used to access the property.\n @param[out] result A pointer to store the retrieved property value.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_GetByValue: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            key: ani_ref,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Sets a property of an Any reference by key reference.\n\n This function sets the value of a property using another Any reference as the key.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ref The reference on which to set the property.\n @param[in] key The key reference used to access the property.\n @param[in] value The value to assign to the specified key.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_SetByValue: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ref_: ani_ref,
+            key: ani_ref,
+            value: ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Calls an Any reference as a function.\n\n This function invokes the given Any reference if it represents a callable object.\n\n @param[in] env A pointer to the environment structure.\n @param[in] func The function reference to invoke.\n @param[in] argc The number of arguments.\n @param[in] argv An array of argument references.\n @param[out] result A pointer to store the function call result.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_Call: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            func: ani_ref,
+            argc: ani_size,
+            argv: *mut ani_ref,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Calls a method of an Any reference by name.\n\n This function invokes a named method on the given Any reference.\n\n @param[in] env A pointer to the environment structure.\n @param[in] self The object reference on which to invoke the method.\n @param[in] name The name of the method to invoke.\n @param[in] argc The number of arguments.\n @param[in] argv An array of argument references.\n @param[out] result A pointer to store the method call result.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_CallMethod: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            self_: ani_ref,
+            name: *const ::std::os::raw::c_char,
+            argc: ani_size,
+            argv: *mut ani_ref,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Constructs a new object using an Any reference as a constructor.\n\n This function creates a new object using the given constructor reference and arguments.\n\n @param[in] env A pointer to the environment structure.\n @param[in] ctor The constructor function reference.\n @param[in] argc The number of arguments.\n @param[in] argv An array of argument references.\n @param[out] result A pointer to store the created object reference.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Any_New: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            ctor: ani_ref,
+            argc: ani_size,
+            argv: *mut ani_ref,
+            result: *mut ani_ref,
+        ) -> ani_status,
+    >,
+    #[doc = " @brief Binds static native methods to a class.\n\n This function binds an array of static native methods to the specified class.\n\n @param[in] env A pointer to the environment structure.\n @param[in] cls The class to which the native methods will be bound.\n @param[in] methods A pointer to an array of static native methods to bind.\n @param[in] nr_methods The number of static native methods in the array.\n @return Returns a status code of type `ani_status` indicating success or failure."]
+    pub Class_BindStaticNativeMethods: ::std::option::Option<
+        unsafe extern "C" fn(
+            env: *mut ani_env,
+            cls: ani_class,
+            methods: *const ani_native_function,
+            nr_methods: ani_size,
+        ) -> ani_status,
+    >,
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of __ani_interaction_api"][::std::mem::size_of::<__ani_interaction_api>() - 3120usize];
-    ["Alignment of __ani_interaction_api"]
-        [::std::mem::align_of::<__ani_interaction_api>() - 8usize];
-    ["Offset of field: __ani_interaction_api::reserved0"]
-        [::std::mem::offset_of!(__ani_interaction_api, reserved0) - 0usize];
-    ["Offset of field: __ani_interaction_api::reserved1"]
-        [::std::mem::offset_of!(__ani_interaction_api, reserved1) - 8usize];
-    ["Offset of field: __ani_interaction_api::reserved2"]
-        [::std::mem::offset_of!(__ani_interaction_api, reserved2) - 16usize];
-    ["Offset of field: __ani_interaction_api::reserved3"]
-        [::std::mem::offset_of!(__ani_interaction_api, reserved3) - 24usize];
-    ["Offset of field: __ani_interaction_api::GetVersion"]
-        [::std::mem::offset_of!(__ani_interaction_api, GetVersion) - 32usize];
-    ["Offset of field: __ani_interaction_api::GetVM"]
-        [::std::mem::offset_of!(__ani_interaction_api, GetVM) - 40usize];
-    ["Offset of field: __ani_interaction_api::Object_New"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_New) - 48usize];
-    ["Offset of field: __ani_interaction_api::Object_New_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_New_A) - 56usize];
-    ["Offset of field: __ani_interaction_api::Object_New_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_New_V) - 64usize];
-    ["Offset of field: __ani_interaction_api::Object_GetType"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetType) - 72usize];
-    ["Offset of field: __ani_interaction_api::Object_InstanceOf"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_InstanceOf) - 80usize];
-    ["Offset of field: __ani_interaction_api::Type_GetSuperClass"]
-        [::std::mem::offset_of!(__ani_interaction_api, Type_GetSuperClass) - 88usize];
-    ["Offset of field: __ani_interaction_api::Type_IsAssignableFrom"]
-        [::std::mem::offset_of!(__ani_interaction_api, Type_IsAssignableFrom) - 96usize];
-    ["Offset of field: __ani_interaction_api::FindModule"]
-        [::std::mem::offset_of!(__ani_interaction_api, FindModule) - 104usize];
-    ["Offset of field: __ani_interaction_api::FindNamespace"]
-        [::std::mem::offset_of!(__ani_interaction_api, FindNamespace) - 112usize];
-    ["Offset of field: __ani_interaction_api::FindClass"]
-        [::std::mem::offset_of!(__ani_interaction_api, FindClass) - 120usize];
-    ["Offset of field: __ani_interaction_api::FindEnum"]
-        [::std::mem::offset_of!(__ani_interaction_api, FindEnum) - 128usize];
-    ["Offset of field: __ani_interaction_api::Module_FindNamespace"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_FindNamespace) - 136usize];
-    ["Offset of field: __ani_interaction_api::Module_FindClass"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_FindClass) - 144usize];
-    ["Offset of field: __ani_interaction_api::Module_FindEnum"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_FindEnum) - 152usize];
-    ["Offset of field: __ani_interaction_api::Module_FindFunction"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_FindFunction) - 160usize];
-    ["Offset of field: __ani_interaction_api::Module_FindVariable"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_FindVariable) - 168usize];
-    ["Offset of field: __ani_interaction_api::Namespace_FindNamespace"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_FindNamespace) - 176usize];
-    ["Offset of field: __ani_interaction_api::Namespace_FindClass"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_FindClass) - 184usize];
-    ["Offset of field: __ani_interaction_api::Namespace_FindEnum"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_FindEnum) - 192usize];
-    ["Offset of field: __ani_interaction_api::Namespace_FindFunction"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_FindFunction) - 200usize];
-    ["Offset of field: __ani_interaction_api::Namespace_FindVariable"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_FindVariable) - 208usize];
-    ["Offset of field: __ani_interaction_api::Module_BindNativeFunctions"]
-        [::std::mem::offset_of!(__ani_interaction_api, Module_BindNativeFunctions) - 216usize];
-    ["Offset of field: __ani_interaction_api::Namespace_BindNativeFunctions"]
-        [::std::mem::offset_of!(__ani_interaction_api, Namespace_BindNativeFunctions) - 224usize];
-    ["Offset of field: __ani_interaction_api::Class_BindNativeMethods"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_BindNativeMethods) - 232usize];
-    ["Offset of field: __ani_interaction_api::Reference_Delete"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_Delete) - 240usize];
-    ["Offset of field: __ani_interaction_api::EnsureEnoughReferences"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnsureEnoughReferences) - 248usize];
-    ["Offset of field: __ani_interaction_api::CreateLocalScope"]
-        [::std::mem::offset_of!(__ani_interaction_api, CreateLocalScope) - 256usize];
-    ["Offset of field: __ani_interaction_api::DestroyLocalScope"]
-        [::std::mem::offset_of!(__ani_interaction_api, DestroyLocalScope) - 264usize];
-    ["Offset of field: __ani_interaction_api::CreateEscapeLocalScope"]
-        [::std::mem::offset_of!(__ani_interaction_api, CreateEscapeLocalScope) - 272usize];
-    ["Offset of field: __ani_interaction_api::DestroyEscapeLocalScope"]
-        [::std::mem::offset_of!(__ani_interaction_api, DestroyEscapeLocalScope) - 280usize];
-    ["Offset of field: __ani_interaction_api::ThrowError"]
-        [::std::mem::offset_of!(__ani_interaction_api, ThrowError) - 288usize];
-    ["Offset of field: __ani_interaction_api::ExistUnhandledError"]
-        [::std::mem::offset_of!(__ani_interaction_api, ExistUnhandledError) - 296usize];
-    ["Offset of field: __ani_interaction_api::GetUnhandledError"]
-        [::std::mem::offset_of!(__ani_interaction_api, GetUnhandledError) - 304usize];
-    ["Offset of field: __ani_interaction_api::ResetError"]
-        [::std::mem::offset_of!(__ani_interaction_api, ResetError) - 312usize];
-    ["Offset of field: __ani_interaction_api::DescribeError"]
-        [::std::mem::offset_of!(__ani_interaction_api, DescribeError) - 320usize];
-    ["Offset of field: __ani_interaction_api::Abort"]
-        [::std::mem::offset_of!(__ani_interaction_api, Abort) - 328usize];
-    ["Offset of field: __ani_interaction_api::GetNull"]
-        [::std::mem::offset_of!(__ani_interaction_api, GetNull) - 336usize];
-    ["Offset of field: __ani_interaction_api::GetUndefined"]
-        [::std::mem::offset_of!(__ani_interaction_api, GetUndefined) - 344usize];
-    ["Offset of field: __ani_interaction_api::Reference_IsNull"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_IsNull) - 352usize];
-    ["Offset of field: __ani_interaction_api::Reference_IsUndefined"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_IsUndefined) - 360usize];
-    ["Offset of field: __ani_interaction_api::Reference_IsNullishValue"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_IsNullishValue) - 368usize];
-    ["Offset of field: __ani_interaction_api::Reference_Equals"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_Equals) - 376usize];
-    ["Offset of field: __ani_interaction_api::Reference_StrictEquals"]
-        [::std::mem::offset_of!(__ani_interaction_api, Reference_StrictEquals) - 384usize];
-    ["Offset of field: __ani_interaction_api::String_NewUTF16"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_NewUTF16) - 392usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF16Size"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF16Size) - 400usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF16"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF16) - 408usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF16SubString"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF16SubString) - 416usize];
-    ["Offset of field: __ani_interaction_api::String_NewUTF8"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_NewUTF8) - 424usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF8Size"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF8Size) - 432usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF8"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF8) - 440usize];
-    ["Offset of field: __ani_interaction_api::String_GetUTF8SubString"]
-        [::std::mem::offset_of!(__ani_interaction_api, String_GetUTF8SubString) - 448usize];
-    ["Offset of field: __ani_interaction_api::Array_GetLength"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetLength) - 456usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Boolean) - 464usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Char) - 472usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Byte) - 480usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Short) - 488usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Int) - 496usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Long) - 504usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Float) - 512usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Double) - 520usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Boolean) - 528usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Char) - 536usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Byte) - 544usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Short) - 552usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Int) - 560usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Long) - 568usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Float) - 576usize];
-    ["Offset of field: __ani_interaction_api::Array_GetRegion_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_GetRegion_Double) - 584usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Boolean) - 592usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Char) - 600usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Byte) - 608usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Short) - 616usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Int) - 624usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Long) - 632usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Float) - 640usize];
-    ["Offset of field: __ani_interaction_api::Array_SetRegion_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_SetRegion_Double) - 648usize];
-    ["Offset of field: __ani_interaction_api::Array_New_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_New_Ref) - 656usize];
-    ["Offset of field: __ani_interaction_api::Array_Set_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_Set_Ref) - 664usize];
-    ["Offset of field: __ani_interaction_api::Array_Get_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Array_Get_Ref) - 672usize];
-    ["Offset of field: __ani_interaction_api::Enum_GetEnumItemByName"]
-        [::std::mem::offset_of!(__ani_interaction_api, Enum_GetEnumItemByName) - 680usize];
-    ["Offset of field: __ani_interaction_api::Enum_GetEnumItemByIndex"]
-        [::std::mem::offset_of!(__ani_interaction_api, Enum_GetEnumItemByIndex) - 688usize];
-    ["Offset of field: __ani_interaction_api::EnumItem_GetEnum"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnumItem_GetEnum) - 696usize];
-    ["Offset of field: __ani_interaction_api::EnumItem_GetValue_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnumItem_GetValue_Int) - 704usize];
-    ["Offset of field: __ani_interaction_api::EnumItem_GetValue_String"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnumItem_GetValue_String) - 712usize];
-    ["Offset of field: __ani_interaction_api::EnumItem_GetName"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnumItem_GetName) - 720usize];
-    ["Offset of field: __ani_interaction_api::EnumItem_GetIndex"]
-        [::std::mem::offset_of!(__ani_interaction_api, EnumItem_GetIndex) - 728usize];
-    ["Offset of field: __ani_interaction_api::FunctionalObject_Call"]
-        [::std::mem::offset_of!(__ani_interaction_api, FunctionalObject_Call) - 736usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Boolean) - 744usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Char) - 752usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Byte) - 760usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Short) - 768usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Int) - 776usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Long) - 784usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Float) - 792usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Double) - 800usize];
-    ["Offset of field: __ani_interaction_api::Variable_SetValue_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_SetValue_Ref) - 808usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Boolean) - 816usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Char) - 824usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Byte) - 832usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Short) - 840usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Int) - 848usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Long) - 856usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Float) - 864usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Double) - 872usize];
-    ["Offset of field: __ani_interaction_api::Variable_GetValue_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Variable_GetValue_Ref) - 880usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Boolean) - 888usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Boolean_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Boolean_A) - 896usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Boolean_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Boolean_V) - 904usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Char) - 912usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Char_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Char_A) - 920usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Char_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Char_V) - 928usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Byte) - 936usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Byte_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Byte_A) - 944usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Byte_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Byte_V) - 952usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Short) - 960usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Short_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Short_A) - 968usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Short_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Short_V) - 976usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Int) - 984usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Int_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Int_A) - 992usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Int_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Int_V) - 1000usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Long) - 1008usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Long_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Long_A) - 1016usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Long_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Long_V) - 1024usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Float) - 1032usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Float_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Float_A) - 1040usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Float_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Float_V) - 1048usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Double) - 1056usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Double_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Double_A) - 1064usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Double_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Double_V) - 1072usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Ref) - 1080usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Ref_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Ref_A) - 1088usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Ref_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Ref_V) - 1096usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Void"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Void) - 1104usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Void_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Void_A) - 1112usize];
-    ["Offset of field: __ani_interaction_api::Function_Call_Void_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Function_Call_Void_V) - 1120usize];
-    ["Offset of field: __ani_interaction_api::Class_FindField"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindField) - 1128usize];
-    ["Offset of field: __ani_interaction_api::Class_FindStaticField"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindStaticField) - 1136usize];
-    ["Offset of field: __ani_interaction_api::Class_FindMethod"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindMethod) - 1144usize];
-    ["Offset of field: __ani_interaction_api::Class_FindStaticMethod"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindStaticMethod) - 1152usize];
-    ["Offset of field: __ani_interaction_api::Class_FindSetter"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindSetter) - 1160usize];
-    ["Offset of field: __ani_interaction_api::Class_FindGetter"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindGetter) - 1168usize];
-    ["Offset of field: __ani_interaction_api::Class_FindIndexableGetter"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindIndexableGetter) - 1176usize];
-    ["Offset of field: __ani_interaction_api::Class_FindIndexableSetter"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindIndexableSetter) - 1184usize];
-    ["Offset of field: __ani_interaction_api::Class_FindIterator"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_FindIterator) - 1192usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Boolean) - 1200usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Char) - 1208usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Byte) - 1216usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Short) - 1224usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Int) - 1232usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Long) - 1240usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Float) - 1248usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Double) - 1256usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticField_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticField_Ref) - 1264usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Boolean) - 1272usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Char) - 1280usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Byte) - 1288usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Short) - 1296usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Int) - 1304usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Long) - 1312usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Float) - 1320usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Double) - 1328usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticField_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticField_Ref) - 1336usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Boolean
-    ) - 1344usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Char"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Char
-    ) - 1352usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Byte"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Byte
-    ) - 1360usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Short"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Short
-    ) - 1368usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticFieldByName_Int) - 1376usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Long"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Long
-    ) - 1384usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Float"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Float
-    ) - 1392usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Double"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_GetStaticFieldByName_Double
-    ) - 1400usize];
-    ["Offset of field: __ani_interaction_api::Class_GetStaticFieldByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_GetStaticFieldByName_Ref) - 1408usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Boolean
-    ) - 1416usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Char"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Char
-    ) - 1424usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Byte"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Byte
-    ) - 1432usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Short"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Short
-    ) - 1440usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticFieldByName_Int) - 1448usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Long"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Long
-    ) - 1456usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Float"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Float
-    ) - 1464usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Double"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_SetStaticFieldByName_Double
-    ) - 1472usize];
-    ["Offset of field: __ani_interaction_api::Class_SetStaticFieldByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_SetStaticFieldByName_Ref) - 1480usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Boolean) - 1488usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Boolean_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethod_Boolean_A
-    ) - 1496usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Boolean_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethod_Boolean_V
-    ) - 1504usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Char) - 1512usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Char_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Char_A) - 1520usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Char_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Char_V) - 1528usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Byte) - 1536usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Byte_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Byte_A) - 1544usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Byte_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Byte_V) - 1552usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Short) - 1560usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Short_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Short_A) - 1568usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Short_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Short_V) - 1576usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Int) - 1584usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Int_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Int_A) - 1592usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Int_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Int_V) - 1600usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Long) - 1608usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Long_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Long_A) - 1616usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Long_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Long_V) - 1624usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Float) - 1632usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Float_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Float_A) - 1640usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Float_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Float_V) - 1648usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Double) - 1656usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Double_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethod_Double_A
-    ) - 1664usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Double_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethod_Double_V
-    ) - 1672usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Ref) - 1680usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Ref_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Ref_A) - 1688usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Ref_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Ref_V) - 1696usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Void"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Void) - 1704usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Void_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Void_A) - 1712usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethod_Void_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Class_CallStaticMethod_Void_V) - 1720usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Boolean
-    ) - 1728usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Boolean_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Boolean_A
-    )
-        - 1736usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Boolean_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Boolean_V
-    )
-        - 1744usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Char"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Char
-    ) - 1752usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Char_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Char_A
-    ) - 1760usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Char_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Char_V
-    ) - 1768usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Byte"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Byte
-    ) - 1776usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Byte_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Byte_A
-    ) - 1784usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Byte_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Byte_V
-    ) - 1792usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Short"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Short
-    ) - 1800usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Short_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Short_A
-    ) - 1808usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Short_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Short_V
-    ) - 1816usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Int"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Int
-    ) - 1824usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Int_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Int_A
-    ) - 1832usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Int_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Int_V
-    ) - 1840usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Long"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Long
-    ) - 1848usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Long_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Long_A
-    ) - 1856usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Long_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Long_V
-    ) - 1864usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Float"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Float
-    ) - 1872usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Float_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Float_A
-    ) - 1880usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Float_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Float_V
-    ) - 1888usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Double"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Double
-    ) - 1896usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Double_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Double_A
-    )
-        - 1904usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Double_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Double_V
-    )
-        - 1912usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Ref"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Ref
-    ) - 1920usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Ref_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Ref_A
-    ) - 1928usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Ref_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Ref_V
-    ) - 1936usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Void"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Void
-    ) - 1944usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Void_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Void_A
-    ) - 1952usize];
-    ["Offset of field: __ani_interaction_api::Class_CallStaticMethodByName_Void_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Class_CallStaticMethodByName_Void_V
-    ) - 1960usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Boolean) - 1968usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Char) - 1976usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Byte) - 1984usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Short) - 1992usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Int) - 2000usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Long) - 2008usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Float) - 2016usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Double) - 2024usize];
-    ["Offset of field: __ani_interaction_api::Object_GetField_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetField_Ref) - 2032usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Boolean) - 2040usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Char) - 2048usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Byte) - 2056usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Short) - 2064usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Int) - 2072usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Long) - 2080usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Float) - 2088usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Double) - 2096usize];
-    ["Offset of field: __ani_interaction_api::Object_SetField_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetField_Ref) - 2104usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Boolean) - 2112usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Char) - 2120usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Byte) - 2128usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Short) - 2136usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Int) - 2144usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Long) - 2152usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Float) - 2160usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Double) - 2168usize];
-    ["Offset of field: __ani_interaction_api::Object_GetFieldByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetFieldByName_Ref) - 2176usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Boolean) - 2184usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Char) - 2192usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Byte) - 2200usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Short) - 2208usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Int) - 2216usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Long) - 2224usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Float) - 2232usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Double) - 2240usize];
-    ["Offset of field: __ani_interaction_api::Object_SetFieldByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetFieldByName_Ref) - 2248usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_GetPropertyByName_Boolean
-    ) - 2256usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Char) - 2264usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Byte) - 2272usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Short) - 2280usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Int) - 2288usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Long) - 2296usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Float) - 2304usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Double"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_GetPropertyByName_Double
-    ) - 2312usize];
-    ["Offset of field: __ani_interaction_api::Object_GetPropertyByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_GetPropertyByName_Ref) - 2320usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_SetPropertyByName_Boolean
-    ) - 2328usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Char) - 2336usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Byte) - 2344usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Short) - 2352usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Int) - 2360usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Long) - 2368usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Float) - 2376usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Double"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_SetPropertyByName_Double
-    ) - 2384usize];
-    ["Offset of field: __ani_interaction_api::Object_SetPropertyByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_SetPropertyByName_Ref) - 2392usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Boolean) - 2400usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Boolean_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Boolean_A) - 2408usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Boolean_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Boolean_V) - 2416usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Char) - 2424usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Char_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Char_A) - 2432usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Char_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Char_V) - 2440usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Byte) - 2448usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Byte_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Byte_A) - 2456usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Byte_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Byte_V) - 2464usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Short) - 2472usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Short_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Short_A) - 2480usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Short_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Short_V) - 2488usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Int) - 2496usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Int_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Int_A) - 2504usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Int_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Int_V) - 2512usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Long) - 2520usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Long_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Long_A) - 2528usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Long_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Long_V) - 2536usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Float) - 2544usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Float_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Float_A) - 2552usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Float_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Float_V) - 2560usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Double) - 2568usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Double_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Double_A) - 2576usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Double_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Double_V) - 2584usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Ref) - 2592usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Ref_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Ref_A) - 2600usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Ref_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Ref_V) - 2608usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Void"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Void) - 2616usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Void_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Void_A) - 2624usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethod_Void_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethod_Void_V) - 2632usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Boolean"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Boolean
-    ) - 2640usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Boolean_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Boolean_A
-    ) - 2648usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Boolean_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Boolean_V
-    ) - 2656usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Char) - 2664usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Char_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Char_A) - 2672usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Char_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Char_V) - 2680usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Byte) - 2688usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Byte_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Byte_A) - 2696usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Byte_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Byte_V) - 2704usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Short) - 2712usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Short_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Short_A
-    ) - 2720usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Short_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Short_V
-    ) - 2728usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Int) - 2736usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Int_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Int_A) - 2744usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Int_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Int_V) - 2752usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Long) - 2760usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Long_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Long_A) - 2768usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Long_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Long_V) - 2776usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Float) - 2784usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Float_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Float_A
-    ) - 2792usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Float_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Float_V
-    ) - 2800usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Double) - 2808usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Double_A"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Double_A
-    ) - 2816usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Double_V"][::std::mem::offset_of!(
-        __ani_interaction_api,
-        Object_CallMethodByName_Double_V
-    ) - 2824usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Ref) - 2832usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Ref_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Ref_A) - 2840usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Ref_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Ref_V) - 2848usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Void"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Void) - 2856usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Void_A"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Void_A) - 2864usize];
-    ["Offset of field: __ani_interaction_api::Object_CallMethodByName_Void_V"]
-        [::std::mem::offset_of!(__ani_interaction_api, Object_CallMethodByName_Void_V) - 2872usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetNumberOfItems"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetNumberOfItems) - 2880usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Boolean) - 2888usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Char) - 2896usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Byte) - 2904usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Short) - 2912usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Int) - 2920usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Long) - 2928usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Float) - 2936usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Double) - 2944usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_GetItem_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_GetItem_Ref) - 2952usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Boolean"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Boolean) - 2960usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Char"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Char) - 2968usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Byte"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Byte) - 2976usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Short"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Short) - 2984usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Int"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Int) - 2992usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Long"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Long) - 3000usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Float"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Float) - 3008usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Double"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Double) - 3016usize];
-    ["Offset of field: __ani_interaction_api::TupleValue_SetItem_Ref"]
-        [::std::mem::offset_of!(__ani_interaction_api, TupleValue_SetItem_Ref) - 3024usize];
-    ["Offset of field: __ani_interaction_api::GlobalReference_Create"]
-        [::std::mem::offset_of!(__ani_interaction_api, GlobalReference_Create) - 3032usize];
-    ["Offset of field: __ani_interaction_api::GlobalReference_Delete"]
-        [::std::mem::offset_of!(__ani_interaction_api, GlobalReference_Delete) - 3040usize];
-    ["Offset of field: __ani_interaction_api::WeakReference_Create"]
-        [::std::mem::offset_of!(__ani_interaction_api, WeakReference_Create) - 3048usize];
-    ["Offset of field: __ani_interaction_api::WeakReference_Delete"]
-        [::std::mem::offset_of!(__ani_interaction_api, WeakReference_Delete) - 3056usize];
-    ["Offset of field: __ani_interaction_api::WeakReference_GetReference"]
-        [::std::mem::offset_of!(__ani_interaction_api, WeakReference_GetReference) - 3064usize];
-    ["Offset of field: __ani_interaction_api::CreateArrayBuffer"]
-        [::std::mem::offset_of!(__ani_interaction_api, CreateArrayBuffer) - 3072usize];
-    ["Offset of field: __ani_interaction_api::CreateArrayBufferExternal"]
-        [::std::mem::offset_of!(__ani_interaction_api, CreateArrayBufferExternal) - 3080usize];
-    ["Offset of field: __ani_interaction_api::ArrayBuffer_GetInfo"]
-        [::std::mem::offset_of!(__ani_interaction_api, ArrayBuffer_GetInfo) - 3088usize];
-    ["Offset of field: __ani_interaction_api::Promise_New"]
-        [::std::mem::offset_of!(__ani_interaction_api, Promise_New) - 3096usize];
-    ["Offset of field: __ani_interaction_api::PromiseResolver_Resolve"]
-        [::std::mem::offset_of!(__ani_interaction_api, PromiseResolver_Resolve) - 3104usize];
-    ["Offset of field: __ani_interaction_api::PromiseResolver_Reject"]
-        [::std::mem::offset_of!(__ani_interaction_api, PromiseResolver_Reject) - 3112usize];
-};
 pub type __builtin_va_list = *mut ::std::os::raw::c_char;
