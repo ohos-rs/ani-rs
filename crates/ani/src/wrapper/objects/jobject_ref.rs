@@ -1,4 +1,4 @@
-use jni_sys::jobject;
+use crate::sys::jobject;
 
 use crate::objects::JObject;
 

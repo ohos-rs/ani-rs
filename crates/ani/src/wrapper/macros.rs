@@ -1,63 +1,44 @@
-/// Directly calls a JNIEnv FFI function, nothing else
+/// Directly calls an ANIEnv FFI function, nothing else
 ///
 /// # Safety
 ///
-/// When calling any function added after JNI 1.1 you must know that it's valid
-/// for the current JNI version.
-macro_rules! jni_call_unchecked {
-    ( $jnienv:expr, $version:tt, $name:tt $(, $args:expr )*) => {{
-        // Safety: we know that the JNIEnv pointer can't be null, since that's
+/// When calling any function you must know that it's valid
+/// for the current ANI version.
+macro_rules! ani_call_unchecked {
+    ( $anienv:expr, $name:tt $(, $args:expr )*) => {{
+        // Safety: we know that the ANIEnv pointer can't be null, since that's
         // checked in `from_raw()`
-        let env: *mut jni_sys::JNIEnv = $jnienv.get_raw();
-        let interface: *const jni_sys::JNINativeInterface_ = *env;
-        ((*interface).$version.$name)(env $(, $args)*)
+        let env: *mut crate::sys::ani_env = $anienv.get_raw();
+        let interface: *const crate::sys::__ani_interaction_api = *env;
+        ((*interface).$name.unwrap())(env $(, $args)*)
     }};
 }
 
-/// Calls a JNIEnv function, then checks for a pending exception
+/// Calls an ANIEnv function, then checks for status
 ///
-/// This only checks for an exception, it doesn't map an exception into
-/// an Error and it doesn't clear the exception and so the exception will
-/// be thrown if the native code returns to the JVM.
-///
-/// Returns `Err` if there is a pending exception after the call.
-macro_rules! jni_call_check_ex {
-    ( $jnienv:expr, $version:tt, $name:tt $(, $args:expr )* ) => ({
-        let ret = jni_call_unchecked!($jnienv, $version, $name $(, $args)*);
-        if $jnienv.exception_check() {
-            Err(crate::errors::Error::JavaException)
+/// Returns `Err` if the status indicates an error.
+macro_rules! ani_call_check {
+    ( $anienv:expr, $name:tt $(, $args:expr )* ) => ({
+        let status = ani_call_unchecked!($anienv, $name $(, $args)*);
+        if status != crate::sys::ani_status_ANI_OK {
+            Err(crate::errors::Error::AniCall(crate::errors::ani_status_to_error(status)))
         } else {
-            Ok(ret)
+            Ok(())
         }
     })
 }
 
-/// Calls a JNIEnv function, then checks for a pending exception, then checks for a `null` return value
+/// Calls an ANIEnv function with a result output parameter, then checks for status
 ///
-/// Returns `Err` if there is a pending exception after the call.
-/// Returns `Err(Error::NullPtr)` if the JNI function returns `null`
-macro_rules! jni_call_check_ex_and_null_ret {
-    ( $jnienv:expr, $version:tt, $name:tt $(, $args:expr )* ) => ({
-        jni_call_check_ex!($jnienv, $version, $name $(, $args)*).and_then(|ret| {
-            if ret.is_null() {
-                Err($crate::errors::Error::NullPtr(concat!(stringify!($name), " result")))
-            } else {
-                Ok(ret)
-            }
-        })
-    })
-}
-
-/// Calls a JNIEnv function, with no check for exceptions, then checks for a `null` return value
-///
-/// Returns `Err(Error::NullPtr)` if the JNI function returns `null`
-macro_rules! jni_call_only_check_null_ret {
-    ( $jnienv:expr, $version:tt, $name:tt $(, $args:expr )* ) => ({
-        let ret = jni_call_unchecked!($jnienv, $version, $name $(, $args)*);
-        if ret.is_null() {
-            Err($crate::errors::Error::NullPtr(concat!(stringify!($name), " result")))
+/// Returns `Err` if the status indicates an error, otherwise returns the result.
+macro_rules! ani_call_result {
+    ( $anienv:expr, $name:tt, $result_type:ty $(, $args:expr )* ) => ({
+        let mut result: $result_type = std::mem::zeroed();
+        let status = ani_call_unchecked!($anienv, $name $(, $args)*, &mut result);
+        if status != crate::sys::ani_status_ANI_OK {
+            Err(crate::errors::Error::AniCall(crate::errors::ani_status_to_error(status)))
         } else {
-            Ok(ret)
+            Ok(result)
         }
     })
 }
@@ -80,12 +61,37 @@ macro_rules! null_check {
     };
 }
 
-/// Directly calls a JavaVM function, nothing else
-macro_rules! java_vm_call_unchecked {
-    ( $jvm:expr, $version:tt, $name:tt $(, $args:expr )*) => {{
+/// Directly calls an ANI VM function, nothing else
+macro_rules! ani_vm_call_unchecked {
+    ( $vm:expr, $name:tt $(, $args:expr )*) => {{
         // Safety: we know that the pointer can't be null, since that's
         // checked in `from_raw()`
-        let jvm: *mut jni_sys::JavaVM = $jvm.get_raw();
-        ((*(*jvm)).$version.$name)(jvm $(, $args)*)
+        let vm: *mut crate::sys::ani_vm = $vm.get_raw();
+        ((*(*vm)).$name.unwrap())(vm $(, $args)*)
     }};
+}
+
+/// Calls an ANI VM function, then checks for status
+macro_rules! ani_vm_call_check {
+    ( $vm:expr, $name:tt $(, $args:expr )* ) => ({
+        let status = ani_vm_call_unchecked!($vm, $name $(, $args)*);
+        if status != crate::sys::ani_status_ANI_OK {
+            Err(crate::errors::Error::AniCall(crate::errors::ani_status_to_error(status)))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Calls an ANI VM function with a result output parameter, then checks for status
+macro_rules! ani_vm_call_result {
+    ( $vm:expr, $name:tt, $result_type:ty $(, $args:expr )* ) => ({
+        let mut result: $result_type = std::mem::zeroed();
+        let status = ani_vm_call_unchecked!($vm, $name $(, $args)*, &mut result);
+        if status != crate::sys::ani_status_ANI_OK {
+            Err(crate::errors::Error::AniCall(crate::errors::ani_status_to_error(status)))
+        } else {
+            Ok(result)
+        }
+    })
 }

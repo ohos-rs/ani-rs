@@ -8,7 +8,7 @@ use crate::{
 use super::TypeArray;
 
 #[cfg(doc)]
-use crate::JNIEnv;
+use crate::ANIEnv;
 
 /// Lifetime'd representation of a [`jarray`] which wraps a [`JObject`] reference
 ///

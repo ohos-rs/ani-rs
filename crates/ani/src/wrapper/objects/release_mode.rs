@@ -1,5 +1,3 @@
-use crate::sys::JNI_ABORT;
-
 #[cfg(doc)]
 use super::{AutoElements, AutoElementsCritical};
 
@@ -14,5 +12,5 @@ pub enum ReleaseMode {
     /// [`NoCopyBack`](ReleaseMode::NoCopyBack).
     CopyBack = 0,
     /// Free the buffer without copying back the possible changes.
-    NoCopyBack = JNI_ABORT,
+    NoCopyBack = 2, // JNI_ABORT value
 }

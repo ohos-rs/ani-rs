@@ -7,7 +7,7 @@ use log::trace;
 use crate::{errors::*, objects::JObject, signature::Primitive, sys::*};
 
 #[cfg(doc)]
-use crate::JNIEnv;
+use crate::ANIEnv;
 
 /// A Java owned local reference or primitive value.
 ///

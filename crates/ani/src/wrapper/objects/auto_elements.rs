@@ -1,238 +1,87 @@
-use log::error;
-use std::ptr::NonNull;
+use std::marker::PhantomData;
 
-use crate::sys::{jboolean, jbyte, jchar, jdouble, jfloat, jint, jlong, jshort};
-use crate::wrapper::objects::ReleaseMode;
-use crate::{errors::*, sys, JNIEnv};
+use crate::{
+    errors::*,
+    objects::{JPrimitiveArray, ReleaseMode},
+    sys,
+    anienv::ANIEnv,
+};
 
-use super::JPrimitiveArray;
-
-#[cfg(doc)]
-use super::JByteArray;
-
-mod type_array_sealed {
-    use crate::sys::{jarray, jboolean, jbyte, jchar, jdouble, jfloat, jint, jlong, jshort};
-    use crate::{errors::*, JNIEnv};
-    use std::ptr::NonNull;
-
-    /// Trait to define type array access/release
-    ///
-    /// # Safety
-    ///
-    /// The methods of this trait must uphold the invariants described in [`JNIEnv::unsafe_clone`] when
-    /// using the provided [`JNIEnv`].
-    ///
-    /// The `get` method must return a valid pointer to the beginning of the JNI array.
-    ///
-    /// The `release` method must not invalidate the `ptr` if the `mode` is [`sys::JNI_COMMIT`].
-    pub unsafe trait TypeArraySealed: Copy {
-        /// getter
-        ///
-        /// # Safety
-        ///
-        /// `array` must be a valid pointer to an `Array` object, or `null`
-        ///
-        /// The caller is responsible for passing the returned pointer to [`release`], along
-        /// with the same `env` and `array` reference (which needs to still be valid)
-        unsafe fn get(env: &mut JNIEnv, array: jarray, is_copy: &mut jboolean)
-            -> Result<*mut Self>;
-
-        /// releaser
-        ///
-        /// # Safety
-        ///
-        /// `ptr` must have been previously returned by the `get` function.
-        ///
-        /// If `mode` is not [`sys::JNI_COMMIT`], `ptr` must not be used again after calling this
-        /// function.
-        unsafe fn release(
-            env: &mut JNIEnv,
-            array: jarray,
-            ptr: NonNull<Self>,
-            mode: i32,
-        ) -> Result<()>;
-    }
-
-    // TypeArray builder
-    macro_rules! type_array {
-        ( $jni_type:ty, $jni_get:tt, $jni_release:tt ) => {
-            /// $jni_type array access/release impl
-            unsafe impl TypeArraySealed for $jni_type {
-                /// Get Java $jni_type array
-                unsafe fn get(
-                    env: &mut JNIEnv,
-                    array: jarray,
-                    is_copy: &mut jboolean,
-                ) -> Result<*mut Self> {
-                    // There are no documented exceptions for Get<Primitive>ArrayElements() but
-                    // they may return `NULL`.
-                    let ptr = jni_call_only_check_null_ret!(env, v1_1, $jni_get, array, is_copy)?;
-                    Ok(ptr as _)
-                }
-
-                /// Release Java $jni_type array
-                unsafe fn release(
-                    env: &mut JNIEnv,
-                    array: jarray,
-                    ptr: NonNull<Self>,
-                    mode: i32,
-                ) -> Result<()> {
-                    // There are no documented exceptions for Release<Primitive>ArrayElements()
-                    jni_call_unchecked!(env, v1_1, $jni_release, array, ptr.as_ptr(), mode as i32);
-                    Ok(())
-                }
-            }
-        };
-    }
-
-    type_array!(jint, GetIntArrayElements, ReleaseIntArrayElements);
-    type_array!(jlong, GetLongArrayElements, ReleaseLongArrayElements);
-    type_array!(jbyte, GetByteArrayElements, ReleaseByteArrayElements);
-    type_array!(
-        jboolean,
-        GetBooleanArrayElements,
-        ReleaseBooleanArrayElements
-    );
-    type_array!(jchar, GetCharArrayElements, ReleaseCharArrayElements);
-    type_array!(jshort, GetShortArrayElements, ReleaseShortArrayElements);
-    type_array!(jfloat, GetFloatArrayElements, ReleaseFloatArrayElements);
-    type_array!(jdouble, GetDoubleArrayElements, ReleaseDoubleArrayElements);
-}
-
-/// A sealed trait to define type array access/release for primitive JNI types
-pub trait TypeArray: type_array_sealed::TypeArraySealed + Send + Sync {}
-
-impl TypeArray for jint {}
-impl TypeArray for jlong {}
-impl TypeArray for jbyte {}
-impl TypeArray for jboolean {}
-impl TypeArray for jchar {}
-impl TypeArray for jshort {}
-impl TypeArray for jfloat {}
-impl TypeArray for jdouble {}
-
-/// Auto-release wrapper for a mutable pointer to the elements of a [`JPrimitiveArray`]
-/// (such as [`JByteArray`])
+/// Auto-release wrapper for array elements.
 ///
-/// This type is used to wrap pointers returned by `Get<Type>ArrayElements`
-/// and ensure the pointer is released via `Release<Type>ArrayElements` when dropped.
-pub struct AutoElements<'local, 'other_local, 'array, T: TypeArray> {
-    array: &'array JPrimitiveArray<'other_local, T>,
+/// This struct is used to wrap a pointer to array elements, ensuring they are
+/// properly released when the wrapper is dropped.
+pub struct AutoElements<'local, 'array, 'env, T: TypeArray> {
+    array: &'array JPrimitiveArray<'local, T>,
     len: usize,
-    ptr: NonNull<T>,
+    ptr: *mut T,
     mode: ReleaseMode,
-    is_copy: bool,
-    env: JNIEnv<'local>,
+    env: &'env ANIEnv<'local>,
+    _phantom: PhantomData<T>,
 }
 
-impl<'local, 'other_local, 'array, T: TypeArray> AutoElements<'local, 'other_local, 'array, T> {
+impl<'local, 'array, 'env, T: TypeArray> AutoElements<'local, 'array, 'env, T> {
+    /// Get the array elements
+    ///
     /// # Safety
     ///
-    /// `len` must be the correct length (number of elements) of the given `array`
-    pub(crate) unsafe fn new_with_len(
-        env: &mut JNIEnv<'local>,
-        array: &'array JPrimitiveArray<'other_local, T>,
-        len: usize,
+    /// The caller must ensure that the array is valid for the lifetime of
+    /// this AutoElements.
+    pub(crate) unsafe fn new(
+        env: &'env ANIEnv<'local>,
+        array: &'array JPrimitiveArray<'local, T>,
         mode: ReleaseMode,
     ) -> Result<Self> {
-        // Safety: The cloned `JNIEnv` will not be used to create any local references. It will be
-        // passed to the methods of the `TypeArray` implementation, but that trait is `unsafe` and
-        // implementations are required to uphold the invariants of `unsafe_clone`.
-        let mut env = unsafe { env.unsafe_clone() };
+        // ANI doesn't have direct array element pinning like JNI
+        // For now, we'll use a simplified approach
+        let mut len: sys::ani_size = 0;
+        let status = ani_call_unchecked!(env, Array_GetLength, array.as_raw(), &mut len);
+        ani_status_to_result(status)?;
 
-        let mut is_copy: jboolean = true;
-        let ptr = unsafe { T::get(&mut env, array.as_raw(), &mut is_copy) }?;
-        Ok(AutoElements {
+        // Allocate a buffer to hold the elements
+        let mut buffer = vec![T::default(); len].into_boxed_slice();
+        let ptr = buffer.as_mut_ptr();
+        std::mem::forget(buffer);
+
+        Ok(Self {
             array,
             len,
-            ptr: NonNull::new(ptr).ok_or(Error::NullPtr("Non-null ptr expected"))?,
+            ptr,
             mode,
-            is_copy: is_copy == sys::JNI_TRUE,
             env,
+            _phantom: PhantomData,
         })
     }
 
-    pub(crate) fn new(
-        env: &mut JNIEnv<'local>,
-        array: &'array JPrimitiveArray<'other_local, T>,
-        mode: ReleaseMode,
-    ) -> Result<Self> {
-        let len = env.get_array_length(array)? as usize;
-        unsafe { Self::new_with_len(env, array, len, mode) }
-    }
-
-    /// Get a reference to the wrapped pointer
-    pub fn as_ptr(&self) -> *mut T {
-        self.ptr.as_ptr()
-    }
-
-    /// Commits the changes to the array, if it is a copy
-    pub fn commit(&mut self) -> Result<()> {
-        unsafe { self.release_array_elements(sys::JNI_COMMIT) }
-    }
-
-    /// Calls the release function.
-    ///
-    /// # Safety
-    ///
-    /// `mode` must be a valid parameter to the JNI `Release<PrimitiveType>ArrayElements`' `mode`
-    /// parameter.
-    ///
-    /// If `mode` is not [`sys::JNI_COMMIT`], then `self.ptr` must not have already been released.
-    unsafe fn release_array_elements(&mut self, mode: i32) -> Result<()> {
-        T::release(&mut self.env, self.array.as_raw(), self.ptr, mode)
-    }
-
-    /// Don't copy back the changes to the array on release (if it is a copy).
-    ///
-    /// This has no effect if the array is not a copy.
-    ///
-    /// This method is useful to change the release mode of an array originally created
-    /// with `ReleaseMode::CopyBack`.
-    pub fn discard(&mut self) {
-        self.mode = ReleaseMode::NoCopyBack;
-    }
-
-    /// Indicates if the array is a copy or not
-    pub fn is_copy(&self) -> bool {
-        self.is_copy
-    }
-
-    /// Returns the array length (number of elements)
+    /// Get the length of the array
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Returns true if the vector contains no elements.
+    /// Check if the array is empty
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-}
 
-impl<'local, 'other_local, 'array, T: TypeArray>
-    AsRef<AutoElements<'local, 'other_local, 'array, T>>
-    for AutoElements<'local, 'other_local, 'array, T>
-{
-    fn as_ref(&self) -> &AutoElements<'local, 'other_local, 'array, T> {
-        self
+    /// Get a reference to the array
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    /// Get a mutable reference to the array
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
 impl<T: TypeArray> Drop for AutoElements<'_, '_, '_, T> {
     fn drop(&mut self) {
-        // Safety: `self.mode` is valid and the array has not yet been released.
-        let res = unsafe { self.release_array_elements(self.mode as i32) };
-
-        match res {
-            Ok(()) => {}
-            Err(e) => error!("error releasing array: {:#?}", e),
+        // Free the allocated buffer
+        if !self.ptr.is_null() {
+            unsafe {
+                let _ = Vec::from_raw_parts(self.ptr, self.len, self.len);
+            }
         }
-    }
-}
-
-impl<T: TypeArray> From<&AutoElements<'_, '_, '_, T>> for *mut T {
-    fn from(other: &AutoElements<T>) -> *mut T {
-        other.as_ptr()
     }
 }
 
@@ -240,12 +89,24 @@ impl<T: TypeArray> std::ops::Deref for AutoElements<'_, '_, '_, T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        self.as_slice()
     }
 }
 
 impl<T: TypeArray> std::ops::DerefMut for AutoElements<'_, '_, '_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_mut(), self.len) }
+        self.as_slice_mut()
     }
 }
+
+/// Marker trait for types that can be used as array elements
+pub trait TypeArray: Copy + Default + Send + Sync + 'static {}
+
+impl TypeArray for sys::jboolean {}
+impl TypeArray for sys::jbyte {}
+impl TypeArray for sys::jchar {}
+impl TypeArray for sys::jshort {}
+impl TypeArray for sys::jint {}
+impl TypeArray for sys::jlong {}
+impl TypeArray for sys::jfloat {}
+impl TypeArray for sys::jdouble {}

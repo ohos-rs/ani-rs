@@ -4,34 +4,26 @@ use std::{
     ptr,
 };
 
-use jni_sys::jobject;
-
-use crate::{objects::JObject, JNIEnv};
+use crate::{objects::JObject, sys::jobject, anienv::ANIEnv};
 
 use super::JObjectRef;
 
 /// Auto-delete wrapper for local refs.
 ///
-/// Anything passed to a foreign method _and_ returned from JNI methods is considered a local ref
+/// Anything passed to a foreign method _and_ returned from ANI methods is considered a local ref
 /// unless it is specified otherwise.
 /// These refs are automatically deleted once the foreign method exits, but it's possible that
-/// they may reach the JVM-imposed limit before that happens.
+/// they may reach the VM-imposed limit before that happens.
 ///
 /// This wrapper provides automatic local ref deletion when it goes out of
 /// scope.
-///
-/// See also the [JNI specification][spec-references] for details on referencing Java objects
-/// and some [extra information][android-jni-references].
-///
-/// [spec-references]: https://docs.oracle.com/en/java/javase/12/docs/specs/jni/design.html#referencing-java-objects
-/// [android-jni-references]: https://developer.android.com/training/articles/perf-jni#local-and-global-references
 #[derive(Debug)]
 pub struct AutoLocal<'local, T>
 where
     T: Into<JObject<'local>>,
 {
     obj: ManuallyDrop<T>,
-    env: JNIEnv<'local>,
+    env: ANIEnv<'local>,
 }
 
 impl<'local, T> AutoLocal<'local, T>
@@ -46,8 +38,8 @@ where
     /// Once this wrapper goes out of scope, the `delete_local_ref` will be
     /// called on the object. While wrapped, the object can be accessed via
     /// the `Deref` impl.
-    pub fn new(obj: T, env: &JNIEnv<'local>) -> Self {
-        // Safety: The cloned `JNIEnv` will not be used to create any local references, only to
+    pub fn new(obj: T, env: &ANIEnv<'local>) -> Self {
+        // Safety: The cloned `ANIEnv` will not be used to create any local references, only to
         // delete one.
         let env = unsafe { env.unsafe_clone() };
 
@@ -78,7 +70,7 @@ where
         let mut self_md = ManuallyDrop::new(self);
 
         unsafe {
-            // Drop the `JNIEnv` in place. As of this writing, that's a no-op, but if `JNIEnv`
+            // Drop the `ANIEnv` in place. As of this writing, that's a no-op, but if `ANIEnv`
             // gains any drop code in the future, this will run it.
             //
             // Safety: The `&mut` proves that `self_md.env` is valid and not aliased. It is not

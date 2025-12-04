@@ -1,9 +1,8 @@
 use std::ops::Deref;
 
-use jni_sys::jobject;
 use log::{debug, warn};
 
-use crate::{errors::Result, objects::JObject, sys, JNIEnv, JNIVersion, JavaVM};
+use crate::{errors::Result, objects::JObject, sys, sys::jobject, anienv::ANIEnv, ANIVersion, AniVM};
 
 #[cfg(doc)]
 use crate::objects::WeakRef;
@@ -14,12 +13,12 @@ use super::JObjectRef;
 // wrap it in `AutoLocal`, which would cause undefined behavior upon drop as a result of calling
 // the wrong JNI function to delete the reference.
 
-/// A global reference to a Java object.
+/// A global reference to an object.
 ///
 /// Global references are slower to create and delete than ordinary local
 /// references, but have several properties that distinguish them:
 ///
-/// * Global references are not bound to the lifetime of a [`JNIEnv`].
+/// * Global references are not bound to the lifetime of a [`ANIEnv`].
 ///
 /// * Global references are not bound to any particular thread; they have the
 ///   [`Send`] and [`Sync`] traits.
@@ -53,24 +52,23 @@ use super::JObjectRef;
 ///
 /// # Creating and Deleting
 ///
-/// To create a global reference, use the [`JNIEnv::new_global_ref`] method. To
+/// To create a global reference, use the [`ANIEnv::new_global_ref`] method. To
 /// delete it, simply drop the `GlobalRef` (but be sure to do so on an attached
 /// thread if possible; see the warning below).
 ///
 /// Note that, because global references take more time to create or delete than
 /// local references do, they should only be used when their benefits outweigh
 /// this drawback. Also note that this performance penalty does not apply to
-/// *using* a global reference (such as calling methods on the underlying Java
-/// object), only to creation and deletion of the reference.
+/// *using* a global reference (such as calling methods on the underlying object),
+/// only to creation and deletion of the reference.
 ///
 ///
 /// # Warning: Drop On an Attached Thread If Possible
 ///
-/// When a `GlobalRef` is dropped, a JNI call is made to delete the global
+/// When a `GlobalRef` is dropped, a call is made to delete the global
 /// reference. If this frequently happens on a thread that is not already
-/// attached to the JVM, the thread will be temporarily attached using
-/// [`JavaVM::attach_current_thread_for_scope`], causing a severe performance
-/// penalty.
+/// attached to the VM, the thread will be temporarily attached,
+/// causing a severe performance penalty.
 ///
 /// To avoid this performance penalty, ensure that `GlobalRef`s are only dropped
 /// on a thread that is already attached (or never dropped at all).
@@ -173,19 +171,19 @@ where
 {
     /// Creates a new auto-delete wrapper for the `'static` global reference
     ///
-    /// Note: It's more likely that you want to look at the [`JNIEnv::new_global_ref`] API instead
+    /// Note: It's more likely that you want to look at the [`ANIEnv::new_global_ref`] API instead
     /// of this, since you can't get `'static` reference types through safe APIs.
     ///
-    /// The [`JNIEnv`] reference here serves as proof that the current thread is attached, and
-    /// lets us ensure that [`JavaVM::singleton()`] is initialized, which is required by the `Drop`
+    /// The [`ANIEnv`] reference here serves as proof that the current thread is attached, and
+    /// lets us ensure that [`AniVM::singleton()`] is initialized, which is required by the `Drop`
     /// implementation.
     ///
     /// # Safety
     ///
-    /// If the given reference is non-null, it must represent a global JNI reference.
-    pub unsafe fn new(env: &JNIEnv, obj: T) -> Self {
-        // Guarantee that the `JavaVM::singleton()` is initialized for the `Drop` implementation
-        let _vm = env.get_java_vm();
+    /// If the given reference is non-null, it must represent a global reference.
+    pub unsafe fn new(env: &ANIEnv, obj: T) -> Self {
+        // Guarantee that the `AniVM::singleton()` is initialized for the `Drop` implementation
+        let _vm = env.get_ani_vm();
         Self { obj }
     }
 
@@ -263,27 +261,24 @@ where
     fn drop(&mut self) {
         let obj = std::mem::take(&mut self.obj);
 
-        // It's redundant to explicitly call DeleteGlobalRef with a null pointer and we don't
-        // assume that a JavaVM has been initialized if we only wrap a 'static null pointer
+        // It's redundant to explicitly delete a null pointer and we don't
+        // assume that a AniVM has been initialized if we only wrap a 'static null pointer
         if !obj.is_null() {
-            let drop_impl = |env: &JNIEnv, raw: sys::jobject| -> Result<()> {
-                // Safety: This method is safe to call in case of pending exceptions (see chapter 2 of the spec)
+            let drop_impl = |env: &ANIEnv, raw: sys::jobject| -> Result<()> {
                 unsafe {
-                    jni_call_unchecked!(env, v1_1, DeleteGlobalRef, raw);
+                    ani_call_unchecked!(env, Reference_Delete, raw);
                 }
                 Ok(())
             };
 
-            // Panic: If we have a non-null reference, we know JavaVM::singleton() must have been
-            // initialized (and can't return an error) because ::new() takes a JNIEnv reference.
-            let vm = JavaVM::singleton().expect("JavaVM singleton uninitialized");
+            // Panic: If we have a non-null reference, we know AniVM::singleton() must have been
+            // initialized (and can't return an error) because ::new() takes a ANIEnv reference.
+            let vm = AniVM::singleton().expect("AniVM singleton uninitialized");
 
-            // Safety: we can assume we couldn't have created the global reference in the first place without
-            // having already required the JavaVM to support JNI >= 1.4
-            let res = match unsafe { vm.get_env(JNIVersion::V1_4) } {
+            let res = match unsafe { vm.get_env(ANIVersion::V1) } {
                 Ok(env) => drop_impl(&env, obj.as_raw()),
                 Err(_) => {
-                    warn!("A JNI global reference was dropped on a thread that is not attached. This will cause a performance problem if it happens frequently. For more information, see the documentation for `jni::objects::GlobalRef`.");
+                    warn!("A global reference was dropped on a thread that is not attached. This will cause a performance problem if it happens frequently. For more information, see the documentation for `objects::GlobalRef`.");
                     vm.attach_current_thread()
                         .and_then(|env| drop_impl(&env, obj.as_raw()))
                 }

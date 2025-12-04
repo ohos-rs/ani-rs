@@ -8,393 +8,107 @@ use std::{
 
 use log::{debug, error};
 
-use crate::{errors::*, sys, JNIEnv, JNIVersion};
+use crate::{errors::*, sys, anienv::ANIEnv, ANIVersion};
 
 #[cfg(feature = "invocation")]
-use {
-    crate::InitArgs,
-    std::os::raw::c_void,
-    std::{ffi::OsStr, path::PathBuf},
-};
+use std::os::raw::c_void;
 
-/// The `jni-rs` crate makes the assumption that it's not possible to create more than one Java VM
-/// per-process, or even re-initialize a JavaVM that is "destroyed".
+/// The ANI VM singleton.
 ///
-/// This allows us to save a global pointer for the JavaVM.
-///
-/// We also guarantee that if you currently have an [`AttachGuard`] thread attachment (or a `JNIEnv`
-/// reference), that implies that [`JavaVM::singleton()`] has been initialized and will return a
-/// valid [`JavaVM`].
-///
-/// For example, this guarantee is relied on internally to avoid redundantly saving JavaVM pointers
-/// if know we can assume that `JavaVM::singleton()` will return a `JavaVM` when needed.
-static JAVA_VM_SINGLETON: once_cell::sync::OnceCell<JavaVM> = once_cell::sync::OnceCell::new();
+/// ANI does not support creating more than one VM per-process.
+static ANI_VM_SINGLETON: once_cell::sync::OnceCell<AniVM> = once_cell::sync::OnceCell::new();
 
-/// The Java VM, providing [Invocation API][invocation-api] support.
+/// The ANI VM, providing Invocation API support.
 ///
-/// An existing JavaVM can be obtained either via [`JavaVM::singleton`], or [`JNIEnv::get_java_vm`]
-/// in an already attached thread, or a new VM can be [launched](#launching-jvm-from-rust) via
-/// [`JavaVM::new`].
+/// An existing AniVM can be obtained either via [`AniVM::singleton`], or [`ANIEnv::get_ani_vm`]
+/// in an already attached thread.
 ///
 /// ## Attaching Native Threads
 ///
-/// A native thread must «attach» itself to be able to call Java methods outside of a native Java
-/// method. This library provides two modes of attachment, each ensuring the thread is promptly
-/// detached:
+/// A native thread must «attach» itself to be able to call methods outside of a native method.
+/// This library provides two modes of attachment:
 /// * A scoped attachment with [`attach_current_thread`][act].
 ///   The thread will automatically detach itself once the returned guard is dropped.
 /// * A permanent attachment with [`attach_current_thread_permanently`][actp]
 ///   The thread will automatically detach itself before it terminates.
 ///
-/// As attachment and detachment of a thread is an expensive operation, the scoped attachment
-/// shall be used if happens infrequently. If you have an undefined scope where you need
-/// to use `JNIEnv` and cannot keep the `AttachGuard`, consider attaching the thread
-/// permanently.
-///
-/// ### Local Reference Management
-///
-/// Remember that the native thread attached to the VM **must** manage the local references
-/// properly, i.e., do not allocate an excessive number of references and release them promptly
-/// when they are no longer needed to enable the GC to collect them. A common approach is to use
-/// an appropriately-sized local frame for larger code fragments
-/// (see [`with_local_frame`](struct.JNIEnv.html#method.with_local_frame) and [Executor](#executor))
-/// and [auto locals](struct.JNIEnv.html#method.auto_local) in loops.
-///
-/// See also the [JNI specification][spec-references] for details on referencing Java objects.
-///
-/// ### Executor
-///
-/// Jni-rs provides an [`Executor`](struct.Executor.html) — a helper struct that allows to
-/// execute a closure with `JNIEnv`. It combines the performance benefits of permanent attaches
-/// *and* automatic local reference management. Prefer it to manual permanent attaches if
-/// they happen in various parts of the code to reduce the burden of local reference management.
-///
-/// ## Launching JVM from Rust
-///
-/// To [launch][launch-vm] a JVM from a native process, enable the `invocation`
-/// feature in the Cargo.toml:
-///
-/// ```toml
-/// jni = { version = "0.21.1", features = ["invocation"] }
-/// ```
-///
-/// The application will be able to use [`JavaVM::new`] which will dynamically
-/// load a `jvm` library (which is distributed with the JVM) at runtime:
-///
-/// ```rust
-/// # use jni::errors;
-/// # //
-/// # // Ignore this test without invocation feature, so that simple `cargo test` works
-/// # #[cfg(feature = "invocation")]
-/// # fn main() -> errors::StartJvmResult<()> {
-/// # use jni::{AttachGuard, objects::JValue, InitArgsBuilder, JNIEnv, JNIVersion, JavaVM, sys::jint};
-/// # //
-/// // Build the VM properties
-/// let jvm_args = InitArgsBuilder::new()
-///           // Pass the JNI API version (default is 8)
-///           .version(JNIVersion::V1_8)
-///           // You can additionally pass any JVM options (standard, like a system property,
-///           // or VM-specific).
-///           // Here we enable some extra JNI checks useful during development
-///           .option("-Xcheck:jni")
-///           .build()
-///           .unwrap();
-///
-/// // Create a new VM
-/// let jvm = JavaVM::new(jvm_args)?;
-///
-/// // Attach the current thread to call into Java — see extra options in
-/// // "Attaching Native Threads" section.
-/// //
-/// // This method returns the guard that will detach the current thread when dropped,
-/// // also freeing any local references created in it
-/// let mut env = jvm.attach_current_thread()?;
-///
-/// // Call Java Math#abs(-10)
-/// let x = JValue::from(-10);
-/// let val: jint = env.call_static_method("java/lang/Math", "abs", "(I)I", &[x])?
-///   .i()?;
-///
-/// assert_eq!(val, 10);
-///
-/// # Ok(()) }
-/// #
-/// # // This is a stub that gets run instead if the invocation feature is not built
-/// # #[cfg(not(feature = "invocation"))]
-/// # fn main() {}
-/// ```
-///
-/// At runtime, the JVM installation path is determined via the [java-locator] crate:
-/// 1. By the `JAVA_HOME` environment variable, if it is set.
-/// 2. Otherwise — from `java` output.
-///
-/// It is recommended to set `JAVA_HOME`
-///
-/// For the operating system to correctly load the `jvm` library it may also be
-/// necessary to update the path that the OS uses to find dependencies of the
-/// `jvm` library.
-/// * On **Windows**, append the path to `$JAVA_HOME/bin` to the `PATH` environment variable.
-/// * On **MacOS**, append the path to `libjvm.dylib` to `LD_LIBRARY_PATH` environment variable.
-/// * On **Linux**, append the path to `libjvm.so` to `LD_LIBRARY_PATH` environment variable.
-///
-/// The exact relative path to `jvm` library is version-specific.
-///
-/// [invocation-api]: https://docs.oracle.com/en/java/javase/12/docs/specs/jni/invocation.html
-/// [get-vm]: struct.JNIEnv.html#method.get_java_vm
-/// [launch-vm]: struct.JavaVM.html#method.new
-/// [act]: struct.JavaVM.html#method.attach_current_thread
-/// [actp]: struct.JavaVM.html#method.attach_current_thread_permanently
-/// [spec-references]: https://docs.oracle.com/en/java/javase/12/docs/specs/jni/design.html#referencing-java-objects
-/// [java-locator]: https://crates.io/crates/java-locator
+/// [act]: struct.AniVM.html#method.attach_current_thread
+/// [actp]: struct.AniVM.html#method.attach_current_thread_permanently
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct JavaVM(*mut sys::JavaVM);
+pub struct AniVM(*mut sys::ani_vm);
 
-unsafe impl Send for JavaVM {}
-unsafe impl Sync for JavaVM {}
+unsafe impl Send for AniVM {}
+unsafe impl Sync for AniVM {}
 
-impl JavaVM {
-    /// Launch a new JavaVM using the provided init args.
-    ///
-    /// Unlike original JNI API, the main thread (the thread from which this method is called) will
-    /// not be attached to JVM. You must explicitly use `attach_current_thread…` methods (refer
-    /// to [Attaching Native Threads section](#attaching-native-threads)).
-    ///
-    /// *This API requires the "invocation" feature to be enabled,
-    /// see ["Launching JVM from Rust"](struct.JavaVM.html#launching-jvm-from-rust).*
-    ///
-    /// This will attempt to locate a JVM using
-    /// [java-locator], if the JVM has not already been loaded. Use the
-    /// [`with_libjvm`][Self::with_libjvm] method to give an explicit location for the JVM shared
-    /// library (`jvm.dll`, `libjvm.so`, or `libjvm.dylib`, depending on the platform).
-    #[cfg(feature = "invocation")]
-    pub fn new(args: InitArgs) -> StartJvmResult<Self> {
-        Self::with_libjvm(args, || {
-            Ok([
-                java_locator::locate_jvm_dyn_library()
-                    .map_err(StartJvmError::NotFound)?
-                    .as_str(),
-                java_locator::get_jvm_dyn_lib_file_name(),
-            ]
-            .iter()
-            .collect::<PathBuf>())
-        })
-    }
+// Type alias for JNI compatibility
+pub type JavaVM = AniVM;
 
-    /// Get a [`JavaVM`] for the global Java VM
+impl AniVM {
+    /// Get a [`AniVM`] for the global ANI VM
     ///
-    /// If no [`JavaVM`] has been initialized, this will return [`Error::UninitializedJavaVM`].
-    ///
-    /// If a [`JavaVM`] has previously been created, either via [`JavaVM::new()`] or
-    /// [`JavaVM::from_raw`] then that [`JavaVM`] will be accessible as a global singleton.
-    ///
-    /// This is possible because JNI does not support fully destroying a Java VM and then
-    /// initializing a new one and so as soon as we have seen a Java VM pointer once, we know it's
-    /// the only VM that will ever exist and it will always be valid in safe code.
-    ///
-    /// If your code observes a [`JNIEnv`] reference or an [`AttachGuard`] (from this crate version)
-    /// then you can assume that [`JavaVM::singleton()`] has been initialized.
-    ///
-    /// Beware that the observation of reference types (such as [`crate::objects::JObject`]) only
-    /// imply that [`JavaVM::singleton()`] has been initialized if the references are non-null.
-    ///
-    /// One other caveat is that native methods may capture reference type arguments, such as
-    /// [`JObject`], where their lifetime is _not_ tied to a real `JNIEnv`. (And so at the start of
-    /// a native method, [`JavaVM::singleton()`] may not be initialized even though we can observe
-    /// reference types).
-    ///
-    /// In practice though, you can usually assume [`JavaVM::singleton()`] has been initialized
-    /// if you observe non-null reference types, based on the assumption that:
-    ///
-    /// - Before any other `jni-rs` API is used, a native method is expected to use
-    ///   [`env::JNIEnvUnowned::with_env`] to get a `JNIEnv` reference, which will initialize
-    ///   [`JavaVM::singleton()`].
-    /// - For any native method implementation to be safe, it must use `catch_unwind` (e.g. via
-    ///   [`env::JNIEnvUnowned::with_env`]) to ensure that panics can't unwind over an FFI boundary
-    ///   (at least rendering an early miss-use of `JavaVM::singleton()` "safe").
-    ///
-    /// Note: that other versions of `jni-rs` within the same application aren't able to share this
-    /// singleton state. So you should not make assumptions about this being initialized as a side
-    /// effect of other dependencies using `jni-rs` (unless you are using a re-exported version of
-    /// `jni-rs` from that dependency). For example the `android-activity` crate will initialize a
-    /// [JavaVM] before `android_main()` is called, but unless you are using the same version of
-    /// `jni-rs` as `android-activity` you can't immediately assume there is a [JavaVM] singleton.
+    /// If no [`AniVM`] has been initialized, this will return [`Error::UninitializedAniVM`].
     pub fn singleton() -> Result<Self> {
-        JAVA_VM_SINGLETON
+        ANI_VM_SINGLETON
             .get()
             .cloned()
-            .ok_or(Error::UninitializedJavaVM)
+            .ok_or(Error::UninitializedAniVM)
     }
 
-    /// Launch a new JavaVM using the provided init args, loading it from the given shared library file if it's not already loaded.
-    ///
-    /// Unlike original JNI API, the main thread (the thread from which this method is called) will
-    /// not be attached to JVM. You must explicitly use `attach_current_thread…` methods (refer
-    /// to [Attaching Native Threads section](#attaching-native-threads)).
-    ///
-    /// *This API requires the "invocation" feature to be enabled,
-    /// see ["Launching JVM from Rust"](struct.JavaVM.html#launching-jvm-from-rust).*
-    ///
-    /// The `libjvm_path` parameter takes a *closure* which returns the path to the JVM shared
-    /// library. The closure is only called if the JVM is not already loaded. Any work that needs
-    /// to be done to locate the JVM shared library should be done inside that closure.
-    #[cfg(feature = "invocation")]
-    pub fn with_libjvm<P: AsRef<OsStr>>(
-        args: InitArgs,
-        libjvm_path: impl FnOnce() -> StartJvmResult<P>,
-    ) -> StartJvmResult<Self> {
-        // Don't use .get_or_try_init() around all this code because `Self::with_create_fn_ptr`
-        // will call `JavaVM::from_raw` which will also try and set JAVA_VM_SINGLETON and create
-        // a deadlock
-        if let Some(jvm) = JAVA_VM_SINGLETON.get() {
-            Ok(jvm.clone())
-        } else {
-            // Determine the path to the shared library.
-            let libjvm_path = libjvm_path()?;
-            let libjvm_path_string = libjvm_path.as_ref().to_string_lossy().into_owned();
-
-            // Try to load it.
-            let libjvm = match unsafe { libloading::Library::new(libjvm_path.as_ref()) } {
-                Ok(ok) => ok,
-                Err(error) => return Err(StartJvmError::LoadError(libjvm_path_string, error)),
-            };
-
-            let result = unsafe {
-                // Try to find the `JNI_CreateJavaVM` function in the loaded library.
-                let create_fn = libjvm.get(b"JNI_CreateJavaVM\0").map_err(|error| {
-                    StartJvmError::LoadError(libjvm_path_string.to_owned(), error)
-                })?;
-
-                // Create the JVM.
-                Self::with_create_fn_ptr(args, *create_fn).map_err(StartJvmError::Create)
-            };
-
-            if result.is_ok() {
-                // Prevent libjvm from being unloaded.
-                //
-                // If libjvm is unloaded while the JVM is running, the program will crash as soon as it
-                // tries to execute any JVM code, including the many threads that the JVM automatically
-                // creates.
-                //
-                // For reasons unknown, HotSpot seems to somehow prevent itself from being unloaded, so it
-                // will work even if this `forget` call isn't here, but there's no guarantee that other JVM
-                // implementations will also prevent themselves from being unloaded.
-                //
-                // Note: `jni-rs` makes the assumption that there can only ever be a single `JavaVM`
-                // per-process and it's never possible to full destroy and unload a JVM once it's been
-                // created. Calling `DestroyJavaVM` is only expected to release some resources and
-                // leave the JVM in a poorly-defined limbo state that doesn't allow unloading.
-                // Ref: https://github.com/jni-rs/jni-rs/issues/567
-                //
-                // See discussion at: https://github.com/jni-rs/jni-rs/issues/550
-                std::mem::forget(libjvm);
-            }
-
-            result
-        }
-    }
-
-    #[cfg(feature = "invocation")]
-    unsafe fn with_create_fn_ptr(
-        args: InitArgs,
-        create_fn_ptr: unsafe extern "system" fn(
-            pvm: *mut *mut sys::JavaVM,
-            penv: *mut *mut c_void,
-            args: *mut c_void,
-        ) -> sys::jint,
-    ) -> Result<Self> {
-        let mut ptr: *mut sys::JavaVM = ::std::ptr::null_mut();
-        let mut env: *mut sys::JNIEnv = ::std::ptr::null_mut();
-
-        jni_error_code_to_result(create_fn_ptr(
-            &mut ptr as *mut _,
-            &mut env as *mut *mut sys::JNIEnv as *mut *mut c_void,
-            args.inner_ptr(),
-        ))?;
-
-        let vm = Self::from_raw(ptr);
-        java_vm_call_unchecked!(vm, v1_1, DetachCurrentThread);
-
-        Ok(vm)
-    }
-
-    /// Create a JavaVM from a raw pointer.
+    /// Create an AniVM from a raw pointer.
     ///
     /// # Safety
     ///
-    /// Expects a valid, non-null JavaVM pointer that supports JNI version >= 1.4.
+    /// Expects a valid, non-null ani_vm pointer.
     ///
     /// Only does a `null` check.
-    pub unsafe fn from_raw(ptr: *mut sys::JavaVM) -> Self {
+    pub unsafe fn from_raw(ptr: *mut sys::ani_vm) -> Self {
         assert!(!ptr.is_null());
-        JAVA_VM_SINGLETON.get_or_init(|| JavaVM(ptr)).clone()
+        ANI_VM_SINGLETON.get_or_init(|| AniVM(ptr)).clone()
     }
 
-    /// Returns underlying `sys::JavaVM` interface.
-    pub fn get_raw(&self) -> *mut sys::JavaVM {
+    /// Returns underlying `sys::ani_vm` interface.
+    pub fn get_raw(&self) -> *mut sys::ani_vm {
         self.0
     }
 
-    pub(crate) fn from_env(env: &JNIEnv) -> Self {
-        // Don't use `.get_or_init()` here because it would deadlock if calling `JavaVM::from_raw`
+    pub(crate) fn from_env(env: &ANIEnv) -> Self {
+        // Don't use `.get_or_init()` here because it would deadlock if calling `AniVM::from_raw`
         // which also uses `.get_or_init()`
-        if let Some(jvm) = JAVA_VM_SINGLETON.get() {
-            jvm.clone()
+        if let Some(vm) = ANI_VM_SINGLETON.get() {
+            vm.clone()
         } else {
-            let mut raw = ptr::null_mut();
-            let res = unsafe { jni_call_unchecked!(env, v1_1, GetJavaVM, &mut raw) };
-            let res = jni_error_code_to_result(res);
-
-            // If we have a JNIEnv reference then we can assume we have a valid, non-null JNIEnv
-            // pointer and there should be no reason for GetJavaVM to fail.
-            //
-            // If it would fail, we assume that would be breaking fundamental invariants we
-            // rely on within jni-rs so we wouldn't consider it safe in any case.
-            res.expect("Spurious failure to get JavaVM from JNIEnv");
-
-            // Safety: The pointer from GetJavaVM should be valid
-            unsafe { JavaVM::from_raw(raw) }
+            let mut raw: *mut sys::ani_vm = ptr::null_mut();
+            unsafe {
+                let status = ani_call_unchecked!(env, GetVM, &mut raw);
+                ani_status_to_result(status)
+                    .expect("Spurious failure to get AniVM from ANIEnv");
+                AniVM::from_raw(raw)
+            }
         }
     }
 
-    /// Attaches the current thread to the JVM. Calling this for a thread that is already attached
+    /// Attaches the current thread to the VM. Calling this for a thread that is already attached
     /// is a no-op.
     ///
     /// The thread will detach itself automatically when it exits.
-    ///
-    /// Calls to [`JavaVM::destroy()`] will block until all attached threads are detached.
-    ///
-    pub fn attach_current_thread_permanently(&'_ self) -> Result<JNIEnv<'_>> {
-        // Safety: NOT SAFE CURRENTLY: https://github.com/jni-rs/jni-rs/discussions/436#discussioncomment-5421738
+    pub fn attach_current_thread_permanently(&'_ self) -> Result<ANIEnv<'_>> {
         unsafe {
-            match self.get_env(JNIVersion::V1_4) {
+            match self.get_env(ANIVersion::V1) {
                 Ok(env) => Ok(env),
                 Err(_) => self.attach_current_thread_impl(),
             }
         }
     }
 
-    /// Attaches the current thread to the Java VM. The returned [`AttachGuard`]
-    /// can be dereferenced to a [`JNIEnv`] and automatically detaches the
+    /// Attaches the current thread to the ANI VM. The returned [`AttachGuard`]
+    /// can be dereferenced to a [`ANIEnv`] and automatically detaches the
     /// thread when dropped.
     ///
     /// Calling this in a thread that is already attached is a no-op.
-    ///
-    /// Calls to [`JavaVM::destroy()`] will block until all attached threads are
-    /// detached.
-    ///
-    /// Attaching and detaching a thread is an expensive operation, unless you
-    /// hit the no-op path because the thread was already attached. The
-    /// automatic detachment makes it more likely that your code will hit the
-    /// slower path in the future.
-    ///
-    /// In most cases it's probably better to use
-    /// [`Self::attach_current_thread_permanently`] and enable all JNI code to
-    /// amortize the cost of "attaching" to a thread.
     pub fn attach_current_thread(&'_ self) -> Result<AttachGuard<'_>> {
-        // Safety: NOT SAFE CURRENTLY: https://github.com/jni-rs/jni-rs/discussions/436#discussioncomment-5421738
         unsafe {
-            match self.get_env(JNIVersion::V1_4) {
+            match self.get_env(ANIVersion::V1) {
                 Ok(env) => Ok(AttachGuard::new_nested(env)),
                 Err(_) => {
                     let env = self.attach_current_thread_impl()?;
@@ -404,194 +118,63 @@ impl JavaVM {
         }
     }
 
-    /// Explicitly detaches the current thread from the JVM.
+    /// Explicitly detaches the current thread from the VM.
     ///
     /// _**Note**: This operation is _rarely_ appropriate to use, because the
-    /// attachment methods [ensure](#attaching-native-threads) that the thread
-    /// is automatically detached._
+    /// attachment methods ensure that the thread is automatically detached._
     ///
     /// Detaching a non-attached thread is a no-op.
     ///
-    /// This API will only detach threads that were attached via `jni-rs` APIs,
-    /// and since `jni-rs` doesn't directly support 'daemon' threads, you
-    /// can't rely on the `jni-rs` API to detach daemon threads.
-    ///
-    /// To support the use of `JavaVM::destroy()` it may be necessary to
-    /// explicitly detach daemon threads before `JavaVM::destroy()` is called because
-    /// `JavaVM::destroy()` does not synchronize and wait for daemon threads.
-    /// (since `jni-rs` doesn't directly support 'daemon' threads, you shouldn't
-    /// rely on the `jn-rs` API to detach daemon threads)
-    ///
-    /// Any daemon thread that is still "attached" after `JavaVM::destroy()` returns would
-    /// cause undefined behaviour if it then tries to make any JNI calls or tries
-    /// to detach itself.
-    ///
-    /// Normally `jni-rs` will automatically detach threads from the `JavaVM` by storing
-    /// a guard in thread-local-storage that will detach on `Drop` but this will cause
-    /// undefined behaviour if `JavaVM::destroy()` has been called.
-    ///
-    /// Calling this will clear the thread-local-storage guard and detach the thread
-    /// early to avoid any attempt to automatically detach when the thread exits.
-    ///
     /// # Safety
     ///
-    /// __Any existing `JNIEnv`s and `AttachGuard`s created in the calling thread
-    /// will be invalidated after this method completes. It is the__ caller’s __responsibility
-    /// to ensure that no JNI calls are subsequently performed on these objects.__
-    /// Failure to do so will result in unspecified errors, possibly, the process crash.
-    ///
-    /// Given some care is exercised, this method can be used to detach permanently attached
-    /// threads _before_ they exit (when automatic detachment occurs). However, it is
-    /// never appropriate to use it with the scoped attachment (`attach_current_thread`).
-    // This method is hidden because it is almost never needed and its use requires some
-    // extra care. Its status might be reconsidered if we learn of any use cases that require it.
+    /// __Any existing `ANIEnv`s and `AttachGuard`s created in the calling thread
+    /// will be invalidated after this method completes. It is the__ caller's __responsibility
+    /// to ensure that no calls are subsequently performed on these objects.__
     pub unsafe fn detach_current_thread(&self) {
         InternalAttachGuard::clear_tls();
     }
 
-    /// Returns the current number of threads attached to the JVM.
-    ///
-    /// This method is provided mostly for diagnostic purposes.
+    /// Returns the current number of threads attached to the VM.
     pub fn threads_attached(&self) -> usize {
         ATTACHED_THREADS.load(Ordering::SeqCst)
     }
 
-    /// Get the `JNIEnv` associated with the current thread, or
-    /// `ErrorKind::Detached`
-    /// if the current thread is not attached to the java VM.
-    ///
-    /// You must specify what JNI `version`` you require, with a minimum of
-    /// [`JNIVersion::V1_4`]
+    /// Get the `ANIEnv` associated with the current thread, or
+    /// `Error::AniCall` if the current thread is not attached to the VM.
     ///
     /// # Safety
     ///
-    /// You must know that the [`JavaVM`] supports at least JNI >= 1.4
-    ///
-    /// (The implementation is not able to call `GetEnv` before 1.2 and the
-    /// implementation can't validate the `JNIEnv` version by calling
-    /// `GetVersion` if exceptions might be pending since `GetVersion` is not
-    /// documented as safe to call with pending exceptions)
-    ///
-    /// You must not use this API to materialize a [`JNIEnv`] if there is
-    /// already another [`JNIEnv`] or local [`JObject`] reference in scope,
-    /// since this risks associating a mutable [`JNIEnv`] with a `'local` stack
-    /// frame lifetime that doesn't correspond to the top of the JNI stack for
-    /// local object references.
-    ///
-    /// A [`JNIEnv`] has a lifetime parameter that ties it to a local JNI stack
-    /// frame (which holds local object references) and the safe [`JNIEnv`] API
-    /// will only allow it to remain mutable if its `'local` lifetime
-    /// corresponds to the top of the JNI stack. If you materialize a [`JNIEnv`]
-    /// with this API you will get a mutable [`JNIEnv`] and it's important you
-    /// don't inadvertantly associate the [`JNIEnv`] with a lifetime from a
-    /// pre-existing [`JObject`] that might belong to a lower stack frame.
-    ///
-    pub unsafe fn get_env(&'_ self, version: JNIVersion) -> Result<JNIEnv<'_>> {
-        let mut ptr = ptr::null_mut();
-        if version < JNIVersion::V1_4 {
-            return Err(Error::UnsupportedVersion);
-        }
+    /// You must not use this API to materialize a [`ANIEnv`] if there is
+    /// already another [`ANIEnv`] or local reference in scope.
+    pub unsafe fn get_env(&'_ self, version: ANIVersion) -> Result<ANIEnv<'_>> {
+        let mut ptr: *mut sys::ani_env = ptr::null_mut();
         unsafe {
-            let res = java_vm_call_unchecked!(self, v1_2, GetEnv, &mut ptr, version.into());
-            jni_error_code_to_result(res)?;
-            Ok(JNIEnv::from_raw_unchecked(ptr as *mut sys::JNIEnv))
+            let status = ani_vm_call_unchecked!(self, GetEnv, version.raw(), &mut ptr);
+            ani_status_to_result(status)?;
+            Ok(ANIEnv::from_raw_unchecked(ptr))
         }
     }
 
     /// Creates `InternalAttachGuard` and attaches current thread.
-    unsafe fn attach_current_thread_impl(&'_ self) -> Result<JNIEnv<'_>> {
+    unsafe fn attach_current_thread_impl(&'_ self) -> Result<ANIEnv<'_>> {
         let guard = InternalAttachGuard::new(self.clone());
         let env_ptr = unsafe { guard.attach_current_thread()? };
 
         InternalAttachGuard::fill_tls(guard);
 
-        unsafe { JNIEnv::from_raw(env_ptr as *mut sys::JNIEnv) }
+        unsafe { ANIEnv::from_raw(env_ptr) }
     }
 
-    /// Unloads the JavaVM and frees all it's associated resources
-    ///
-    /// Firstly if this thread is not already attached to the `JavaVM` then it
-    /// will be attached.
-    ///
-    /// This thread will then wait until there are no other non-daemon threads
-    /// attached to the `JavaVM` before unloading it (including threads spawned
-    /// by Java and those that are attached via JNI)
+    /// Unloads the AniVM and frees all its associated resources
     ///
     /// # Safety
     ///
-    /// IF YOU ARE USING DAEMON THREADS THIS MAY BE DIFFICULT TO USE SAFELY!
-    ///
-    /// ## Daemon thread rules
-    ///
-    /// Since the JNI spec makes it clear that [`DestroyJavaVM`][destroy] will
-    /// not wait for attached deamon threads to exit, this also means that if
-    /// you do have any attached daemon threads it is your responsibility to
-    /// ensure that they don't try and use JNI after the `JavaVM` is destroyed
-    /// and you won't be able to detach them after the `JavaVM` has been
-    /// destroyed.
-    ///
-    /// This creates a very unsafe hazard if using `jni-rs` due to the various
-    /// RAII types that will automatically make JNI calls within their `Drop`
-    /// implementation.
-    ///
-    /// For this reason `jni-rs` doesn't directly support attaching or detaching
-    /// 'daemon' threads and it's assumed you will manage their safety yourself
-    /// if you're using them.
-    ///
-    /// Note: [`JavaVM::detach_current_thread()`] is a no-op for daemon threads
-    /// because it will only detach threads that were attached via `jni-rs` APIs.
-    ///
-    /// ## Don't call from a Java native function
-    ///
-    /// There must be no Java methods on the call stack when `JavaVM::destroy()`
-    /// is called.
-    ///
-    /// ## Drop all JNI state, including auto-release types before calling `JavaVM::destroy()`
-    ///
-    /// There is currently no `'vm` lifetime associated with a `JavaVM` that
-    /// would allow the borrow checker to enforce that all `jni` resources
-    /// associated with the `JavaVM` have been released.
-    ///
-    /// Since these JNI resources could lead to undefined behaviour through any
-    /// use after the `JavaVM` has been destroyed then it is your responsibility
-    /// to release these resources.
-    ///
-    /// In particular, there are numerous auto-release types in the `jni` API
-    /// that will automatically make JNI calls within their `Drop`
-    /// implementation. All such types _must_ be dropped before `destroy()` is
-    /// called to avoid undefined bahaviour.
-    ///
-    /// Here is an non-exhaustive list of auto-release types to consider:
-    /// - `AttachGuard`
-    /// - `AutoElements`
-    /// - `AutoElementsCritical`
-    /// - `AutoLocal`
-    /// - `GlobalRef`
-    /// - `JavaStr`
-    /// - `JMap`
-    /// - `WeakRef`
-    ///
-    /// ## Invalid `JavaVM` on return
-    ///
-    /// After `destroy()` returns then the `JavaVM` will be in an undefined
-    /// state and must be dropped (e.g. via `std::mem::drop()`) to avoid
-    /// undefined behaviour.
-    ///
-    /// This method doesn't take ownership of the `JavaVM` before it is
-    /// destroyed because the `JavaVM` may have been shared (E.g. via an `Arc`)
-    /// between all the threads that have not yet necessarily exited before this
-    /// is called.
-    ///
-    /// So although the `JavaVM` won't necessarily be solely owned by this
-    /// thread when `destroy()` is first called it will conceptually own the
-    /// `JavaVM` before `destroy()` returns.
-    ///
-    /// [destroy]:
-    ///     https://docs.oracle.com/en/java/javase/12/docs/specs/jni/invocation.html#unloading-the-vm
+    /// After `destroy()` returns then the `AniVM` will be in an undefined
+    /// state and must be dropped to avoid undefined behaviour.
     pub unsafe fn destroy(&self) -> Result<()> {
         unsafe {
-            let res = java_vm_call_unchecked!(self, v1_1, DestroyJavaVM);
-            jni_error_code_to_result(res)
+            let status = ani_vm_call_unchecked!(self, DestroyVM);
+            ani_status_to_result(status)
         }
     }
 }
@@ -603,16 +186,16 @@ thread_local! {
 static ATTACHED_THREADS: AtomicUsize = AtomicUsize::new(0);
 
 /// A RAII implementation of scoped guard which detaches the current thread
-/// when dropped. The attached `JNIEnv` can be accessed through this guard
+/// when dropped. The attached `ANIEnv` can be accessed through this guard
 /// via its `Deref` implementation.
 pub struct AttachGuard<'local> {
-    env: JNIEnv<'local>,
+    env: ANIEnv<'local>,
     should_detach: bool,
 }
 
 impl<'local> AttachGuard<'local> {
     /// AttachGuard created with this method will detach current thread on drop
-    fn new(env: JNIEnv<'local>) -> Self {
+    fn new(env: ANIEnv<'local>) -> Self {
         Self {
             env,
             should_detach: true,
@@ -621,7 +204,7 @@ impl<'local> AttachGuard<'local> {
 
     /// AttachGuard created with this method will not detach current thread on drop, which is
     /// the case for nested attaches.
-    fn new_nested(env: JNIEnv<'local>) -> Self {
+    fn new_nested(env: ANIEnv<'local>) -> Self {
         Self {
             env,
             should_detach: false,
@@ -630,7 +213,7 @@ impl<'local> AttachGuard<'local> {
 }
 
 impl<'local> Deref for AttachGuard<'local> {
-    type Target = JNIEnv<'local>;
+    type Target = ANIEnv<'local>;
 
     fn deref(&self) -> &Self::Target {
         &self.env
@@ -653,19 +236,14 @@ impl Drop for AttachGuard<'_> {
 
 #[derive(Debug)]
 struct InternalAttachGuard {
-    java_vm: JavaVM,
-    /// A call std::thread::current() function can panic in case the local data has been destroyed
-    /// before the thead local variables. The possibility of this happening depends on the platform
-    /// implementation of the crate::sys_common::thread_local_dtor::register_dtor_fallback.
-    /// The InternalAttachGuard is a thread-local vairable, so capture the thread meta-data
-    /// during creation
+    ani_vm: AniVM,
     thread: Thread,
 }
 
 impl InternalAttachGuard {
-    fn new(java_vm: JavaVM) -> Self {
+    fn new(ani_vm: AniVM) -> Self {
         Self {
-            java_vm,
+            ani_vm,
             thread: current(),
         }
     }
@@ -685,16 +263,16 @@ impl InternalAttachGuard {
         });
     }
 
-    unsafe fn attach_current_thread(&self) -> Result<*mut sys::JNIEnv> {
-        let mut env_ptr = ptr::null_mut();
-        let res = java_vm_call_unchecked!(
-            self.java_vm,
-            v1_1,
+    unsafe fn attach_current_thread(&self) -> Result<*mut sys::ani_env> {
+        let mut env_ptr: *mut sys::ani_env = ptr::null_mut();
+        let status = ani_vm_call_unchecked!(
+            self.ani_vm,
             AttachCurrentThread,
-            &mut env_ptr,
-            ptr::null_mut()
+            ptr::null(),
+            sys::ANI_VERSION_1,
+            &mut env_ptr
         );
-        jni_error_code_to_result(res)?;
+        ani_status_to_result(status)?;
 
         ATTACHED_THREADS.fetch_add(1, Ordering::SeqCst);
 
@@ -705,12 +283,13 @@ impl InternalAttachGuard {
             ATTACHED_THREADS.load(Ordering::SeqCst)
         );
 
-        Ok(env_ptr as *mut sys::JNIEnv)
+        Ok(env_ptr)
     }
 
     fn detach(&mut self) -> Result<()> {
         unsafe {
-            java_vm_call_unchecked!(self.java_vm, v1_1, DetachCurrentThread);
+            let status = ani_vm_call_unchecked!(self.ani_vm, DetachCurrentThread);
+            ani_status_to_result(status)?;
         }
         ATTACHED_THREADS.fetch_sub(1, Ordering::SeqCst);
         debug!(
@@ -736,3 +315,6 @@ impl Drop for InternalAttachGuard {
         }
     }
 }
+
+// JNI compatibility type aliases
+pub type JNIVersion = ANIVersion;

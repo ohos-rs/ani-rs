@@ -1,9 +1,12 @@
 [package]
 name = "ani-rs"
 version = "0.0.1-alpha.1"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 description = "ANI bindings"
 
 [dependencies]
 ani-sys = { path = "../sys", version = "0.0.1-alpha.1" }
+log = "0.4"
+thiserror = "1.0"
+once_cell = "1.18"
