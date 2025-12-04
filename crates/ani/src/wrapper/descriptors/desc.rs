@@ -1,11 +1,11 @@
 use crate::{
     errors::*,
-    objects::{AutoLocal, JObject},
+    objects::{AutoLocal, AObject},
     anienv::ANIEnv,
 };
 
 #[cfg(doc)]
-use crate::objects::{JClass, JMethodID};
+use crate::objects::{AClass, AMethodID};
 
 /// Trait for things that can be looked up via a descriptor.
 ///
@@ -45,7 +45,7 @@ where
 
 unsafe impl<'local, 'other_local, T> Desc<'local, T> for AutoLocal<'other_local, T>
 where
-    T: AsRef<T> + Into<JObject<'other_local>>,
+    T: AsRef<T> + Into<AObject<'other_local>>,
 {
     type Output = Self;
 
@@ -56,7 +56,7 @@ where
 
 unsafe impl<'local, 'other_local, T> Desc<'local, T> for &AutoLocal<'other_local, T>
 where
-    T: AsRef<T> + Into<JObject<'other_local>>,
+    T: AsRef<T> + Into<AObject<'other_local>>,
 {
     type Output = Self;
 

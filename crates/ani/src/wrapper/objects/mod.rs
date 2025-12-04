@@ -1,42 +1,42 @@
-// wrappers arount jni pointer types that add lifetimes and other functionality.
-mod jvalue;
-pub use self::jvalue::*;
+// wrappers around ani pointer types that add lifetimes and other functionality.
+mod avalue;
+pub use self::avalue::*;
 
-mod jmethodid;
-pub use self::jmethodid::*;
+mod amethodid;
+pub use self::amethodid::*;
 
-mod jstaticmethodid;
-pub use self::jstaticmethodid::*;
+mod astaticmethodid;
+pub use self::astaticmethodid::*;
 
-mod jfieldid;
-pub use self::jfieldid::*;
+mod afieldid;
+pub use self::afieldid::*;
 
-mod jstaticfieldid;
-pub use self::jstaticfieldid::*;
+mod astaticfieldid;
+pub use self::astaticfieldid::*;
 
-mod jobject_ref;
-pub use self::jobject_ref::*;
+mod aobject_ref;
+pub use self::aobject_ref::*;
 
-mod jobject;
-pub use self::jobject::*;
+mod aobject;
+pub use self::aobject::*;
 
-mod jthrowable;
-pub use self::jthrowable::*;
+mod athrowable;
+pub use self::athrowable::*;
 
-mod jclass;
-pub use self::jclass::*;
+mod aclass;
+pub use self::aclass::*;
 
-mod jstring;
-pub use self::jstring::*;
+mod astring;
+pub use self::astring::*;
 
-mod jmap;
-pub use self::jmap::*;
+mod amap;
+pub use self::amap::*;
 
-mod jlist;
-pub use self::jlist::*;
+mod alist;
+pub use self::alist::*;
 
-mod jbytebuffer;
-pub use self::jbytebuffer::*;
+mod abytebuffer;
+pub use self::abytebuffer::*;
 
 // For storing a reference to a java object
 mod global_ref;
@@ -52,13 +52,13 @@ pub use self::auto_local::*;
 mod release_mode;
 pub use self::release_mode::*;
 
-/// Primitive Array types
-mod jobject_array;
-pub use self::jobject_array::*;
+/// Object Array types
+mod aobject_array;
+pub use self::aobject_array::*;
 
 /// Primitive Array types
-mod jprimitive_array;
-pub use self::jprimitive_array::*;
+mod aprimitive_array;
+pub use self::aprimitive_array::*;
 
 // For automatic pointer-based generic array release
 mod auto_elements;

@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{
     errors::*,
-    objects::{JPrimitiveArray, ReleaseMode, TypeArray},
+    objects::{APrimitiveArray, ReleaseMode, TypeArray},
     sys,
     anienv::ANIEnv,
 };
@@ -13,7 +13,7 @@ use crate::{
 /// performance. The ANI VM may disable garbage collection while critical array
 /// elements are held.
 pub struct AutoElementsCritical<'local, 'array, 'env, T: TypeArray> {
-    array: &'array JPrimitiveArray<'local, T>,
+    array: &'array APrimitiveArray<'local, T>,
     len: usize,
     ptr: *mut T,
     mode: ReleaseMode,
@@ -31,7 +31,7 @@ impl<'local, 'array, 'env, T: TypeArray> AutoElementsCritical<'local, 'array, 'e
     /// holding critical elements.
     pub(crate) unsafe fn new(
         env: &'env ANIEnv<'local>,
-        array: &'array JPrimitiveArray<'local, T>,
+        array: &'array APrimitiveArray<'local, T>,
         mode: ReleaseMode,
     ) -> Result<Self> {
         let mut len: sys::ani_size = 0;

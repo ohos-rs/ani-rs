@@ -1,43 +1,37 @@
-use crate::sys::jobject;
-
-use crate::objects::JObject;
+use crate::sys::aobject;
 
 #[cfg(doc)]
-use crate::objects::{AutoLocal, GlobalRef, JString};
+use crate::objects::GlobalRef;
 
-/// A trait for types that represents a JNI reference (could be local, global or
+use super::AObject;
+
+/// A trait for types that represents an ANI reference (could be local, global or
 /// weak global as well as wrapper types like [`AutoLocal`] and [`GlobalRef`])
 ///
 ///
-/// This makes it possible for APIs like [`JNIEnv::new_global_ref`] to be given
-/// a non-static local reference type like [`JString<'local>`] (or an
+/// This makes it possible for APIs like [`ANIEnv::new_global_ref`] to be given
+/// a non-static local reference type like [`AString<'local>`] (or an
 /// [`AutoLocal`] wrapper) and return a [`GlobalRef`] that is instead
-/// parameterized by [`JString<'static>`].
-pub trait JObjectRef: Sized {
+/// parameterized by [`AString<'static>`].
+pub trait AObjectRef: Sized {
     /// The generic associated [`Self::Kind`] type corresponds to the underlying
-    /// class type (such as [`JObject`] or [`JString`]), parameterized by the
+    /// class type (such as [`AObject`] or [`AString`]), parameterized by the
     /// lifetime that indicates whether the type holds a global reference
-    /// (`'static`) or a local reference that's tied to a JNI stack frame.
-    type Kind<'local>: JObjectRef + Default + Into<JObject<'local>> + AsRef<JObject<'local>>;
-    // XXX: the compiler blows up if we try and specify a Send + Sync bound
-    // here: "overflow evaluating the requirement..."
-    //where
-    //    Self::Kind<'static>: Send + Sync;
-    //
-    // As a workaround, we have a separate associated type
+    /// (`'static`) or a local reference that's tied to an ANI stack frame.
+    type Kind<'local>: AObjectRef + Default + Into<AObject<'local>> + AsRef<AObject<'local>>;
 
     /// The associated `GlobalKind` type should be equivalent to
     /// `Kind<'static>`, with the additional bound that ensures the type is
     /// `Send + Sync`
-    type GlobalKind: JObjectRef
+    type GlobalKind: AObjectRef
         + Default
-        + Into<JObject<'static>>
-        + AsRef<JObject<'static>>
+        + Into<AObject<'static>>
+        + AsRef<AObject<'static>>
         + Send
         + Sync;
 
-    /// Returns the underlying, raw [`crate::sys::jobject`] reference.
-    fn as_raw(&self) -> jobject;
+    /// Returns the underlying, raw [`crate::sys::aobject`] reference.
+    fn as_raw(&self) -> aobject;
 
     /// Returns `true` if this is a `null` object reference
     fn is_null(&self) -> bool {
@@ -50,12 +44,12 @@ pub trait JObjectRef: Sized {
     }
 
     /// Returns a new reference type based on [`Self::Kind`] for the given `local_ref` that is
-    /// tied to the JNI stack frame for the given lifetime.
+    /// tied to the ANI stack frame for the given lifetime.
     ///
     /// # Safety
     ///
-    /// The given lifetime must associated with an AttachGuard or a JNIEnv and represent a
-    /// JNI stack frame.
+    /// The given lifetime must associated with an AttachGuard or an ANIEnv and represent an
+    /// ANI stack frame.
     ///
     /// There must not be no other wrapper for the given `local_ref` reference (unless it is
     /// `null`)
@@ -64,7 +58,7 @@ pub trait JObjectRef: Sized {
     /// given `local_ref` reference. E.g. because the `local_ref` came from an `into_raw`
     /// call from the same type.
     ///
-    unsafe fn from_local_raw<'env>(local_ref: jobject) -> Self::Kind<'env>;
+    unsafe fn from_local_raw<'env>(local_ref: aobject) -> Self::Kind<'env>;
 
     /// Returns a (`'static`) reference type based on [`Self::GlobalKind`] for the given `global_ref`.
     ///
@@ -77,25 +71,28 @@ pub trait JObjectRef: Sized {
     /// given `global_ref` reference. E.g. because the `global_ref` came from an `into_raw`
     /// call from the same type.
     ///
-    unsafe fn from_global_raw(global_ref: jobject) -> Self::GlobalKind;
+    unsafe fn from_global_raw(global_ref: aobject) -> Self::GlobalKind;
 }
 
-impl<T> JObjectRef for &T
+impl<T> AObjectRef for &T
 where
-    T: JObjectRef,
+    T: AObjectRef,
 {
     type Kind<'local> = T::Kind<'local>;
     type GlobalKind = T::GlobalKind;
 
-    fn as_raw(&self) -> jobject {
+    fn as_raw(&self) -> aobject {
         (*self).as_raw()
     }
 
-    unsafe fn from_local_raw<'env>(local_ref: jobject) -> Self::Kind<'env> {
+    unsafe fn from_local_raw<'env>(local_ref: aobject) -> Self::Kind<'env> {
         T::from_local_raw(local_ref)
     }
 
-    unsafe fn from_global_raw(global_ref: jobject) -> Self::GlobalKind {
+    unsafe fn from_global_raw(global_ref: aobject) -> Self::GlobalKind {
         T::from_global_raw(global_ref)
     }
 }
+
+// Removed JObjectRef type alias - use AObjectRef trait directly
+

@@ -4,13 +4,13 @@ use log::{debug, warn};
 
 use crate::{
     errors::{ani_status_to_result, Error, Result},
-    objects::{GlobalRef, JObject},
-    sys, sys::jobject, anienv::ANIEnv, ANIVersion, AniVM,
+    objects::{GlobalRef, AObject},
+    sys, sys::aobject, anienv::ANIEnv, ANIVersion, AniVM,
 };
 
-use super::JObjectRef;
+use super::AObjectRef;
 
-// Note: `WeakRef` must not implement `Into<JObject>`! If it did, then it would be possible to
+// Note: `WeakRef` must not implement `Into<AObject>`! If it did, then it would be possible to
 // wrap it in `AutoLocal`, which would cause undefined behavior upon drop as a result of calling
 // the wrong function to delete the reference.
 
@@ -68,24 +68,24 @@ use super::JObjectRef;
 #[derive(Debug)]
 pub struct WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     obj: T,
 }
 
 unsafe impl<T> Send for WeakRef<T> where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync
 {
 }
 
 unsafe impl<T> Sync for WeakRef<T> where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync
 {
 }
 
 impl<T> Default for WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     fn default() -> Self {
         Self::null()
@@ -95,10 +95,10 @@ where
 impl<T, U> AsRef<U> for WeakRef<T>
 where
     T: AsRef<U>
-        + Into<JObject<'static>>
-        + AsRef<JObject<'static>>
+        + Into<AObject<'static>>
+        + AsRef<AObject<'static>>
         + Default
-        + JObjectRef
+        + AObjectRef
         + Send
         + Sync,
 {
@@ -109,7 +109,7 @@ where
 
 impl<T> Deref for WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     type Target = T;
 
@@ -120,7 +120,7 @@ where
 
 impl<T> WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     /// Creates a new auto-delete wrapper for the `'static` weak global reference
     ///
@@ -147,7 +147,7 @@ where
     }
 
     /// Returns the raw weak reference.
-    pub fn as_raw(&self) -> sys::jobject {
+    pub fn as_raw(&self) -> sys::aobject {
         self.obj.as_raw()
     }
 
@@ -190,7 +190,7 @@ where
     /// method does not guarantee that [`WeakRef::upgrade_local`] or [`WeakRef::upgrade_global`]
     /// will succeed.
     pub fn is_garbage_collected(&self, env: &ANIEnv) -> bool {
-        env.is_same_object(self, JObject::null())
+        env.is_same_object(self, AObject::null())
     }
 
     /// Creates a new weak reference to the same object that this one refers to.
@@ -207,7 +207,7 @@ where
 
 impl<T> Drop for WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     fn drop(&mut self) {
         let obj = std::mem::take(&mut self.obj);
@@ -215,7 +215,7 @@ where
         // It's redundant to explicitly delete a null pointer and we don't
         // assume that a AniVM has been initialized if we only wrap a 'static null pointer
         if !obj.is_null() {
-            fn drop_impl(env: &ANIEnv, raw: sys::jobject) -> Result<()> {
+            fn drop_impl(env: &ANIEnv, raw: sys::aobject) -> Result<()> {
                 unsafe {
                     let status = ani_call_unchecked!(env, Reference_Delete, raw);
                     ani_status_to_result(status)
@@ -242,22 +242,22 @@ where
     }
 }
 
-impl<T> JObjectRef for WeakRef<T>
+impl<T> AObjectRef for WeakRef<T>
 where
-    T: Into<JObject<'static>> + AsRef<JObject<'static>> + Default + JObjectRef + Send + Sync,
+    T: Into<AObject<'static>> + AsRef<AObject<'static>> + Default + AObjectRef + Send + Sync,
 {
     type Kind<'env> = T::Kind<'env>;
     type GlobalKind = T::GlobalKind;
 
-    fn as_raw(&self) -> jobject {
+    fn as_raw(&self) -> aobject {
         self.obj.as_raw()
     }
 
-    unsafe fn from_local_raw<'env>(local_ref: jobject) -> Self::Kind<'env> {
+    unsafe fn from_local_raw<'env>(local_ref: aobject) -> Self::Kind<'env> {
         T::from_local_raw(local_ref)
     }
 
-    unsafe fn from_global_raw(global_ref: jobject) -> Self::GlobalKind {
+    unsafe fn from_global_raw(global_ref: aobject) -> Self::GlobalKind {
         T::from_global_raw(global_ref)
     }
 }

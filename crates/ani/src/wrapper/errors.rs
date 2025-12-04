@@ -14,8 +14,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("ANI VM singleton uninitialized")]
     UninitializedAniVM,
-    #[error("Invalid AniValue type cast: {0}. Actual type: {1}")]
-    WrongAniValueType(&'static str, &'static str),
+    #[error("Invalid AValue type cast: {0}. Actual type: {1}")]
+    WrongAValueType(&'static str, &'static str),
     #[error("Invalid constructor return type (must be void)")]
     InvalidCtorReturn,
     #[error("Invalid number or type of arguments passed to method: {0}")]
@@ -55,25 +55,13 @@ pub enum Error {
 
     #[error("An int has the value 0x{char:x}, which is not a valid UTF-32 unit; cannot convert it to a Rust `char`")]
     InvalidUtf32 {
-        char: sys::ani_int,
+        char: sys::aint,
         #[source]
         source: CharTryFromError,
     },
 
     #[error("This ANI virtual machine version is not supported")]
     UnsupportedVersion,
-
-    // Keep JNI compatibility aliases
-    #[error("JavaException (JNI compat)")]
-    JavaException,
-    #[error("JNIEnv method not found: {0}")]
-    JNIEnvMethodNotFound(&'static str),
-    #[error("JNI call failed")]
-    JniCall(#[source] AniError),
-    #[error("Invalid JValue type cast: {0}. Actual type: {1}")]
-    WrongJValueType(&'static str, &'static str),
-    #[error("JavaVM method not found: {0}")]
-    JavaVMMethodNotFound(&'static str),
 }
 
 #[derive(Debug, Error)]
@@ -110,9 +98,6 @@ pub enum AniError {
     Other(sys::ani_status),
 }
 
-// Alias for JNI compatibility
-pub type JniError = AniError;
-
 impl<T> From<::std::sync::TryLockError<T>> for Error {
     fn from(_: ::std::sync::TryLockError<T>) -> Self {
         Error::TryLock
@@ -147,16 +132,15 @@ pub fn ani_status_to_result(status: sys::ani_status) -> Result<()> {
     }
 }
 
-// JNI compatibility function
-pub fn jni_error_code_to_result(code: sys::jint) -> Result<()> {
+pub fn ani_code_to_result(code: sys::aint) -> Result<()> {
     match code {
-        sys::JNI_OK => Ok(()),
-        sys::JNI_ERR => Err(AniError::Unknown),
-        sys::JNI_EDETACHED => Err(AniError::Unknown),
-        sys::JNI_EVERSION => Err(AniError::InvalidVersion),
-        sys::JNI_ENOMEM => Err(AniError::OutOfMemory),
-        sys::JNI_EEXIST => Err(AniError::AlreadyBound),
-        sys::JNI_EINVAL => Err(AniError::InvalidArgs),
+        sys::ANI_OK => Ok(()),
+        sys::ANI_ERR => Err(AniError::Unknown),
+        sys::ANI_EDETACHED => Err(AniError::Unknown),
+        sys::ANI_EVERSION => Err(AniError::InvalidVersion),
+        sys::ANI_ENOMEM => Err(AniError::OutOfMemory),
+        sys::ANI_EEXIST => Err(AniError::AlreadyBound),
+        sys::ANI_EINVAL => Err(AniError::InvalidArgs),
         _ => Err(AniError::Other(code as sys::ani_status)),
     }
     .map_err(Error::AniCall)
@@ -190,14 +174,9 @@ pub enum StartVmError {
 #[cfg(feature = "invocation")]
 pub type StartVmResult<T> = std::result::Result<T, StartVmError>;
 
-// JNI compatibility alias
-#[cfg(feature = "invocation")]
-pub type StartJvmError = StartVmError;
-#[cfg(feature = "invocation")]
-pub type StartJvmResult<T> = StartVmResult<T>;
-
 #[derive(Debug, Error)]
 #[error("The code point U+{char_as_u32:X} {char:?} cannot be converted to a char, because it is not representable as a single UTF-16 unit.", char_as_u32 = u32::from(*char))]
-pub struct CharToJavaError {
+pub struct CharToAniError {
     pub char: char,
 }
+

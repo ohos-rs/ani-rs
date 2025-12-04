@@ -1,18 +1,18 @@
-use crate::sys::jmethodID;
+use crate::sys::ani_method;
 
-/// Wrapper around [`jmethodID`] that implements `Send` + `Sync` since method IDs
-/// are valid across threads (not tied to a `JNIEnv`).
+/// Wrapper around [`ani_method`] that implements `Send` + `Sync` since method IDs
+/// are valid across threads (not tied to an `ANIEnv`).
 ///
 /// There is no lifetime associated with these since they aren't garbage
 /// collected like objects and their lifetime is not implicitly connected with
 /// the scope in which they are queried.
 ///
 /// It matches C's representation of the raw pointer, so it can be used in any
-/// of the extern function argument positions that would take a [`jmethodID`].
+/// of the extern function argument positions that would take an [`ani_method`].
 ///
 /// # Safety
 ///
-/// According to the JNI spec method IDs may be invalidated when the
+/// According to the ANI spec method IDs may be invalidated when the
 /// corresponding class is unloaded.
 ///
 /// Since this constraint can't be encoded as a Rust lifetime, and to avoid the
@@ -22,38 +22,40 @@ use crate::sys::jmethodID;
 /// cached method IDs.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub struct JMethodID {
-    internal: jmethodID,
+pub struct AMethodID {
+    internal: ani_method,
 }
 
-// Method IDs are valid across threads (not tied to a JNIEnv)
-unsafe impl Send for JMethodID {}
-unsafe impl Sync for JMethodID {}
+// Method IDs are valid across threads (not tied to an ANIEnv)
+unsafe impl Send for AMethodID {}
+unsafe impl Sync for AMethodID {}
 
-impl JMethodID {
-    /// Creates a [`JMethodID`] that wraps the given `raw` [`jmethodID`]
+impl AMethodID {
+    /// Creates a [`AMethodID`] that wraps the given `raw` [`ani_method`]
     ///
     /// # Safety
     ///
     /// Expects a valid, non-`null` ID
-    pub const unsafe fn from_raw(raw: jmethodID) -> Self {
+    pub const unsafe fn from_raw(raw: ani_method) -> Self {
         Self { internal: raw }
     }
 
-    /// Unwrap to the internal jni type.
-    pub const fn into_raw(self) -> jmethodID {
+    /// Unwrap to the internal ani type.
+    pub const fn into_raw(self) -> ani_method {
         self.internal
     }
 }
 
-impl AsRef<JMethodID> for JMethodID {
-    fn as_ref(&self) -> &JMethodID {
+impl AsRef<AMethodID> for AMethodID {
+    fn as_ref(&self) -> &AMethodID {
         self
     }
 }
 
-impl AsMut<JMethodID> for JMethodID {
-    fn as_mut(&mut self) -> &mut JMethodID {
+impl AsMut<AMethodID> for AMethodID {
+    fn as_mut(&mut self) -> &mut AMethodID {
         self
     }
 }
+
+

@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{
     errors::*,
-    objects::{JPrimitiveArray, ReleaseMode},
+    objects::{APrimitiveArray, ReleaseMode},
     sys,
     anienv::ANIEnv,
 };
@@ -12,7 +12,7 @@ use crate::{
 /// This struct is used to wrap a pointer to array elements, ensuring they are
 /// properly released when the wrapper is dropped.
 pub struct AutoElements<'local, 'array, 'env, T: TypeArray> {
-    array: &'array JPrimitiveArray<'local, T>,
+    array: &'array APrimitiveArray<'local, T>,
     len: usize,
     ptr: *mut T,
     mode: ReleaseMode,
@@ -29,7 +29,7 @@ impl<'local, 'array, 'env, T: TypeArray> AutoElements<'local, 'array, 'env, T> {
     /// this AutoElements.
     pub(crate) unsafe fn new(
         env: &'env ANIEnv<'local>,
-        array: &'array JPrimitiveArray<'local, T>,
+        array: &'array APrimitiveArray<'local, T>,
         mode: ReleaseMode,
     ) -> Result<Self> {
         // ANI doesn't have direct array element pinning like JNI
@@ -102,11 +102,11 @@ impl<T: TypeArray> std::ops::DerefMut for AutoElements<'_, '_, '_, T> {
 /// Marker trait for types that can be used as array elements
 pub trait TypeArray: Copy + Default + Send + Sync + 'static {}
 
-impl TypeArray for sys::jboolean {}
-impl TypeArray for sys::jbyte {}
-impl TypeArray for sys::jchar {}
-impl TypeArray for sys::jshort {}
-impl TypeArray for sys::jint {}
-impl TypeArray for sys::jlong {}
-impl TypeArray for sys::jfloat {}
-impl TypeArray for sys::jdouble {}
+impl TypeArray for sys::aboolean {}
+impl TypeArray for sys::abyte {}
+impl TypeArray for sys::achar {}
+impl TypeArray for sys::ashort {}
+impl TypeArray for sys::aint {}
+impl TypeArray for sys::along {}
+impl TypeArray for sys::afloat {}
+impl TypeArray for sys::adouble {}

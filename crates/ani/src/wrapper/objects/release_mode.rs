@@ -12,5 +12,5 @@ pub enum ReleaseMode {
     /// [`NoCopyBack`](ReleaseMode::NoCopyBack).
     CopyBack = 0,
     /// Free the buffer without copying back the possible changes.
-    NoCopyBack = 2, // JNI_ABORT value
+    NoCopyBack = 2, // ANI_ABORT value
 }

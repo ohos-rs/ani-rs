@@ -41,8 +41,6 @@ pub struct AniVM(*mut sys::ani_vm);
 unsafe impl Send for AniVM {}
 unsafe impl Sync for AniVM {}
 
-// Type alias for JNI compatibility
-pub type JavaVM = AniVM;
 
 impl AniVM {
     /// Get a [`AniVM`] for the global ANI VM
@@ -316,5 +314,3 @@ impl Drop for InternalAttachGuard {
     }
 }
 
-// JNI compatibility type aliases
-pub type JNIVersion = ANIVersion;

@@ -4,9 +4,9 @@ use std::{
     ptr,
 };
 
-use crate::{objects::JObject, sys::jobject, anienv::ANIEnv};
+use crate::{objects::AObject, sys::aobject, anienv::ANIEnv};
 
-use super::JObjectRef;
+use super::AObjectRef;
 
 /// Auto-delete wrapper for local refs.
 ///
@@ -20,7 +20,7 @@ use super::JObjectRef;
 #[derive(Debug)]
 pub struct AutoLocal<'local, T>
 where
-    T: Into<JObject<'local>>,
+    T: Into<AObject<'local>>,
 {
     obj: ManuallyDrop<T>,
     env: ANIEnv<'local>,
@@ -29,9 +29,9 @@ where
 impl<'local, T> AutoLocal<'local, T>
 where
     // Note that this bound prevents `AutoLocal` from wrapping a `GlobalRef`, which implements
-    // `AsRef<JObject<'static>>` but *not* `Into<JObject<'static>>`. This is good, because trying
+    // `AsRef<AObject<'static>>` but *not* `Into<AObject<'static>>`. This is good, because trying
     // to delete a global reference as though it were local would cause undefined behavior.
-    T: Into<JObject<'local>>,
+    T: Into<AObject<'local>>,
 {
     /// Creates a new auto-delete wrapper for a local ref.
     ///
@@ -90,7 +90,7 @@ where
 
 impl<'local, T> Drop for AutoLocal<'local, T>
 where
-    T: Into<JObject<'local>>,
+    T: Into<AObject<'local>>,
 {
     fn drop(&mut self) {
         // Extract the local reference from `self.obj` so that we can delete it.
@@ -108,7 +108,7 @@ where
 
 impl<'local, T, U> AsRef<U> for AutoLocal<'local, T>
 where
-    T: AsRef<U> + Into<JObject<'local>>,
+    T: AsRef<U> + Into<AObject<'local>>,
 {
     fn as_ref(&self) -> &U {
         self.obj.as_ref()
@@ -117,7 +117,7 @@ where
 
 impl<'local, T, U> AsMut<U> for AutoLocal<'local, T>
 where
-    T: AsMut<U> + Into<JObject<'local>>,
+    T: AsMut<U> + Into<AObject<'local>>,
 {
     fn as_mut(&mut self) -> &mut U {
         self.obj.as_mut()
@@ -126,7 +126,7 @@ where
 
 impl<'local, T> Deref for AutoLocal<'local, T>
 where
-    T: Into<JObject<'local>>,
+    T: Into<AObject<'local>>,
 {
     type Target = T;
 
@@ -137,29 +137,29 @@ where
 
 impl<'local, T> DerefMut for AutoLocal<'local, T>
 where
-    T: Into<JObject<'local>>,
+    T: Into<AObject<'local>>,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.obj
     }
 }
 
-impl<'local, T> JObjectRef for AutoLocal<'local, T>
+impl<'local, T> AObjectRef for AutoLocal<'local, T>
 where
-    T: JObjectRef + Into<JObject<'local>>,
+    T: AObjectRef + Into<AObject<'local>>,
 {
     type Kind<'env> = T::Kind<'env>;
     type GlobalKind = T::GlobalKind;
 
-    fn as_raw(&self) -> jobject {
+    fn as_raw(&self) -> aobject {
         self.obj.as_raw()
     }
 
-    unsafe fn from_local_raw<'env>(local_ref: jobject) -> Self::Kind<'env> {
+    unsafe fn from_local_raw<'env>(local_ref: aobject) -> Self::Kind<'env> {
         T::from_local_raw(local_ref)
     }
 
-    unsafe fn from_global_raw(global_ref: jobject) -> Self::GlobalKind {
+    unsafe fn from_global_raw(global_ref: aobject) -> Self::GlobalKind {
         T::from_global_raw(global_ref)
     }
 }

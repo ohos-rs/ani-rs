@@ -7,13 +7,13 @@ use std::{
 use crate::{
     errors::*,
     objects::{
-        AutoLocal, GlobalRef, JClass, JObject, JString, JThrowable, WeakRef,
+        AutoLocal, GlobalRef, AClass, AObject, AString, AThrowable, WeakRef,
     },
-    sys::{self, ani_ref, jobject},
+    sys::{self, ani_ref, aobject},
     ANIVersion, AniVM,
 };
 
-use super::objects::JObjectRef;
+use super::objects::AObjectRef;
 
 /// FFI-compatible ANIEnv struct. This is where most of the
 /// interaction with the ANI VM happens. All methods on this object are wrappers
@@ -30,7 +30,7 @@ use super::objects::JObjectRef;
 /// # References and Lifetimes
 ///
 /// Interactions with objects happen through <dfn>references</dfn>, either local
-/// or global, represented by [`JObject`] and [`GlobalRef`] respectively.
+/// or global, represented by [`AObject`] and [`GlobalRef`] respectively.
 ///
 /// <dfn>Global references</dfn> exist until deleted. Deletion occurs when the `GlobalRef` is
 /// dropped.
@@ -126,7 +126,7 @@ impl ANIEnv<'_> {
     }
 
     /// Throw an error
-    pub fn throw(&self, err: &JThrowable) -> Result<()> {
+    pub fn throw(&self, err: &AThrowable) -> Result<()> {
         unsafe {
             let status = ani_call_unchecked!(self, ThrowError, err.as_raw());
             ani_status_to_result(status)
@@ -138,18 +138,18 @@ impl ANIEnv<'_> {
     /// # Arguments
     ///
     /// * `name` - The class descriptor (e.g., "Lstd/core/String;")
-    pub fn find_class<'local>(&mut self, name: &str) -> Result<JClass<'local>> {
+    pub fn find_class<'local>(&mut self, name: &str) -> Result<AClass<'local>> {
         let c_name = std::ffi::CString::new(name).map_err(|_| Error::NullPtr("class name"))?;
         let mut result: sys::ani_class = ptr::null_mut();
         unsafe {
             let status = ani_call_unchecked!(self, FindClass, c_name.as_ptr(), &mut result);
             ani_status_to_result(status)?;
-            Ok(JClass::from_raw(result))
+            Ok(AClass::from_raw(result))
         }
     }
 
     /// Create a new string from a Rust string
-    pub fn new_string<'local>(&mut self, s: &str) -> Result<JString<'local>> {
+    pub fn new_string<'local>(&mut self, s: &str) -> Result<AString<'local>> {
         let utf8_bytes = s.as_bytes();
         let mut result: sys::ani_string = ptr::null_mut();
         unsafe {
@@ -161,12 +161,12 @@ impl ANIEnv<'_> {
                 &mut result
             );
             ani_status_to_result(status)?;
-            Ok(JString::from_raw(result))
+            Ok(AString::from_raw(result))
         }
     }
 
     /// Get the string contents as UTF-8
-    pub fn get_string(&self, string: &JString) -> Result<String> {
+    pub fn get_string(&self, string: &AString) -> Result<String> {
         // First get the size
         let mut size: sys::ani_size = 0;
         unsafe {
@@ -196,7 +196,7 @@ impl ANIEnv<'_> {
     /// Delete a local reference
     pub fn delete_local_ref<'a, O>(&self, obj: O)
     where
-        O: Into<JObject<'a>>,
+        O: Into<AObject<'a>>,
     {
         let raw = obj.into().into_raw();
         if !raw.is_null() {
@@ -209,7 +209,7 @@ impl ANIEnv<'_> {
     /// Create a new local reference to an object
     pub fn new_local_ref<'local, T>(&mut self, obj: &T) -> Result<T::Kind<'local>>
     where
-        T: JObjectRef,
+        T: AObjectRef,
     {
         let raw = obj.as_raw();
         if raw.is_null() {
@@ -223,7 +223,7 @@ impl ANIEnv<'_> {
     /// Create a new global reference to an object
     pub fn new_global_ref<T>(&self, obj: &T) -> Result<GlobalRef<T::GlobalKind>>
     where
-        T: JObjectRef,
+        T: AObjectRef,
     {
         let raw = obj.as_raw();
         if raw.is_null() {
@@ -237,7 +237,7 @@ impl ANIEnv<'_> {
     /// Create a new weak reference to an object
     pub fn new_weak_ref<T>(&mut self, obj: &T) -> Result<WeakRef<T::GlobalKind>>
     where
-        T: JObjectRef,
+        T: AObjectRef,
     {
         let raw = obj.as_raw();
         if raw.is_null() {
@@ -253,8 +253,8 @@ impl ANIEnv<'_> {
         ref2: T,
     ) -> bool
     where
-        O: AsRef<JObject<'other_local_1>>,
-        T: AsRef<JObject<'other_local_2>>,
+        O: AsRef<AObject<'other_local_1>>,
+        T: AsRef<AObject<'other_local_2>>,
     {
         let mut result: sys::ani_boolean = 0;
         unsafe {
@@ -275,7 +275,7 @@ impl ANIEnv<'_> {
     /// Create an AutoLocal wrapper for automatic local reference deletion
     pub fn auto_local<'local, T>(&'local self, obj: T) -> AutoLocal<'local, T>
     where
-        T: Into<JObject<'local>>,
+        T: Into<AObject<'local>>,
     {
         AutoLocal::new(obj, self)
     }
@@ -304,7 +304,4 @@ impl ANIEnv<'_> {
         }
     }
 }
-
-// JNI compatibility alias
-pub type JNIEnv<'local> = ANIEnv<'local>;
 

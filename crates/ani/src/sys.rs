@@ -1,84 +1,83 @@
 #![allow(non_camel_case_types)]
+#![allow(missing_docs)]
 
 pub use ani_sys::*;
 
-// Type aliases for JNI compatibility mapping
-pub type jboolean = ani_boolean;
-pub type jbyte = ani_byte;
-pub type jchar = ani_char;
-pub type jshort = ani_short;
-pub type jint = ani_int;
-pub type jlong = ani_long;
-pub type jfloat = ani_float;
-pub type jdouble = ani_double;
-pub type jsize = ani_size;
+// Type aliases - ANI native types
+pub type aboolean = ani_boolean;
+pub type abyte = ani_byte;
+pub type achar = ani_char;
+pub type ashort = ani_short;
+pub type aint = ani_int;
+pub type along = ani_long;
+pub type afloat = ani_float;
+pub type adouble = ani_double;
+pub type asize = ani_size;
 
 // Reference types
-pub type jobject = ani_ref;
-pub type jclass = ani_class;
-pub type jstring = ani_string;
-pub type jarray = ani_array;
-pub type jbooleanArray = ani_array_boolean;
-pub type jbyteArray = ani_array_byte;
-pub type jcharArray = ani_array_char;
-pub type jshortArray = ani_array_short;
-pub type jintArray = ani_array_int;
-pub type jlongArray = ani_array_long;
-pub type jfloatArray = ani_array_float;
-pub type jdoubleArray = ani_array_double;
-pub type jobjectArray = ani_array_ref;
-pub type jthrowable = ani_error;
-pub type jweak = ani_wref;
+pub type aobject = ani_ref;
+pub type aclass = ani_class;
+pub type astring = ani_string;
+pub type aarray = ani_array;
+pub type abooleanArray = ani_array_boolean;
+pub type abyteArray = ani_array_byte;
+pub type acharArray = ani_array_char;
+pub type ashortArray = ani_array_short;
+pub type aintArray = ani_array_int;
+pub type alongArray = ani_array_long;
+pub type afloatArray = ani_array_float;
+pub type adoubleArray = ani_array_double;
+pub type aobjectArray = ani_array_ref;
+pub type athrowable = ani_error;
+pub type aweak = ani_wref;
 
 // ID types
-pub type jmethodID = ani_method;
-pub type jstaticMethodID = ani_static_method;
-pub type jfieldID = ani_field;
-pub type jstaticFieldID = ani_static_field;
+pub type amethodID = ani_method;
+pub type astaticMethodID = ani_static_method;
+pub type afieldID = ani_field;
+pub type astaticFieldID = ani_static_field;
 
 // Environment and VM types
-pub type JNIEnv = ani_env;
-pub type JavaVM = ani_vm;
-pub type JNINativeInterface_ = __ani_interaction_api;
-pub type JNIInvokeInterface_ = __ani_vm_api;
+pub type ANIEnvRaw = ani_env;
+pub type AniVMRaw = ani_vm;
+pub type ANINativeInterface_ = __ani_interaction_api;
+pub type ANIInvokeInterface_ = __ani_vm_api;
 
-// Value union - map JNI field names to ANI equivalents
-// JNI: z=boolean, b=byte, c=char, s=short, i=int, j=long, f=float, d=double, l=object
-// ANI: z=boolean, b=byte, c=char, s=short, i=int, l=long, f=float, d=double, r=ref
+// Value union
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub union jvalue {
-    pub z: jboolean,  // maps to ANI z (boolean)
-    pub b: jbyte,     // maps to ANI b (byte)  
-    pub c: jchar,     // maps to ANI c (char)
-    pub s: jshort,    // maps to ANI s (short)
-    pub i: jint,      // maps to ANI i (int)
-    pub j: jlong,     // maps to ANI l (long) - note: JNI uses 'j', ANI uses 'l'
-    pub f: jfloat,    // maps to ANI f (float)
-    pub d: jdouble,   // maps to ANI d (double)
-    pub l: jobject,   // maps to ANI r (ref) - note: JNI uses 'l', ANI uses 'r'
+pub union avalue {
+    pub z: aboolean,  // boolean
+    pub b: abyte,     // byte  
+    pub c: achar,     // char
+    pub s: ashort,    // short
+    pub i: aint,      // int
+    pub j: along,     // long
+    pub f: afloat,    // float
+    pub d: adouble,   // double
+    pub l: aobject,   // object reference
 }
 
-// JNI constants
-pub const JNI_OK: jint = ani_status_ANI_OK as jint;
-pub const JNI_ERR: jint = ani_status_ANI_ERROR as jint;
-pub const JNI_EDETACHED: jint = -2;
-pub const JNI_EVERSION: jint = ani_status_ANI_INVALID_VERSION as jint;
-pub const JNI_ENOMEM: jint = ani_status_ANI_OUT_OF_MEMORY as jint;
-pub const JNI_EEXIST: jint = ani_status_ANI_ALREADY_BINDED as jint;
-pub const JNI_EINVAL: jint = ani_status_ANI_INVALID_ARGS as jint;
+// ANI constants
+pub const ANI_OK: aint = ani_status_ANI_OK as aint;
+pub const ANI_ERR: aint = ani_status_ANI_ERROR as aint;
+pub const ANI_EDETACHED: aint = -2;
+pub const ANI_EVERSION: aint = ani_status_ANI_INVALID_VERSION as aint;
+pub const ANI_ENOMEM: aint = ani_status_ANI_OUT_OF_MEMORY as aint;
+pub const ANI_EEXIST: aint = ani_status_ANI_ALREADY_BINDED as aint;
+pub const ANI_EINVAL: aint = ani_status_ANI_INVALID_ARGS as aint;
 
-pub const JNI_TRUE: jboolean = ANI_TRUE as jboolean;
-pub const JNI_FALSE: jboolean = ANI_FALSE as jboolean;
+pub const ANI_TRUE_VAL: aboolean = ANI_TRUE as aboolean;
+pub const ANI_FALSE_VAL: aboolean = ANI_FALSE as aboolean;
 
-// JNI array operation modes (not directly mapped in ANI)
-pub const JNI_COMMIT: i32 = 1;
-pub const JNI_ABORT: i32 = 2;
+// Array operation modes
+pub const ANI_COMMIT: i32 = 1;
+pub const ANI_ABORT: i32 = 2;
 
 // Native method registration struct
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct JNINativeMethod {
+pub struct ANINativeMethod {
     pub name: *const std::os::raw::c_char,
     pub signature: *const std::os::raw::c_char,
     pub fnPtr: *mut std::os::raw::c_void,

@@ -147,6 +147,3 @@ impl AsRef<ANIStr> for ANIString {
     }
 }
 
-// JNI compatibility aliases
-pub type JNIString = ANIString;
-pub type JNIStr = ANIStr;

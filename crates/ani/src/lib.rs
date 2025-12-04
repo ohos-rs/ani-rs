@@ -52,8 +52,3 @@ pub use wrapper::anienv::ANIEnv;
 pub use wrapper::ANIVersion;
 pub use wrapper::AniVM;
 pub use wrapper::AttachGuard;
-
-// JNI compatibility aliases
-pub use wrapper::anienv::ANIEnv as JNIEnv;
-pub use wrapper::AniVM as JavaVM;
-pub use wrapper::ANIVersion as JNIVersion;
