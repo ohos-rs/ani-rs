@@ -11,4 +11,5 @@ $CURRENT_DIR/../include/ani.h \
 --allowlist-var 'ANI.*' \
 --allowlist-type 'ani.*' \
 --allowlist-type 'ANI.*' \
---raw-line '#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]'
+--raw-line '#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]' \
+--no-layout-tests
