@@ -1,0 +1,171 @@
+# ANI-RS
+
+A safe, ergonomic Rust library for ArkTS Native Interface (ANI), inspired by [napi-rs](https://napi.rs).
+
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+
+## Introduction
+
+ANI-RS provides Rust bindings for the ArkTS 1.2 Native Interface (ANI), similar to how napi-rs provides bindings for Node.js N-API. It allows you to write native extensions for HarmonyOS/OpenHarmony applications in Rust with minimal boilerplate.
+
+**Key Features:**
+
+- 🚀 **Simple macros** - Just use `#[ani]` to export functions
+- 🔒 **Type safe** - Automatic conversion between Rust and ArkTS types
+- ⚡ **Zero-cost abstractions** - Minimal runtime overhead
+- 📦 **Module support** - Bind to modules, namespaces, and classes
+
+## Quick Start
+
+### 1. Add dependencies
+
+```toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ani = { git = "https://github.com/ohos-rs/ani-rs", package = "ani-core" }
+```
+
+### 2. Write your Rust code
+
+```rust
+use ani::prelude::*;
+
+// Simple function binding
+#[ani]
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[ani]
+pub fn greet(name: String) -> String {
+    format!("Hello, {}!", name)
+}
+
+// Register the module
+ani_module! {
+    name: "my_module",
+    lib_name: "libmy_module",
+    functions: [add, greet],
+}
+```
+
+### 3. Corresponding ArkTS code
+
+```typescript
+import { loadLibrary } from 'libmy_module.so';
+
+loadLibrary('my_module');
+
+// Now you can call the native functions
+native function add(a: int, b: int): int;
+native function greet(name: String): String;
+
+console.log(add(2, 3)); // 5
+console.log(greet("World")); // "Hello, World!"
+```
+
+## Feature Examples
+
+### Module-level Functions
+
+```rust
+#[ani]
+pub fn calculate(x: f64) -> f64 {
+    x * 2.0 + 1.0
+}
+```
+
+### Namespace Functions
+
+```rust
+#[ani(namespace = "Utils")]
+pub fn format_date(year: i32, month: i32, day: i32) -> String {
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+```
+
+### Class Methods
+
+```rust
+// Static method
+#[ani(class = "Calculator", static)]
+pub fn create() -> i64 {
+    let calc = Box::new(Calculator::default());
+    Box::into_raw(calc) as i64
+}
+
+// Instance method
+#[ani(class = "Calculator")]
+pub fn add(this: i64, a: i32, b: i32) -> i32 {
+    a + b
+}
+
+// Constructor
+#[ani(class = "Person", constructor)]
+pub fn person_new(name: String, age: i32) -> i64 {
+    let person = Box::new(Person { name, age });
+    Box::into_raw(person) as i64
+}
+```
+
+## Type Mappings
+
+| Rust Type | ANI Signature | ArkTS Type |
+|-----------|---------------|------------|
+| `bool` | `Z` | `boolean` |
+| `i8` | `B` | `byte` |
+| `i16` | `S` | `short` |
+| `i32` | `I` | `int` |
+| `i64` | `J` | `long` |
+| `f32` | `F` | `float` |
+| `f64` | `D` | `double` |
+| `String` | `Lstd/core/String;` | `String` |
+| `Vec<T>` | `[T` | `Array<T>` |
+| `Option<i32>` | `Lstd/core/Int;` | `Int \| null` |
+
+## Crates
+
+| Crate | Description |
+|-------|-------------|
+| `ani-sys` | Raw FFI bindings to ANI C API |
+| `ani-core` | Safe wrapper types and traits |
+| `ani_derive` | Procedural macros |
+| `ani-build` | Build script helpers |
+| `ani-ets-gen` | ETS code generation tool |
+| `ani-types` | Type definitions for ETS generation |
+
+## Examples
+
+Check out the [examples](examples/) directory:
+
+- **new_basic** - Basic function bindings
+- **new_class** - Class method bindings
+- **basic** - Original example with build script
+- **class** - Complex class examples
+
+## Documentation
+
+- [Design Document](docs/design.md) - Architecture and design decisions
+- [ETS Generation](docs/ets-generation.md) - How to generate ETS declaration files
+- [API Reference](https://docs.rs/ani-core) - Full API documentation
+
+## Requirements
+
+- Rust 1.70+
+- HarmonyOS SDK (for device/emulator testing)
+- ArkTS 1.2 compatible runtime
+
+## License
+
+This project is licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.

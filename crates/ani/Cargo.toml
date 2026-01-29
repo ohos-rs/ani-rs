@@ -1,9 +1,17 @@
 [package]
-name = "ani-rs"
+name = "ani"
 version = "0.0.1-alpha.1"
 edition = "2024"
-license = "MIT"
-description = "ANI bindings"
+description = "ANI bindings for Rust - like napi-rs for ArkTS-Static"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ohos-rs/ani-rs"
+keywords = ["ani", "arkts", "ohos", "harmonyos", "ffi"]
+categories = ["api-bindings", "development-tools::ffi"]
+
+[features]
 
 [dependencies]
-ani-sys = { path = "../sys", version = "0.0.1-alpha.1" }
+ani-sys = { path = "../sys" }
+ani_derive = { path = "../derive" }
+
+[dev-dependencies]

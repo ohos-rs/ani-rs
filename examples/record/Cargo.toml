@@ -1,0 +1,11 @@
+[package]
+name = "ani-example-record"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ani = { path = "../../crates/ani", package = "ani" }
+ani-sys = { path = "../../crates/sys", package = "ani-sys" }
