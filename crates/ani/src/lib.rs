@@ -68,8 +68,10 @@ pub mod prelude {
 
     // Export from conversions module
     pub use crate::conversions::{
-        AniThrowable, AniValue, Boxable, FromAni, FromAniDirect, NativePointer, ToAni, ToAniDirect,
-        TypeInfo, Unboxable,
+        AniThrowable, AniValue, Boxable, Either, Either3, Either4, Either5, Either6, Either7,
+        Either8, Either9, Either10, Either11, Either12, Either13, Either14, Either15, Either16,
+        FromAni, FromAniDirect, FromAniObject, NativePointer, Null, ToAni, ToAniDirect,
+        ToAniObject, TypeInfo, Unboxable, Undefined, ValidateFromAni,
     };
 
     // Keep backward compatibility by also exporting from bindgen_runtime

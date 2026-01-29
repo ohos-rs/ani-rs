@@ -999,6 +999,28 @@ impl<'local> Env<'local> {
         }
     }
 
+    /// 获取 null 对象引用
+    pub fn get_null_object(&self) -> Result<sys::ani_object> {
+        let mut result: sys::ani_ref = ptr::null_mut();
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.GetNull.unwrap())(self.raw, &mut result);
+            check_status(status)?;
+            Ok(result as sys::ani_object)
+        }
+    }
+
+    /// 获取 undefined 对象引用
+    pub fn get_undefined_object(&self) -> Result<sys::ani_object> {
+        let mut result: sys::ani_ref = ptr::null_mut();
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.GetUndefined.unwrap())(self.raw, &mut result);
+            check_status(status)?;
+            Ok(result as sys::ani_object)
+        }
+    }
+
     // ========================================================================
     // Array Operations
     // ========================================================================

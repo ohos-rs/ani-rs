@@ -69,6 +69,18 @@ pub fn rust_type_to_signature(ty: &Type) -> String {
                 }
                 "V".to_string()
             }
+            // Handle Either types (union types in ArkTS)
+            else if type_str.starts_with("Either<")
+                || type_str.starts_with("Either3<")
+                || type_str.starts_with("Either4<")
+                || type_str.starts_with("Either5<")
+                || type_str.starts_with("Either6<")
+                || type_str.starts_with("Either7<")
+                || type_str.starts_with("Either8<")
+            {
+                // All Either types map to Object in ANI
+                "Lstd/core/Object;".to_string()
+            }
             // Other types treated as objects
             else {
                 "Lstd/core/Object;".to_string()

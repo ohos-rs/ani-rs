@@ -149,6 +149,23 @@ fn generate_conversions(params: &[&FnArg]) -> TokenStream {
                         let inner_type_str = extract_option_inner_type(&type_str);
                         generate_option_conversion(&param_name, &converted_name, &inner_type_str)
                     }
+                    _ if type_str.starts_with("Either<")
+                        || type_str.starts_with("Either3<")
+                        || type_str.starts_with("Either4<")
+                        || type_str.starts_with("Either5<")
+                        || type_str.starts_with("Either6<")
+                        || type_str.starts_with("Either7<")
+                        || type_str.starts_with("Either8<") =>
+                    {
+                        // Either types use FromAni trait
+                        quote! {
+                            let #converted_name: #ty = {
+                                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                                ani::conversions::FromAni::from_ani(&env_wrapper, #param_name)
+                                    .expect("Failed to convert Either type")
+                            };
+                        }
+                    }
                     _ => {
                         quote! { let #converted_name = #param_name; }
                     }
@@ -372,6 +389,24 @@ fn generate_return_conversion(return_type: &ReturnType) -> TokenStream {
                     }
                 }
                 "()" => quote! {},
+                _ if type_str.starts_with("Either")
+                    && (type_str.starts_with("Either<")
+                        || type_str.starts_with("Either3<")
+                        || type_str.starts_with("Either4<")
+                        || type_str.starts_with("Either5<")
+                        || type_str.starts_with("Either6<")
+                        || type_str.starts_with("Either7<")
+                        || type_str.starts_with("Either8<")) =>
+                {
+                    quote! {
+                        // Convert Either to ani_object using ToAni trait
+                        let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                        match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
+                            Ok(obj) => obj,
+                            Err(_) => std::ptr::null_mut()
+                        }
+                    }
+                }
                 _ => quote! { result },
             }
         }
@@ -418,6 +453,16 @@ fn rust_type_to_ani_type(ty: &syn::Type) -> TokenStream {
                         }
                     }
                 }
+                quote! { ani::sys::ani_object }
+            } else if type_str.starts_with("Either<")
+                || type_str.starts_with("Either3<")
+                || type_str.starts_with("Either4<")
+                || type_str.starts_with("Either5<")
+                || type_str.starts_with("Either6<")
+                || type_str.starts_with("Either7<")
+                || type_str.starts_with("Either8<")
+            {
+                // Either types are always ani_object (union types)
                 quote! { ani::sys::ani_object }
             } else {
                 quote! { ani::sys::ani_object }
