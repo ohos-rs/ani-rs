@@ -684,6 +684,14 @@ impl<'env> ToAni<'env> for () {
     }
 }
 
+impl<'env> FromAni<'env> for () {
+    type Input = ();
+
+    fn from_ani(_env: &Env<'env>, _value: Self::Input) -> Result<Self> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

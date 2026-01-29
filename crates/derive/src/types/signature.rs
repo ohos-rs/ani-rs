@@ -31,7 +31,7 @@ pub fn rust_type_to_signature(ty: &Type) -> String {
     }
 }
 
-/// Resolve signature for complex types (Option, Vec, Result, Either, PromiseRaw, etc.)
+/// Resolve signature for complex types (Option, Vec, Result, Either, PromiseRaw, Function, etc.)
 fn resolve_complex_type_signature(ty: &Type, type_str: &str) -> String {
     // Option<T>
     if type_str.starts_with("Option<") {
@@ -50,6 +50,21 @@ fn resolve_complex_type_signature(ty: &Type, type_str: &str) -> String {
 
     // PromiseRaw - returns Promise object
     if type_str.starts_with("PromiseRaw") {
+        return "Lstd/core/Object;".to_string();
+    }
+
+    // Function<Args, Return> - callback function type
+    if type_str.starts_with("Function<") {
+        return "Lstd/core/Function;".to_string();
+    }
+
+    // FunctionRef<Args, Return> - stored function reference
+    if type_str.starts_with("FunctionRef<") {
+        return "Lstd/core/Function;".to_string();
+    }
+
+    // FnArgs<T> - wrapper for multiple arguments (used inside Function<>)
+    if type_str.starts_with("FnArgs<") {
         return "Lstd/core/Object;".to_string();
     }
 
@@ -227,6 +242,29 @@ mod tests {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(String)),
             "Lstd/core/String;"
+        );
+    }
+
+    #[test]
+    fn test_function_type_signature() {
+        // Function<Args, Return> types
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Function<(), ()>)),
+            "Lstd/core/Function;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Function<(i32,), String>)),
+            "Lstd/core/Function;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Function<FnArgs<(i32, i32)>, i32>)),
+            "Lstd/core/Function;"
+        );
+
+        // FunctionRef types
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(FunctionRef<(i32,), String>)),
+            "Lstd/core/Function;"
         );
     }
 }

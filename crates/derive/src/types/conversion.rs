@@ -67,6 +67,11 @@ fn resolve_complex_ani_type(ty: &Type, type_str: &str) -> TokenStream {
         return quote! { ani::sys::ani_object };
     }
 
+    // Function and FunctionRef use ani_fn_object (which is ani_ref)
+    if type_str.starts_with("Function<") || type_str.starts_with("FunctionRef<") {
+        return quote! { ani::sys::ani_fn_object };
+    }
+
     quote! { ani::sys::ani_object }
 }
 
@@ -134,6 +139,14 @@ fn generate_type_conversion(
         }
         // Either types
         _ if is_either_type(type_str) => generate_either_conversion(param_name, converted_name, ty),
+        // Function types - use FromAni conversion
+        _ if type_str.starts_with("Function<") => {
+            generate_function_conversion(param_name, converted_name, ty)
+        }
+        // FunctionRef types - use FromAni conversion
+        _ if type_str.starts_with("FunctionRef<") => {
+            generate_function_ref_conversion(param_name, converted_name, ty)
+        }
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
     }
@@ -228,6 +241,36 @@ fn generate_either_conversion(
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             ani::conversions::FromAni::from_ani(&env_wrapper, #param_name)
                 .expect("Failed to convert Either type")
+        };
+    }
+}
+
+/// Generate Function type conversion code
+fn generate_function_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
+                .expect("Failed to convert Function type")
+        };
+    }
+}
+
+/// Generate FunctionRef type conversion code
+fn generate_function_ref_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
+                .expect("Failed to convert FunctionRef type")
         };
     }
 }

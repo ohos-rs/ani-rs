@@ -89,6 +89,9 @@ pub mod prelude {
     // Promise types
     pub use crate::conversions::{Deferred, PromiseRaw};
 
+    // Function types
+    pub use crate::conversions::{FnArgs, Function, FunctionRef, ToAniArg, ToAniArgs};
+
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }
 
