@@ -2,6 +2,15 @@
 //!
 //! Provides simple and easy-to-use macros similar to napi-rs for generating ANI binding code.
 //!
+//! ## Architecture
+//!
+//! The crate is organized into the following modules:
+//!
+//! - **parser**: Attribute parsing (`#[ani(...)]` attributes)
+//! - **types**: Type conversion and signature generation
+//! - **codegen**: Code generation (wrappers, registration functions)
+//! - **expand**: Macro expansion for functions, impl blocks, and structs
+//!
 //! ## Usage Examples
 //!
 //! ```rust,ignore
@@ -44,24 +53,23 @@ use proc_macro::TokenStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use syn::{DeriveInput, ItemFn, ItemImpl, ItemStruct, parse_macro_input};
 
+// Module organization following napi-rs pattern
+mod codegen;
+mod expand;
+mod parser;
+mod types;
+
+use expand::{expand_class_derive, expand_function, expand_impl, expand_init, expand_struct};
+use parser::{AniAttrs, AniMacroKind, BindgenAttrs, InitAttrs};
+
 /// Tracks whether this is the first #[ani] macro invocation in the crate
 /// Used to auto-generate ANI_Constructor only once
 static IS_FIRST_ANI_MACRO: AtomicBool = AtomicBool::new(true);
 
-mod attrs;
-mod codegen;
-mod expand;
-mod signature;
-mod types;
-
-use attrs::*;
-use expand::*;
-
 /// Generate auto-registration code for ANI_Constructor
 /// This is called only on the first #[ani] macro invocation
-fn auto_add_constructor_code() -> proc_macro2::TokenStream {
+fn generate_constructor_code() -> proc_macro2::TokenStream {
     if IS_FIRST_ANI_MACRO.swap(false, Ordering::SeqCst) {
-        // Get module name from CARGO_PKG_NAME, converting to snake_case
         let name = std::env::var("CARGO_PKG_NAME")
             .unwrap_or_else(|_| String::from("entry"))
             .replace('-', "_");
@@ -77,7 +85,6 @@ fn auto_add_constructor_code() -> proc_macro2::TokenStream {
                 result: *mut u32,
             ) -> ::ani::sys::ani_status {
                 unsafe {
-                    // Get environment
                     let api = &*(*vm);
                     let mut env: *mut ::ani::sys::ani_env = std::ptr::null_mut();
 
@@ -86,13 +93,11 @@ fn auto_add_constructor_code() -> proc_macro2::TokenStream {
                         return status;
                     }
 
-                    // Execute all auto-registered callbacks from #[ani] macro
                     let status = ::ani::module_register::execute_registrations(env);
                     if status != ::ani::sys::ani_status_ANI_OK {
                         return status;
                     }
 
-                    // Set version
                     *result = ::ani::sys::ANI_VERSION_1;
                     ::ani::sys::ani_status_ANI_OK
                 }
@@ -143,7 +148,6 @@ fn auto_add_constructor_code() -> proc_macro2::TokenStream {
 /// // Class instance method
 /// #[ani(class = "Person")]
 /// fn get_age(this: i64) -> i32 {
-///     // ... implementation
 ///     42
 /// }
 ///
@@ -163,45 +167,37 @@ fn auto_add_constructor_code() -> proc_macro2::TokenStream {
 #[proc_macro_attribute]
 pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attr as AniAttrs);
+    let prepare = generate_constructor_code();
 
-    // Generate ANI_Constructor code on first invocation
-    let prepare = auto_add_constructor_code();
-
-    // 根据宏类型分发处理
     match attrs.kind {
         AniMacroKind::Init => {
-            // Initialization function
             if let Ok(func) = syn::parse::<ItemFn>(item.clone()) {
-                return expand_init(attrs.into(), func, prepare).into();
+                return expand_init(InitAttrs::from(attrs), func, prepare).into();
             }
-            TokenStream::from(
-                syn::Error::new_spanned(
-                    proc_macro2::TokenStream::from(item),
-                    "#[ani(init)] can only be applied to functions",
-                )
-                .to_compile_error(),
+            syn::Error::new_spanned(
+                proc_macro2::TokenStream::from(item),
+                "#[ani(init)] can only be applied to functions",
             )
+            .to_compile_error()
+            .into()
         }
         AniMacroKind::Object => {
-            // Object/class definition
             if let Ok(struct_item) = syn::parse::<ItemStruct>(item.clone()) {
-                let mut bindgen_attrs: AniBindgenAttrs = attrs.clone().into();
+                let mut bindgen_attrs = BindgenAttrs::from(attrs.clone());
                 if let Some(ref obj_name) = attrs.object_name {
                     bindgen_attrs.class = Some(obj_name.clone());
                 }
                 return expand_struct(bindgen_attrs, struct_item, prepare).into();
             }
-            TokenStream::from(
-                syn::Error::new_spanned(
-                    proc_macro2::TokenStream::from(item),
-                    "#[ani(object)] can only be applied to structs",
-                )
-                .to_compile_error(),
+            syn::Error::new_spanned(
+                proc_macro2::TokenStream::from(item),
+                "#[ani(object)] can only be applied to structs",
             )
+            .to_compile_error()
+            .into()
         }
         AniMacroKind::Bindgen => {
-            // Default binding logic
-            let bindgen_attrs: AniBindgenAttrs = attrs.into();
+            let bindgen_attrs = BindgenAttrs::from(attrs);
 
             // Try to parse as function
             if let Ok(func) = syn::parse::<ItemFn>(item.clone()) {
@@ -218,13 +214,12 @@ pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return expand_struct(bindgen_attrs, struct_item, prepare).into();
             }
 
-            TokenStream::from(
-                syn::Error::new_spanned(
-                    proc_macro2::TokenStream::from(item),
-                    "#[ani] can only be applied to functions, impl blocks, or structs",
-                )
-                .to_compile_error(),
+            syn::Error::new_spanned(
+                proc_macro2::TokenStream::from(item),
+                "#[ani] can only be applied to functions, impl blocks, or structs",
             )
+            .to_compile_error()
+            .into()
         }
     }
 }

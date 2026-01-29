@@ -176,7 +176,7 @@ macro_rules! either_n {
 }
 
 // ============================================================================
-// Generate Either types (2-16 variants)
+// Generate Either types (2-26 variants)
 // ============================================================================
 
 either_n!(Either, A, B);
@@ -194,6 +194,34 @@ either_n!(Either13, A, B, C, D, E, F, G, H, I, J, K, L, M);
 either_n!(Either14, A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 either_n!(Either15, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 either_n!(Either16, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+either_n!(Either17, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q);
+either_n!(
+    Either18, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R
+);
+either_n!(
+    Either19, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S
+);
+either_n!(
+    Either20, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T
+);
+either_n!(
+    Either21, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U
+);
+either_n!(
+    Either22, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V
+);
+either_n!(
+    Either23, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W
+);
+either_n!(
+    Either24, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X
+);
+either_n!(
+    Either25, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y
+);
+either_n!(
+    Either26, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z
+);
 
 // ============================================================================
 // Convenience methods for Either<A, B>

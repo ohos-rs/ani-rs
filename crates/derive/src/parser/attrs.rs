@@ -1,4 +1,6 @@
-//! Macro Attribute Parsing
+//! Attribute Parsing
+//!
+//! Parses `#[ani(...)]` macro attributes into structured data.
 
 use syn::{
     Ident, LitStr, Token,
@@ -7,10 +9,10 @@ use syn::{
 };
 
 // ============================================================================
-// Unified #[ani] Macro Attributes
+// Macro Kind
 // ============================================================================
 
-/// Macro type identifier
+/// Identifies the type of `#[ani]` macro usage
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum AniMacroKind {
     /// Default: bind function/method/struct
@@ -21,6 +23,10 @@ pub enum AniMacroKind {
     /// Object/class definition
     Object,
 }
+
+// ============================================================================
+// Unified Attributes
+// ============================================================================
 
 /// Unified `#[ani]` macro attributes
 #[derive(Debug, Default, Clone)]
@@ -48,7 +54,7 @@ pub struct AniAttrs {
     /// Setter property name
     pub setter: Option<String>,
     /// Whether it's an async function
-    pub r#async: bool,
+    pub is_async: bool,
     /// init before_bindings option
     pub before_bindings: bool,
     /// object field configuration
@@ -67,7 +73,7 @@ impl Parse for AniAttrs {
 
         for item in items {
             match item.key.to_string().as_str() {
-                // 类型标识符
+                // Type identifiers
                 "init" => {
                     attrs.kind = AniMacroKind::Init;
                 }
@@ -77,7 +83,7 @@ impl Parse for AniAttrs {
                         attrs.object_name = Some(s);
                     }
                 }
-                // 原有属性
+                // Binding attributes
                 "namespace" | "ns" => {
                     if let Some(AttrValue::Str(s)) = item.value {
                         attrs.namespace = Some(s);
@@ -115,21 +121,19 @@ impl Parse for AniAttrs {
                     attrs.constructor = true;
                 }
                 "getter" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.getter = Some(s);
-                    } else {
-                        attrs.getter = Some(String::new());
-                    }
+                    attrs.getter = match item.value {
+                        Some(AttrValue::Str(s)) => Some(s),
+                        _ => Some(String::new()),
+                    };
                 }
                 "setter" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.setter = Some(s);
-                    } else {
-                        attrs.setter = Some(String::new());
-                    }
+                    attrs.setter = match item.value {
+                        Some(AttrValue::Str(s)) => Some(s),
+                        _ => Some(String::new()),
+                    };
                 }
                 "async" => {
-                    attrs.r#async = true;
+                    attrs.is_async = true;
                 }
                 "before_bindings" => {
                     attrs.before_bindings = true;
@@ -147,9 +151,30 @@ impl Parse for AniAttrs {
     }
 }
 
-impl From<AniAttrs> for AniBindgenAttrs {
+// ============================================================================
+// Bindgen Attributes (for code generation)
+// ============================================================================
+
+/// Attributes for binding code generation
+#[derive(Debug, Default, Clone)]
+#[allow(dead_code)]
+pub struct BindgenAttrs {
+    pub namespace: Option<String>,
+    pub class: Option<String>,
+    pub module: Option<String>,
+    pub is_static: bool,
+    pub name: Option<String>,
+    pub signature: Option<String>,
+    pub skip: bool,
+    pub constructor: bool,
+    pub getter: Option<String>,
+    pub setter: Option<String>,
+    pub is_async: bool,
+}
+
+impl From<AniAttrs> for BindgenAttrs {
     fn from(attrs: AniAttrs) -> Self {
-        AniBindgenAttrs {
+        BindgenAttrs {
             namespace: attrs.namespace,
             class: attrs.class,
             module: attrs.module,
@@ -160,135 +185,42 @@ impl From<AniAttrs> for AniBindgenAttrs {
             constructor: attrs.constructor,
             getter: attrs.getter,
             setter: attrs.setter,
-            r#async: attrs.r#async,
+            is_async: attrs.is_async,
         }
     }
 }
 
-impl From<AniAttrs> for AniInitAttrs {
+// ============================================================================
+// Init Attributes
+// ============================================================================
+
+/// Attributes for init functions
+#[derive(Debug, Default, Clone)]
+#[allow(dead_code)]
+pub struct InitAttrs {
+    pub before_bindings: bool,
+}
+
+impl From<AniAttrs> for InitAttrs {
     fn from(attrs: AniAttrs) -> Self {
-        AniInitAttrs {
+        InitAttrs {
             before_bindings: attrs.before_bindings,
         }
     }
 }
 
 // ============================================================================
-// Original Attribute Definitions (maintained for backward compatibility)
+// Attribute Parsing Helpers
 // ============================================================================
 
-/// `#[ani_bindgen]` macro attributes
-#[derive(Debug, Default, Clone)]
-pub struct AniBindgenAttrs {
-    /// Namespace
-    pub namespace: Option<String>,
-    /// Class name
-    pub class: Option<String>,
-    /// Module name
-    pub module: Option<String>,
-    /// Whether it's a static method
-    pub is_static: bool,
-    /// Custom function name
-    pub name: Option<String>,
-    /// Custom signature
-    pub signature: Option<String>,
-    /// Whether to skip generation
-    pub skip: bool,
-    /// Whether it's a constructor
-    pub constructor: bool,
-    /// Getter property name
-    pub getter: Option<String>,
-    /// Setter property name
-    pub setter: Option<String>,
-    /// Whether it's an async function
-    pub r#async: bool,
-}
-
-impl Parse for AniBindgenAttrs {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut attrs = AniBindgenAttrs::default();
-
-        if input.is_empty() {
-            return Ok(attrs);
-        }
-
-        let items: Punctuated<AttrItem, Token![,]> = Punctuated::parse_terminated(input)?;
-
-        for item in items {
-            match item.key.to_string().as_str() {
-                "namespace" | "ns" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.namespace = Some(s);
-                    }
-                }
-                "class" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.class = Some(s);
-                    }
-                }
-                "module" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.module = Some(s);
-                    } else {
-                        attrs.module = Some(String::new());
-                    }
-                }
-                "static" | "is_static" => {
-                    attrs.is_static = true;
-                }
-                "name" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.name = Some(s);
-                    }
-                }
-                "signature" | "sig" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.signature = Some(s);
-                    }
-                }
-                "skip" => {
-                    attrs.skip = true;
-                }
-                "constructor" | "ctor" => {
-                    attrs.constructor = true;
-                }
-                "getter" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.getter = Some(s);
-                    } else {
-                        // If no value, use function name as property name
-                        attrs.getter = Some(String::new());
-                    }
-                }
-                "setter" => {
-                    if let Some(AttrValue::Str(s)) = item.value {
-                        attrs.setter = Some(s);
-                    } else {
-                        attrs.setter = Some(String::new());
-                    }
-                }
-                "async" => {
-                    attrs.r#async = true;
-                }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        item.key,
-                        format!("Unknown attribute: {}", other),
-                    ));
-                }
-            }
-        }
-
-        Ok(attrs)
-    }
-}
-
+/// A single attribute item (key = value or just key)
 #[derive(Debug)]
 pub struct AttrItem {
     pub key: Ident,
     pub value: Option<AttrValue>,
 }
 
+/// Attribute value types
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum AttrValue {
@@ -299,7 +231,7 @@ pub enum AttrValue {
 
 impl Parse for AttrItem {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        // 处理 static 关键字特殊情况
+        // Handle `static` and `async` keywords specially
         let key: Ident = if input.peek(Token![static]) {
             let _: Token![static] = input.parse()?;
             Ident::new("static", proc_macro2::Span::call_site())
@@ -328,40 +260,5 @@ impl Parse for AttrItem {
         };
 
         Ok(AttrItem { key, value })
-    }
-}
-
-/// ANI init attributes
-#[derive(Debug, Default)]
-pub struct AniInitAttrs {
-    /// Whether to call before bindings
-    pub before_bindings: bool,
-}
-
-impl Parse for AniInitAttrs {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut attrs = AniInitAttrs::default();
-
-        if input.is_empty() {
-            return Ok(attrs);
-        }
-
-        let items: Punctuated<AttrItem, Token![,]> = Punctuated::parse_terminated(input)?;
-
-        for item in items {
-            match item.key.to_string().as_str() {
-                "before_bindings" => {
-                    attrs.before_bindings = true;
-                }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        item.key,
-                        format!("Unknown attribute: {}", other),
-                    ));
-                }
-            }
-        }
-
-        Ok(attrs)
     }
 }
