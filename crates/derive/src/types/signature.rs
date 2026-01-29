@@ -68,6 +68,11 @@ fn resolve_complex_type_signature(ty: &Type, type_str: &str) -> String {
         return "Lstd/core/Object;".to_string();
     }
 
+    // Ref<T> - typed global reference (resolves to inner type signature)
+    if type_str.starts_with("Ref<") {
+        return resolve_ref_signature(ty);
+    }
+
     // Either types (union types in ArkTS)
     if is_either_type(type_str) {
         return "Lstd/core/Object;".to_string();
@@ -133,6 +138,26 @@ fn resolve_result_signature(ty: &Type) -> String {
         }
     }
     "V".to_string()
+}
+
+/// Resolve Ref<T> signature (uses inner type signature)
+fn resolve_ref_signature(ty: &Type) -> String {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                    // For Ref<AniObject<'static>>, we just return Object signature
+                    let inner_str = quote!(#inner_type).to_string().replace(" ", "");
+                    if inner_str.starts_with("AniObject") {
+                        return "Lstd/core/Object;".to_string();
+                    }
+                    // For other inner types, try to resolve
+                    return rust_type_to_signature(inner_type);
+                }
+            }
+        }
+    }
+    "Lstd/core/Object;".to_string()
 }
 
 /// Get boxed type signature (for Option inner types)

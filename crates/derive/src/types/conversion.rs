@@ -72,6 +72,11 @@ fn resolve_complex_ani_type(ty: &Type, type_str: &str) -> TokenStream {
         return quote! { ani::sys::ani_fn_object };
     }
 
+    // Ref<T> - typed global reference
+    if type_str.starts_with("Ref<") {
+        return quote! { ani::sys::ani_object };
+    }
+
     quote! { ani::sys::ani_object }
 }
 
@@ -146,6 +151,10 @@ fn generate_type_conversion(
         // FunctionRef types - use FromAni conversion
         _ if type_str.starts_with("FunctionRef<") => {
             generate_function_ref_conversion(param_name, converted_name, ty)
+        }
+        // Ref<T> types - use FromAni conversion
+        _ if type_str.starts_with("Ref<") => {
+            generate_ref_conversion(param_name, converted_name, ty)
         }
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
@@ -271,6 +280,21 @@ fn generate_function_ref_conversion(
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
                 .expect("Failed to convert FunctionRef type")
+        };
+    }
+}
+
+/// Generate Ref<T> type conversion code
+fn generate_ref_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_object)
+                .expect("Failed to convert Ref type")
         };
     }
 }

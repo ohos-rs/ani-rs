@@ -92,6 +92,9 @@ pub mod prelude {
     // Function types
     pub use crate::conversions::{FnArgs, Function, FunctionRef, ToAniArg, ToAniArgs};
 
+    // Reference types
+    pub use crate::conversions::Ref;
+
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }
 
