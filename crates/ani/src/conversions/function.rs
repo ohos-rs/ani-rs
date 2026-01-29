@@ -298,21 +298,21 @@ fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>>
 }
 
 // ============================================================================
-// ToAniArgs Implementations for Tuples
+// ToAniArgs Implementations for Tuples (1-26 elements)
 // ============================================================================
 
-// Macro to implement ToAniArgs for tuples
-macro_rules! impl_to_ani_args_for_tuple {
-    ($count:expr, $($idx:tt: $T:ident),+) => {
+/// Macro to implement ToAniArgs for tuples.
+/// Uses a cleaner recursive approach that only requires listing types once.
+macro_rules! impl_to_ani_args_for_tuples {
+    // Internal implementation macro for a single tuple
+    (@impl $($idx:tt: $T:ident),+) => {
         impl<$($T: ToAniArg),+> ToAniArgs for ($($T,)+) {
             fn to_ani_args<'env>(self, env: &Env<'env>) -> Result<Vec<sys::ani_ref>> {
-                Ok(vec![
-                    $(self.$idx.to_ani_arg(env)?,)+
-                ])
+                Ok(vec![$(self.$idx.to_ani_arg(env)?),+])
             }
 
             fn args_count() -> usize {
-                $count
+                impl_to_ani_args_for_tuples!(@count $($T),+)
             }
 
             fn args_signature() -> String {
@@ -322,17 +322,38 @@ macro_rules! impl_to_ani_args_for_tuple {
             }
         }
     };
+
+    // Count helper
+    (@count $($T:ident),+) => {
+        <[()]>::len(&[$(impl_to_ani_args_for_tuples!(@unit $T)),+])
+    };
+    (@unit $_:ident) => { () };
+
+    // Recursive expansion: accumulate indices and types, implement, then continue
+    // Base case: last type processed
+    (@expand [$($acc_idx:tt: $acc_T:ident),*] $idx:tt: $T:ident) => {
+        impl_to_ani_args_for_tuples!(@impl $($acc_idx: $acc_T,)* $idx: $T);
+    };
+    // Recursive case: accumulate and continue
+    (@expand [$($acc_idx:tt: $acc_T:ident),*] $idx:tt: $T:ident, $($rest:tt)+) => {
+        impl_to_ani_args_for_tuples!(@impl $($acc_idx: $acc_T,)* $idx: $T);
+        impl_to_ani_args_for_tuples!(@expand [$($acc_idx: $acc_T,)* $idx: $T] $($rest)+);
+    };
+
+    // Entry point: start expansion with empty accumulator
+    ($($rest:tt)+) => {
+        impl_to_ani_args_for_tuples!(@expand [] $($rest)+);
+    };
 }
 
-// Implement for tuples of 1 to 8 elements
-impl_to_ani_args_for_tuple!(1, 0: A);
-impl_to_ani_args_for_tuple!(2, 0: A, 1: B);
-impl_to_ani_args_for_tuple!(3, 0: A, 1: B, 2: C);
-impl_to_ani_args_for_tuple!(4, 0: A, 1: B, 2: C, 3: D);
-impl_to_ani_args_for_tuple!(5, 0: A, 1: B, 2: C, 3: D, 4: E);
-impl_to_ani_args_for_tuple!(6, 0: A, 1: B, 2: C, 3: D, 4: E, 5: F);
-impl_to_ani_args_for_tuple!(7, 0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G);
-impl_to_ani_args_for_tuple!(8, 0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H);
+// Generate ToAniArgs for tuples of 1-26 elements
+// Only the type names and indices need to be listed once
+impl_to_ani_args_for_tuples!(
+    0: A,  1: B,  2: C,  3: D,  4: E,  5: F,  6: G,  7: H,
+    8: I,  9: J, 10: K, 11: L, 12: M, 13: N, 14: O, 15: P,
+   16: Q, 17: R, 18: S, 19: T, 20: U, 21: V, 22: W, 23: X,
+   24: Y, 25: Z
+);
 
 // ============================================================================
 // Function Type
@@ -735,6 +756,152 @@ mod tests {
         assert_eq!(
             generate_function_signature::<(i32, i64), String>(),
             "(Lstd/core/Int;Lstd/core/Long;)Lstd/core/String;"
+        );
+    }
+
+    #[test]
+    fn test_tuple_args_up_to_26() {
+        // Test that tuples with many elements compile and work correctly
+
+        // 9 elements
+        assert_eq!(
+            <(i32, i32, i32, i32, i32, i32, i32, i32, i32)>::args_count(),
+            9
+        );
+
+        // 10 elements
+        assert_eq!(
+            <(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>::args_count(),
+            10
+        );
+
+        // 16 elements
+        assert_eq!(
+            <(
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32
+            )>::args_count(),
+            16
+        );
+
+        // 20 elements
+        assert_eq!(
+            <(
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32
+            )>::args_count(),
+            20
+        );
+
+        // 26 elements (maximum)
+        assert_eq!(
+            <(
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32,
+                i32
+            )>::args_count(),
+            26
+        );
+    }
+
+    #[test]
+    fn test_tuple_signature_26_elements() {
+        // Test signature generation for 26 element tuple
+        let sig = <(
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+        )>::args_signature();
+        // Each i32 generates "Lstd/core/Int;" signature
+        let expected = "Lstd/core/Int;".repeat(26);
+        assert_eq!(sig, expected);
+    }
+
+    #[test]
+    fn test_mixed_type_tuple() {
+        // Test with mixed types
+        let sig = <(i32, String, bool, f64)>::args_signature();
+        assert_eq!(
+            sig,
+            "Lstd/core/Int;Lstd/core/String;Lstd/core/Boolean;Lstd/core/Double;"
         );
     }
 }

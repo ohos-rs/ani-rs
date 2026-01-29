@@ -148,11 +148,7 @@ static NAMED_OBJECTS: Mutex<Vec<(String, Ref<AniObject<'static>>)>> = Mutex::new
 /// function storeNamedObject(name: string, obj: Object): void;
 /// ```
 #[ani]
-pub fn store_named_object(
-    _env: &Env,
-    name: String,
-    obj: Ref<AniObject<'static>>,
-) -> Result<()> {
+pub fn store_named_object(_env: &Env, name: String, obj: Ref<AniObject<'static>>) -> Result<()> {
     let mut guard = NAMED_OBJECTS.lock().unwrap();
     // Remove existing object with same name
     guard.retain(|(n, _)| n != &name);

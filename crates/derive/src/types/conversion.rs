@@ -1,12 +1,13 @@
 //! Type Conversion Code Generation
 //!
 //! Generates code for converting between Rust and ANI types.
+//! Uses the structured AniType system instead of string-based pattern matching.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::{FnArg, Pat, ReturnType, Type};
 
-use super::signature::is_either_type;
+use super::ani_type::{AniType, FunctionType, PrimitiveType, StringType, WrapperType};
 
 // ============================================================================
 // ANI Type Mapping
@@ -14,70 +15,8 @@ use super::signature::is_either_type;
 
 /// Map Rust type to ANI C type
 pub fn rust_type_to_ani_type(ty: &Type) -> TokenStream {
-    let type_str = quote!(#ty).to_string().replace(" ", "");
-
-    match type_str.as_str() {
-        "bool" => quote! { ani::sys::ani_boolean },
-        "i8" | "u8" => quote! { ani::sys::ani_byte },
-        "i16" => quote! { ani::sys::ani_short },
-        "u16" | "char" => quote! { ani::sys::ani_char },
-        "i32" | "u32" => quote! { ani::sys::ani_int },
-        "i64" | "u64" => quote! { ani::sys::ani_long },
-        "f32" => quote! { ani::sys::ani_float },
-        "f64" => quote! { ani::sys::ani_double },
-        "String" | "&str" => quote! { ani::sys::ani_string },
-        "()" => quote! { () },
-        _ => resolve_complex_ani_type(ty, &type_str),
-    }
-}
-
-/// Resolve ANI type for complex Rust types
-fn resolve_complex_ani_type(ty: &Type, type_str: &str) -> TokenStream {
-    if type_str.starts_with("Vec<") {
-        return quote! { ani::sys::ani_array };
-    }
-
-    if type_str.starts_with("Option<") {
-        let inner_type_str = extract_generic_inner(type_str, "Option");
-        return match inner_type_str.as_str() {
-            "String" => quote! { ani::sys::ani_string },
-            _ => quote! { ani::sys::ani_object },
-        };
-    }
-
-    if type_str.starts_with("Result<") {
-        if let Type::Path(type_path) = ty {
-            if let Some(segment) = type_path.path.segments.last() {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(ok_type)) = args.args.first() {
-                        return rust_type_to_ani_type(ok_type);
-                    }
-                }
-            }
-        }
-        return quote! { ani::sys::ani_object };
-    }
-
-    if is_either_type(type_str) {
-        return quote! { ani::sys::ani_object };
-    }
-
-    // PromiseRaw returns ani_object
-    if type_str.starts_with("PromiseRaw") {
-        return quote! { ani::sys::ani_object };
-    }
-
-    // Function and FunctionRef use ani_fn_object (which is ani_ref)
-    if type_str.starts_with("Function<") || type_str.starts_with("FunctionRef<") {
-        return quote! { ani::sys::ani_fn_object };
-    }
-
-    // Ref<T> - typed global reference
-    if type_str.starts_with("Ref<") {
-        return quote! { ani::sys::ani_object };
-    }
-
-    quote! { ani::sys::ani_object }
+    let ani_type = AniType::from_syn_type(ty);
+    ani_type.to_ani_c_type()
 }
 
 // ============================================================================
@@ -104,9 +43,9 @@ fn generate_single_param_conversion(index: usize, param: &FnArg) -> TokenStream 
     let param_name = extract_param_name(&pat_type.pat, index);
     let converted_name = format_ident!("{}_converted", param_name);
     let ty = &pat_type.ty;
-    let type_str = quote!(#ty).to_string().replace(" ", "");
+    let ani_type = AniType::from_syn_type(ty);
 
-    generate_type_conversion(&param_name, &converted_name, ty, &type_str)
+    generate_type_conversion(&param_name, &converted_name, ty, &ani_type)
 }
 
 /// Extract parameter name from pattern
@@ -118,69 +57,80 @@ fn extract_param_name(pat: &Pat, index: usize) -> Ident {
     }
 }
 
-/// Generate type-specific conversion code
+/// Generate type-specific conversion code using AniType
 fn generate_type_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     ty: &Type,
-    type_str: &str,
+    ani_type: &AniType,
 ) -> TokenStream {
-    match type_str {
-        // Primitives - direct pass-through
-        "i32" | "i8" | "i16" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" => {
-            quote! { let #converted_name = #param_name; }
-        }
-        // Boolean - convert from ani_boolean
-        "bool" => {
-            quote! { let #converted_name = #param_name != 0; }
-        }
-        // String - convert from ani_string
-        "String" => generate_string_conversion(param_name, converted_name),
-        "&str" => generate_str_conversion(param_name, converted_name),
+    match ani_type {
+        // Primitives - direct pass-through (except bool)
+        AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
+
+        // String types
+        AniType::String(s) => generate_string_type_conversion(param_name, converted_name, s),
+
         // Option<T>
-        _ if type_str.starts_with("Option<") => {
-            let inner = extract_generic_inner(type_str, "Option");
-            generate_option_conversion(param_name, converted_name, &inner)
+        AniType::Wrapper(WrapperType::Option(inner)) => {
+            generate_option_conversion(param_name, converted_name, inner.as_ref())
         }
+
         // Either types
-        _ if is_either_type(type_str) => generate_either_conversion(param_name, converted_name, ty),
-        // Function types - use FromAni conversion
-        _ if type_str.starts_with("Function<") => {
-            generate_function_conversion(param_name, converted_name, ty)
+        AniType::Either(_) => generate_either_conversion(param_name, converted_name, ty),
+
+        // Function types
+        AniType::Function(func_type) => {
+            generate_function_type_conversion(param_name, converted_name, ty, func_type)
         }
-        // FunctionRef types - use FromAni conversion
-        _ if type_str.starts_with("FunctionRef<") => {
-            generate_function_ref_conversion(param_name, converted_name, ty)
-        }
-        // Ref<T> types - use FromAni conversion
-        _ if type_str.starts_with("Ref<") => {
+
+        // Ref<T> types
+        AniType::Wrapper(WrapperType::Ref(_)) => {
             generate_ref_conversion(param_name, converted_name, ty)
         }
+
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
     }
 }
 
-/// Generate String conversion code
-fn generate_string_conversion(param_name: &Ident, converted_name: &Ident) -> TokenStream {
-    quote! {
-        let #converted_name = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            let ani_str = ani::types::AniString::from_raw(#param_name);
-            env_wrapper.get_string(&ani_str).unwrap_or_default()
-        };
+/// Generate primitive type conversion
+fn generate_primitive_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    primitive: &PrimitiveType,
+) -> TokenStream {
+    match primitive {
+        PrimitiveType::Bool => {
+            quote! { let #converted_name = #param_name != 0; }
+        }
+        // All other primitives are direct pass-through
+        _ => quote! { let #converted_name = #param_name; },
     }
 }
 
-/// Generate &str conversion code
-fn generate_str_conversion(param_name: &Ident, converted_name: &Ident) -> TokenStream {
-    quote! {
-        let #converted_name = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            let ani_str = ani::types::AniString::from_raw(#param_name);
-            env_wrapper.get_string(&ani_str).unwrap_or_default()
-        };
-        let #converted_name = #converted_name.as_str();
+/// Generate String/&str conversion code
+fn generate_string_type_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    string_type: &StringType,
+) -> TokenStream {
+    match string_type {
+        StringType::String => quote! {
+            let #converted_name = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                let ani_str = ani::types::AniString::from_raw(#param_name);
+                env_wrapper.get_string(&ani_str).unwrap_or_default()
+            };
+        },
+        StringType::Str => quote! {
+            let #converted_name = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                let ani_str = ani::types::AniString::from_raw(#param_name);
+                env_wrapper.get_string(&ani_str).unwrap_or_default()
+            };
+            let #converted_name = #converted_name.as_str();
+        },
     }
 }
 
@@ -188,10 +138,10 @@ fn generate_str_conversion(param_name: &Ident, converted_name: &Ident) -> TokenS
 fn generate_option_conversion(
     param_name: &Ident,
     converted_name: &Ident,
-    inner_type: &str,
+    inner_type: &AniType,
 ) -> TokenStream {
     match inner_type {
-        "String" => quote! {
+        AniType::String(StringType::String) => quote! {
             let #converted_name: Option<String> = {
                 if #param_name.is_null() {
                     None
@@ -202,9 +152,7 @@ fn generate_option_conversion(
                 }
             };
         },
-        "i32" | "i64" | "i8" | "i16" | "u16" | "f32" | "f64" | "bool" => {
-            generate_option_unbox_conversion(param_name, converted_name, inner_type)
-        }
+        AniType::Primitive(p) => generate_option_unbox_conversion(param_name, converted_name, p),
         _ => quote! {
             let #converted_name = {
                 if #param_name.is_null() {
@@ -221,10 +169,11 @@ fn generate_option_conversion(
 fn generate_option_unbox_conversion(
     param_name: &Ident,
     converted_name: &Ident,
-    inner_type: &str,
+    primitive: &PrimitiveType,
 ) -> TokenStream {
+    let rust_type_str = primitive.rust_type_str();
     let rust_type: syn::Type =
-        syn::parse_str(inner_type).unwrap_or_else(|_| syn::parse_quote!(i32));
+        syn::parse_str(rust_type_str).unwrap_or_else(|_| syn::parse_quote!(i32));
 
     quote! {
         let #converted_name: Option<#rust_type> = {
@@ -254,42 +203,33 @@ fn generate_either_conversion(
     }
 }
 
-/// Generate Function type conversion code
-fn generate_function_conversion(
+/// Generate Function/FunctionRef type conversion code
+fn generate_function_type_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     ty: &Type,
+    func_type: &FunctionType,
 ) -> TokenStream {
-    quote! {
-        let #converted_name: #ty = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
-                .expect("Failed to convert Function type")
-        };
-    }
-}
-
-/// Generate FunctionRef type conversion code
-fn generate_function_ref_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-) -> TokenStream {
-    quote! {
-        let #converted_name: #ty = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
-                .expect("Failed to convert FunctionRef type")
-        };
+    match func_type {
+        FunctionType::Function { .. } => quote! {
+            let #converted_name: #ty = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
+                    .expect("Failed to convert Function type")
+            };
+        },
+        FunctionType::FunctionRef { .. } => quote! {
+            let #converted_name: #ty = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
+                    .expect("Failed to convert FunctionRef type")
+            };
+        },
     }
 }
 
 /// Generate Ref<T> type conversion code
-fn generate_ref_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-) -> TokenStream {
+fn generate_ref_conversion(param_name: &Ident, converted_name: &Ident, ty: &Type) -> TokenStream {
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
@@ -308,20 +248,29 @@ pub fn generate_return_conversion(return_type: &ReturnType) -> TokenStream {
     match return_type {
         ReturnType::Default => quote! {},
         ReturnType::Type(_, ty) => {
-            let type_str = quote!(#ty).to_string().replace(" ", "");
-
-            // Handle Result<PromiseRaw, E> specially
-            if is_result_promise_type(&type_str) {
-                return generate_result_promise_return_conversion();
-            }
-
-            // Handle Result<T, E>
-            if type_str.starts_with("Result<") {
-                return generate_result_return_conversion(ty);
-            }
-
-            generate_simple_return_conversion(&type_str)
+            let ani_type = AniType::from_syn_type(ty);
+            generate_return_conversion_for_type(&ani_type, ty)
         }
+    }
+}
+
+/// Generate return conversion based on AniType
+fn generate_return_conversion_for_type(ani_type: &AniType, original_ty: &Type) -> TokenStream {
+    match ani_type {
+        // Result<PromiseRaw, E> - special handling
+        AniType::Wrapper(WrapperType::Result(inner))
+            if matches!(inner.as_ref(), AniType::Promise(_)) =>
+        {
+            generate_result_promise_return_conversion()
+        }
+
+        // Result<T, E>
+        AniType::Wrapper(WrapperType::Result(inner)) => {
+            generate_result_return_conversion(inner.as_ref())
+        }
+
+        // Simple types
+        _ => generate_simple_return_conversion(ani_type, original_ty),
     }
 }
 
@@ -340,54 +289,81 @@ fn generate_result_promise_return_conversion() -> TokenStream {
 }
 
 /// Generate return conversion for simple types
-fn generate_simple_return_conversion(type_str: &str) -> TokenStream {
-    match type_str {
-        "i32" | "i64" | "i8" | "i16" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" => {
-            quote! { result }
-        }
-        "bool" => quote! { if result { 1 } else { 0 } },
-        "String" => quote! {
+fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> TokenStream {
+    match ani_type {
+        // Numeric primitives - direct return
+        AniType::Primitive(p) => match p {
+            PrimitiveType::Bool => quote! { if result { 1 } else { 0 } },
+            _ => quote! { result },
+        },
+
+        // String - convert to ani_string
+        AniType::String(StringType::String) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match env_wrapper.create_string(&result) {
                 Ok(s) => s.into_raw(),
                 Err(_) => std::ptr::null_mut()
             }
         },
-        "()" => quote! {},
-        _ if is_either_type(type_str) => quote! {
+
+        // Unit type - no return
+        AniType::Unit => quote! {},
+
+        // Either types - use ToAni
+        AniType::Either(_) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
                 Ok(obj) => obj,
                 Err(_) => std::ptr::null_mut()
             }
         },
-        // PromiseRaw - extract raw ani_object
-        _ if type_str.starts_with("PromiseRaw") => quote! {
+
+        // PromiseRaw - extract raw
+        AniType::Promise(_) => quote! {
             result.into_raw()
         },
-        _ => quote! { result },
+
+        // Default - direct return
+        _ => {
+            // Check if it's a custom object type that might use ToAni
+            let ty_str = quote::quote!(#original_ty).to_string();
+            // Skip types that look like raw pointers or ANI sys types
+            if ty_str.contains("ani_") || ty_str.contains("* mut") || ty_str.contains("*mut") {
+                quote! { result }
+            } else if ty_str.contains("::")
+                || ty_str
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+            {
+                // Likely a custom type, try ToAni
+                quote! {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
+                        Ok(obj) => obj,
+                        Err(_) => std::ptr::null_mut()
+                    }
+                }
+            } else {
+                quote! { result }
+            }
+        }
     }
 }
 
-/// Check if type is a Result containing PromiseRaw
-fn is_result_promise_type(type_str: &str) -> bool {
-    type_str.starts_with("Result<PromiseRaw")
-}
-
 /// Generate return conversion for Result<T, E>
-fn generate_result_return_conversion(ty: &Type) -> TokenStream {
-    let inner_type_str = extract_result_ok_type(ty);
-
-    let ok_conversion = match inner_type_str.as_str() {
-        "String" => quote! {
+fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
+    let ok_conversion = match ok_type {
+        AniType::String(StringType::String) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match env_wrapper.create_string(&val) {
                 Ok(s) => s.into_raw(),
                 Err(_) => std::ptr::null_mut()
             }
         },
-        "bool" => quote! { if val { 1 } else { 0 } },
-        "()" => quote! {},
+        AniType::Primitive(PrimitiveType::Bool) => quote! { if val { 1 } else { 0 } },
+        AniType::Unit => quote! {},
         _ => quote! { val },
     };
 
@@ -400,34 +376,5 @@ fn generate_result_return_conversion(ty: &Type) -> TokenStream {
                 Default::default()
             }
         }
-    }
-}
-
-/// Extract Ok type from Result<T, E>
-fn extract_result_ok_type(ty: &Type) -> String {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                if let Some(syn::GenericArgument::Type(ok_type)) = args.args.first() {
-                    return quote!(#ok_type).to_string().replace(" ", "");
-                }
-            }
-        }
-    }
-    String::new()
-}
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/// Extract inner type from generic type string
-/// e.g., "Option<i32>" -> "i32"
-fn extract_generic_inner(type_str: &str, wrapper: &str) -> String {
-    let prefix = format!("{}<", wrapper);
-    if type_str.starts_with(&prefix) && type_str.ends_with('>') {
-        type_str[prefix.len()..type_str.len() - 1].to_string()
-    } else {
-        type_str.to_string()
     }
 }

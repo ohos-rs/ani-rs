@@ -1,0 +1,837 @@
+//! ANI Type System
+//!
+//! Structured type representation for ANI FFI code generation.
+//! This module provides a type-safe way to handle Rust-to-ANI type conversions
+//! instead of string-based pattern matching.
+
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::{GenericArgument, PathArguments, Type, TypePath};
+
+// ============================================================================
+// Core Type Definitions
+// ============================================================================
+
+/// Primitive types that map directly to ANI C types
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrimitiveType {
+    Bool,
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F32,
+    F64,
+    Char,
+}
+
+/// String-like types
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringType {
+    String,
+    Str,
+}
+
+/// Generic wrapper types with inner type
+#[derive(Debug, Clone)]
+pub enum WrapperType {
+    /// Option<T>
+    Option(Box<AniType>),
+    /// Vec<T>
+    Vec(Box<AniType>),
+    /// Result<T, E> - we only care about the Ok type
+    Result(Box<AniType>),
+    /// Ref<T> - typed global reference
+    Ref(Box<AniType>),
+}
+
+/// Function-related types
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum FunctionType {
+    /// Function<Args, Return>
+    Function { args: Box<Type>, ret: Box<Type> },
+    /// FunctionRef<Args, Return>
+    FunctionRef { args: Box<Type>, ret: Box<Type> },
+}
+
+/// FnArgs wrapper type for multiple function arguments
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct FnArgsType {
+    /// The inner tuple type
+    pub inner: Box<Type>,
+    /// The parsed element types (if inner is a tuple)
+    pub elements: Vec<AniType>,
+}
+
+/// Either type variants (union types)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct EitherType {
+    /// Number of variants (2 for Either, 3 for Either3, etc.)
+    pub variant_count: usize,
+    /// The inner types
+    pub types: Vec<Box<Type>>,
+}
+
+/// Promise type
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct PromiseType {
+    /// The inner type for the promise value
+    pub inner: Option<Box<AniType>>,
+}
+
+/// The main ANI type enum
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum AniType {
+    /// Primitive types (bool, i32, f64, etc.)
+    Primitive(PrimitiveType),
+    /// String types (String, &str)
+    String(StringType),
+    /// Unit type ()
+    Unit,
+    /// Wrapper types (Option, Vec, Result, Ref)
+    Wrapper(WrapperType),
+    /// Function types
+    Function(FunctionType),
+    /// FnArgs wrapper for function arguments
+    FnArgs(FnArgsType),
+    /// Either types (union)
+    Either(EitherType),
+    /// Promise type
+    Promise(PromiseType),
+    /// AniObject - raw object type
+    AniObject,
+    /// Tuple type (for function arguments)
+    Tuple(Vec<AniType>),
+    /// Unknown/custom type - fallback to object
+    Unknown(Box<Type>),
+}
+
+// ============================================================================
+// Type Parsing
+// ============================================================================
+
+impl AniType {
+    /// Parse a syn::Type into an AniType
+    pub fn from_syn_type(ty: &Type) -> Self {
+        match ty {
+            Type::Path(type_path) => Self::parse_type_path(type_path),
+            Type::Reference(type_ref) => {
+                // Handle &str
+                if let Type::Path(inner_path) = type_ref.elem.as_ref() {
+                    if is_path_ident(inner_path, "str") {
+                        return AniType::String(StringType::Str);
+                    }
+                }
+                AniType::Unknown(Box::new(ty.clone()))
+            }
+            Type::Tuple(tuple) => {
+                if tuple.elems.is_empty() {
+                    AniType::Unit
+                } else {
+                    // Parse each element of the tuple
+                    let elements: Vec<AniType> = tuple
+                        .elems
+                        .iter()
+                        .map(|elem| AniType::from_syn_type(elem))
+                        .collect();
+                    AniType::Tuple(elements)
+                }
+            }
+            _ => AniType::Unknown(Box::new(ty.clone())),
+        }
+    }
+
+    /// Parse a type path into AniType
+    fn parse_type_path(type_path: &TypePath) -> Self {
+        let segment = match type_path.path.segments.last() {
+            Some(seg) => seg,
+            None => return AniType::Unknown(Box::new(Type::Path(type_path.clone()))),
+        };
+
+        let ident = segment.ident.to_string();
+
+        // Check for primitive types first
+        if let Some(primitive) = parse_primitive(&ident) {
+            return AniType::Primitive(primitive);
+        }
+
+        // Check for string types
+        if ident == "String" {
+            return AniType::String(StringType::String);
+        }
+
+        // Check for unit type represented as path
+        if ident == "()" {
+            return AniType::Unit;
+        }
+
+        // Check for AniObject
+        if ident == "AniObject" {
+            return AniType::AniObject;
+        }
+
+        // Check for Either types
+        if let Some(either) = parse_either_type(&ident, &segment.arguments) {
+            return AniType::Either(either);
+        }
+
+        // Check for Promise types
+        if ident == "PromiseRaw" {
+            return AniType::Promise(PromiseType {
+                inner: extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type(&t))),
+            });
+        }
+
+        // Check for generic wrapper types
+        match ident.as_str() {
+            "Option" => {
+                let inner = extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type(&t)))
+                    .unwrap_or_else(|| {
+                        Box::new(AniType::Unknown(Box::new(Type::Path(type_path.clone()))))
+                    });
+                AniType::Wrapper(WrapperType::Option(inner))
+            }
+            "Vec" => {
+                let inner = extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type(&t)))
+                    .unwrap_or_else(|| {
+                        Box::new(AniType::Unknown(Box::new(Type::Path(type_path.clone()))))
+                    });
+                AniType::Wrapper(WrapperType::Vec(inner))
+            }
+            "Result" => {
+                let inner = extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type(&t)))
+                    .unwrap_or_else(|| Box::new(AniType::Unit));
+                AniType::Wrapper(WrapperType::Result(inner))
+            }
+            "Ref" => {
+                let inner = extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type(&t)))
+                    .unwrap_or_else(|| Box::new(AniType::AniObject));
+                AniType::Wrapper(WrapperType::Ref(inner))
+            }
+            "Function" => {
+                let (args, ret) = extract_function_generics(&segment.arguments);
+                AniType::Function(FunctionType::Function { args, ret })
+            }
+            "FunctionRef" => {
+                let (args, ret) = extract_function_generics(&segment.arguments);
+                AniType::Function(FunctionType::FunctionRef { args, ret })
+            }
+            "FnArgs" => {
+                // FnArgs<T> where T is typically a tuple
+                let inner = extract_first_generic_type(&segment.arguments);
+                let elements = inner
+                    .as_ref()
+                    .map(|t| {
+                        let parsed = AniType::from_syn_type(t);
+                        match parsed {
+                            AniType::Tuple(elems) => elems,
+                            AniType::Unit => vec![],
+                            other => vec![other],
+                        }
+                    })
+                    .unwrap_or_default();
+
+                AniType::FnArgs(FnArgsType {
+                    inner: inner
+                        .map(Box::new)
+                        .unwrap_or_else(|| Box::new(syn::parse_quote!(()))),
+                    elements,
+                })
+            }
+            _ => AniType::Unknown(Box::new(Type::Path(type_path.clone()))),
+        }
+    }
+
+    /// Check if this type is an Either variant
+    #[allow(dead_code)]
+    pub fn is_either(&self) -> bool {
+        matches!(self, AniType::Either(_))
+    }
+
+    /// Check if this type is a primitive
+    #[allow(dead_code)]
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, AniType::Primitive(_))
+    }
+
+    /// Check if this type is a Result wrapping a Promise
+    #[allow(dead_code)]
+    pub fn is_result_promise(&self) -> bool {
+        if let AniType::Wrapper(WrapperType::Result(inner)) = self {
+            matches!(inner.as_ref(), AniType::Promise(_))
+        } else {
+            false
+        }
+    }
+
+    /// Get the inner type for Result<T, E>
+    #[allow(dead_code)]
+    pub fn result_ok_type(&self) -> Option<&AniType> {
+        if let AniType::Wrapper(WrapperType::Result(inner)) = self {
+            Some(inner.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Get the inner type for Option<T>
+    #[allow(dead_code)]
+    pub fn option_inner_type(&self) -> Option<&AniType> {
+        if let AniType::Wrapper(WrapperType::Option(inner)) = self {
+            Some(inner.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Check if this type is a FnArgs type
+    #[allow(dead_code)]
+    pub fn is_fn_args(&self) -> bool {
+        matches!(self, AniType::FnArgs(_))
+    }
+
+    /// Get the FnArgs element types
+    #[allow(dead_code)]
+    pub fn fn_args_elements(&self) -> Option<&[AniType]> {
+        if let AniType::FnArgs(fn_args) = self {
+            Some(&fn_args.elements)
+        } else {
+            None
+        }
+    }
+
+    /// Check if this type is a Tuple type
+    #[allow(dead_code)]
+    pub fn is_tuple(&self) -> bool {
+        matches!(self, AniType::Tuple(_))
+    }
+
+    /// Get the Tuple element types
+    #[allow(dead_code)]
+    pub fn tuple_elements(&self) -> Option<&[AniType]> {
+        if let AniType::Tuple(elements) = self {
+            Some(elements)
+        } else {
+            None
+        }
+    }
+}
+
+// ============================================================================
+// ANI C Type Generation
+// ============================================================================
+
+impl AniType {
+    /// Generate the ANI C type for this Rust type
+    pub fn to_ani_c_type(&self) -> TokenStream {
+        match self {
+            AniType::Primitive(p) => p.to_ani_c_type(),
+            AniType::String(_) => quote! { ani::sys::ani_string },
+            AniType::Unit => quote! { () },
+            AniType::Wrapper(w) => w.to_ani_c_type(),
+            AniType::Function(_) => quote! { ani::sys::ani_fn_object },
+            AniType::FnArgs(_) => quote! { ani::sys::ani_object },
+            AniType::Either(_) => quote! { ani::sys::ani_object },
+            AniType::Promise(_) => quote! { ani::sys::ani_object },
+            AniType::AniObject => quote! { ani::sys::ani_object },
+            AniType::Tuple(_) => quote! { ani::sys::ani_object },
+            AniType::Unknown(_) => quote! { ani::sys::ani_object },
+        }
+    }
+}
+
+impl PrimitiveType {
+    /// Generate the ANI C type for this primitive
+    pub fn to_ani_c_type(&self) -> TokenStream {
+        match self {
+            PrimitiveType::Bool => quote! { ani::sys::ani_boolean },
+            PrimitiveType::I8 | PrimitiveType::U8 => quote! { ani::sys::ani_byte },
+            PrimitiveType::I16 => quote! { ani::sys::ani_short },
+            PrimitiveType::U16 | PrimitiveType::Char => quote! { ani::sys::ani_char },
+            PrimitiveType::I32 | PrimitiveType::U32 => quote! { ani::sys::ani_int },
+            PrimitiveType::I64 | PrimitiveType::U64 => quote! { ani::sys::ani_long },
+            PrimitiveType::F32 => quote! { ani::sys::ani_float },
+            PrimitiveType::F64 => quote! { ani::sys::ani_double },
+        }
+    }
+}
+
+impl WrapperType {
+    /// Generate the ANI C type for this wrapper
+    pub fn to_ani_c_type(&self) -> TokenStream {
+        match self {
+            WrapperType::Vec(_) => quote! { ani::sys::ani_array },
+            WrapperType::Option(inner) => {
+                // Option<String> returns ani_string, others return ani_object
+                if matches!(inner.as_ref(), AniType::String(StringType::String)) {
+                    quote! { ani::sys::ani_string }
+                } else {
+                    quote! { ani::sys::ani_object }
+                }
+            }
+            WrapperType::Result(inner) => inner.to_ani_c_type(),
+            WrapperType::Ref(_) => quote! { ani::sys::ani_object },
+        }
+    }
+}
+
+// ============================================================================
+// ANI Signature Generation
+// ============================================================================
+
+impl AniType {
+    /// Generate the ANI type signature string
+    pub fn to_signature(&self) -> String {
+        match self {
+            AniType::Primitive(p) => p.to_signature(),
+            AniType::String(_) => "Lstd/core/String;".to_string(),
+            AniType::Unit => "V".to_string(),
+            AniType::Wrapper(w) => w.to_signature(),
+            AniType::Function(_) => "Lstd/core/Function;".to_string(),
+            AniType::FnArgs(fn_args) => {
+                // FnArgs<(A, B, ...)> generates signature for each element
+                fn_args
+                    .elements
+                    .iter()
+                    .map(|e| e.to_signature())
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
+            AniType::Either(_) => "Lstd/core/Object;".to_string(),
+            AniType::Promise(_) => "Lstd/core/Object;".to_string(),
+            AniType::AniObject => "Lstd/core/Object;".to_string(),
+            AniType::Tuple(elements) => {
+                // Tuple generates signature for each element
+                elements
+                    .iter()
+                    .map(|e| e.to_signature())
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
+            AniType::Unknown(_) => "Lstd/core/Object;".to_string(),
+        }
+    }
+
+    /// Generate the boxed type signature (for Option inner types)
+    pub fn to_boxed_signature(&self) -> String {
+        match self {
+            AniType::Primitive(p) => p.to_boxed_signature(),
+            _ => self.to_signature(),
+        }
+    }
+}
+
+impl PrimitiveType {
+    /// Generate the primitive type signature
+    pub fn to_signature(&self) -> String {
+        match self {
+            PrimitiveType::Bool => "Z".to_string(),
+            PrimitiveType::I8 | PrimitiveType::U8 => "B".to_string(),
+            PrimitiveType::I16 => "S".to_string(),
+            PrimitiveType::U16 | PrimitiveType::Char => "C".to_string(),
+            PrimitiveType::I32 | PrimitiveType::U32 => "I".to_string(),
+            PrimitiveType::I64 | PrimitiveType::U64 => "J".to_string(),
+            PrimitiveType::F32 => "F".to_string(),
+            PrimitiveType::F64 => "D".to_string(),
+        }
+    }
+
+    /// Generate the boxed primitive type signature
+    pub fn to_boxed_signature(&self) -> String {
+        match self {
+            PrimitiveType::Bool => "Lstd/core/Boolean;".to_string(),
+            PrimitiveType::I8 => "Lstd/core/Byte;".to_string(),
+            PrimitiveType::I16 => "Lstd/core/Short;".to_string(),
+            PrimitiveType::I32 => "Lstd/core/Int;".to_string(),
+            PrimitiveType::I64 => "Lstd/core/Long;".to_string(),
+            PrimitiveType::F32 => "Lstd/core/Float;".to_string(),
+            PrimitiveType::F64 => "Lstd/core/Double;".to_string(),
+            // Unsigned types use the same boxed types
+            PrimitiveType::U8 => "Lstd/core/Byte;".to_string(),
+            PrimitiveType::U16 | PrimitiveType::Char => "Lstd/core/Char;".to_string(),
+            PrimitiveType::U32 => "Lstd/core/Int;".to_string(),
+            PrimitiveType::U64 => "Lstd/core/Long;".to_string(),
+        }
+    }
+
+    /// Get the Rust type identifier for this primitive
+    pub fn rust_type_str(&self) -> &'static str {
+        match self {
+            PrimitiveType::Bool => "bool",
+            PrimitiveType::I8 => "i8",
+            PrimitiveType::U8 => "u8",
+            PrimitiveType::I16 => "i16",
+            PrimitiveType::U16 => "u16",
+            PrimitiveType::I32 => "i32",
+            PrimitiveType::U32 => "u32",
+            PrimitiveType::I64 => "i64",
+            PrimitiveType::U64 => "u64",
+            PrimitiveType::F32 => "f32",
+            PrimitiveType::F64 => "f64",
+            PrimitiveType::Char => "char",
+        }
+    }
+}
+
+impl WrapperType {
+    /// Generate the wrapper type signature
+    pub fn to_signature(&self) -> String {
+        match self {
+            WrapperType::Option(inner) => inner.to_boxed_signature(),
+            WrapperType::Vec(inner) => format!("[{}", inner.to_signature()),
+            WrapperType::Result(inner) => inner.to_signature(),
+            WrapperType::Ref(inner) => {
+                // For Ref<AniObject>, return Object signature
+                if matches!(inner.as_ref(), AniType::AniObject) {
+                    "Lstd/core/Object;".to_string()
+                } else {
+                    inner.to_signature()
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Parse a primitive type from string identifier
+fn parse_primitive(ident: &str) -> Option<PrimitiveType> {
+    match ident {
+        "bool" => Some(PrimitiveType::Bool),
+        "i8" => Some(PrimitiveType::I8),
+        "u8" => Some(PrimitiveType::U8),
+        "i16" => Some(PrimitiveType::I16),
+        "u16" => Some(PrimitiveType::U16),
+        "i32" => Some(PrimitiveType::I32),
+        "u32" => Some(PrimitiveType::U32),
+        "i64" => Some(PrimitiveType::I64),
+        "u64" => Some(PrimitiveType::U64),
+        "f32" => Some(PrimitiveType::F32),
+        "f64" => Some(PrimitiveType::F64),
+        "char" => Some(PrimitiveType::Char),
+        _ => None,
+    }
+}
+
+/// All known Either type names with their variant counts
+const EITHER_TYPES: &[(&str, usize)] = &[
+    ("Either", 2),
+    ("Either3", 3),
+    ("Either4", 4),
+    ("Either5", 5),
+    ("Either6", 6),
+    ("Either7", 7),
+    ("Either8", 8),
+    ("Either9", 9),
+    ("Either10", 10),
+    ("Either11", 11),
+    ("Either12", 12),
+    ("Either13", 13),
+    ("Either14", 14),
+    ("Either15", 15),
+    ("Either16", 16),
+    ("Either17", 17),
+    ("Either18", 18),
+    ("Either19", 19),
+    ("Either20", 20),
+    ("Either21", 21),
+    ("Either22", 22),
+    ("Either23", 23),
+    ("Either24", 24),
+    ("Either25", 25),
+    ("Either26", 26),
+];
+
+/// Parse Either type from identifier and arguments
+fn parse_either_type(ident: &str, args: &PathArguments) -> Option<EitherType> {
+    let variant_count = EITHER_TYPES
+        .iter()
+        .find(|(name, _)| *name == ident)
+        .map(|(_, count)| *count)?;
+
+    let types = extract_all_generic_types(args)
+        .into_iter()
+        .map(Box::new)
+        .collect();
+
+    Some(EitherType {
+        variant_count,
+        types,
+    })
+}
+
+/// Check if a type path refers to a specific identifier
+fn is_path_ident(type_path: &TypePath, ident: &str) -> bool {
+    type_path.path.is_ident(ident)
+}
+
+/// Extract the first generic type argument
+fn extract_first_generic_type(args: &PathArguments) -> Option<Type> {
+    if let PathArguments::AngleBracketed(angle_args) = args {
+        if let Some(GenericArgument::Type(ty)) = angle_args.args.first() {
+            return Some(ty.clone());
+        }
+    }
+    None
+}
+
+/// Extract all generic type arguments
+fn extract_all_generic_types(args: &PathArguments) -> Vec<Type> {
+    if let PathArguments::AngleBracketed(angle_args) = args {
+        angle_args
+            .args
+            .iter()
+            .filter_map(|arg| {
+                if let GenericArgument::Type(ty) = arg {
+                    Some(ty.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Extract Function<Args, Return> generics
+fn extract_function_generics(args: &PathArguments) -> (Box<Type>, Box<Type>) {
+    if let PathArguments::AngleBracketed(angle_args) = args {
+        let types: Vec<_> = angle_args
+            .args
+            .iter()
+            .filter_map(|arg| {
+                if let GenericArgument::Type(ty) = arg {
+                    Some(ty.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if types.len() >= 2 {
+            return (Box::new(types[0].clone()), Box::new(types[1].clone()));
+        }
+    }
+
+    // Default: () for both
+    (
+        Box::new(syn::parse_quote!(())),
+        Box::new(syn::parse_quote!(())),
+    )
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_primitive() {
+        let ty: Type = syn::parse_quote!(i32);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Primitive(PrimitiveType::I32)));
+    }
+
+    #[test]
+    fn test_parse_string() {
+        let ty: Type = syn::parse_quote!(String);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::String)));
+    }
+
+    #[test]
+    fn test_parse_option() {
+        let ty: Type = syn::parse_quote!(Option<i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Wrapper(WrapperType::Option(inner)) = ani_type {
+            assert!(matches!(
+                inner.as_ref(),
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+        } else {
+            panic!("Expected Option type");
+        }
+    }
+
+    #[test]
+    fn test_parse_vec() {
+        let ty: Type = syn::parse_quote!(Vec<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Wrapper(WrapperType::Vec(inner)) = ani_type {
+            assert!(matches!(
+                inner.as_ref(),
+                AniType::String(StringType::String)
+            ));
+        } else {
+            panic!("Expected Vec type");
+        }
+    }
+
+    #[test]
+    fn test_parse_result() {
+        let ty: Type = syn::parse_quote!(Result<String, Error>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Wrapper(WrapperType::Result(inner)) = ani_type {
+            assert!(matches!(
+                inner.as_ref(),
+                AniType::String(StringType::String)
+            ));
+        } else {
+            panic!("Expected Result type");
+        }
+    }
+
+    #[test]
+    fn test_parse_either() {
+        let ty: Type = syn::parse_quote!(Either<i32, String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Either(either) = ani_type {
+            assert_eq!(either.variant_count, 2);
+        } else {
+            panic!("Expected Either type");
+        }
+    }
+
+    #[test]
+    fn test_signature_generation() {
+        let ty: Type = syn::parse_quote!(i32);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "I");
+
+        let ty: Type = syn::parse_quote!(String);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;");
+
+        let ty: Type = syn::parse_quote!(Vec<i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "[I");
+    }
+
+    #[test]
+    fn test_boxed_signature() {
+        let ty: Type = syn::parse_quote!(Option<i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Int;");
+    }
+
+    #[test]
+    fn test_parse_tuple() {
+        // Single element tuple
+        let ty: Type = syn::parse_quote!((i32,));
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Tuple(elements) = ani_type {
+            assert_eq!(elements.len(), 1);
+            assert!(matches!(
+                elements[0],
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+        } else {
+            panic!("Expected Tuple type, got {:?}", ani_type);
+        }
+
+        // Multi element tuple
+        let ty: Type = syn::parse_quote!((i32, String, bool));
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Tuple(elements) = ani_type {
+            assert_eq!(elements.len(), 3);
+            assert!(matches!(
+                elements[0],
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+            assert!(matches!(elements[1], AniType::String(StringType::String)));
+            assert!(matches!(
+                elements[2],
+                AniType::Primitive(PrimitiveType::Bool)
+            ));
+        } else {
+            panic!("Expected Tuple type");
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_args() {
+        // FnArgs<(i32, i32)>
+        let ty: Type = syn::parse_quote!(FnArgs<(i32, i32)>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::FnArgs(fn_args) = &ani_type {
+            assert_eq!(fn_args.elements.len(), 2);
+            assert!(matches!(
+                fn_args.elements[0],
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+            assert!(matches!(
+                fn_args.elements[1],
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+        } else {
+            panic!("Expected FnArgs type, got {:?}", ani_type);
+        }
+
+        // FnArgs<(String, i64, bool)>
+        let ty: Type = syn::parse_quote!(FnArgs<(String, i64, bool)>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::FnArgs(fn_args) = &ani_type {
+            assert_eq!(fn_args.elements.len(), 3);
+            assert!(matches!(
+                fn_args.elements[0],
+                AniType::String(StringType::String)
+            ));
+            assert!(matches!(
+                fn_args.elements[1],
+                AniType::Primitive(PrimitiveType::I64)
+            ));
+            assert!(matches!(
+                fn_args.elements[2],
+                AniType::Primitive(PrimitiveType::Bool)
+            ));
+        } else {
+            panic!("Expected FnArgs type");
+        }
+    }
+
+    #[test]
+    fn test_fn_args_signature() {
+        // FnArgs<(i32, i32)> should generate "II"
+        let ty: Type = syn::parse_quote!(FnArgs<(i32, i32)>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "II");
+
+        // FnArgs<(String, i64)> should generate "Lstd/core/String;J"
+        let ty: Type = syn::parse_quote!(FnArgs<(String, i64)>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;J");
+    }
+
+    #[test]
+    fn test_tuple_signature() {
+        // (i32, i32) should generate "II"
+        let ty: Type = syn::parse_quote!((i32, i32));
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "II");
+
+        // (String, bool, f64) should generate signatures concatenated
+        let ty: Type = syn::parse_quote!((String, bool, f64));
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;ZD");
+    }
+}
