@@ -6,6 +6,12 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# Enable anyhow example
+anyhow_example = ["ani/error_anyhow", "anyhow"]
+
 [dependencies]
 ani = { workspace = true }
 ani-derive = { workspace = true }
+anyhow = { version = "1", optional = true }

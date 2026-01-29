@@ -16,7 +16,7 @@
 //!
 //! ## Custom Error Types
 //!
-//! Like napi-rs, you can define custom error types:
+//! You can define custom error types that implement `AsRef<str>`:
 //!
 //! ```rust,ignore
 //! use ani::prelude::*;
@@ -39,6 +39,22 @@
 //!
 //! fn custom_error() -> std::result::Result<(), Error<MyError>> {
 //!     Err(Error::new(MyError::InvalidInput, "The input is invalid"))
+//! }
+//! ```
+//!
+//! ## Using anyhow (with `error_anyhow` feature)
+//!
+//! When the `error_anyhow` feature is enabled, `anyhow::Error` can be automatically
+//! converted to ANI errors:
+//!
+//! ```rust,ignore
+//! use ani::prelude::*;
+//! use anyhow::Context;
+//!
+//! fn may_fail() -> ani::error::Result<()> {
+//!     let result = std::fs::read_to_string("config.json")
+//!         .context("Failed to read config")?;  // anyhow::Error -> ani::Error
+//!     Ok(())
 //! }
 //! ```
 
@@ -337,6 +353,12 @@ impl From<std::io::Error> for Error {
     }
 }
 
+impl From<std::string::FromUtf8Error> for Error {
+    fn from(e: std::string::FromUtf8Error) -> Self {
+        Error::new(Status::Error, format!("UTF-8 conversion error: {}", e))
+    }
+}
+
 impl From<Status> for Error {
     fn from(status: Status) -> Self {
         Error::from_status(status)
@@ -346,6 +368,18 @@ impl From<Status> for Error {
 impl From<sys::ani_status> for Error {
     fn from(status: sys::ani_status) -> Self {
         Error::from_status(Status::from(status))
+    }
+}
+
+// ============================================================================
+// anyhow Integration (with error_anyhow feature)
+// ============================================================================
+
+#[cfg(feature = "error_anyhow")]
+impl From<anyhow::Error> for Error {
+    fn from(e: anyhow::Error) -> Self {
+        // Include the full error chain in the message
+        Error::new(Status::GenericFailure, format!("{:?}", e))
     }
 }
 

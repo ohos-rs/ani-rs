@@ -10,6 +10,98 @@ use crate::error::{BusinessError, Error, Result, Status, check_status};
 use crate::sys;
 use crate::types::*;
 
+// ============================================================================
+// ANI API Call Macros
+// ============================================================================
+
+/// Call ANI API function without return value
+///
+/// Usage: `ani_call!(self, FunctionName, arg1, arg2, ...)`
+macro_rules! ani_call {
+    ($self:ident, $func:ident $(, $arg:expr)*) => {{
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw $(, $arg)*);
+            check_status(status)
+        }
+    }};
+}
+
+/// Call ANI API function with primitive return value (result at end)
+///
+/// Usage: `ani_call_ret!(self, FunctionName, result_type, default_value, arg1, arg2, ...)`
+macro_rules! ani_call_ret {
+    ($self:ident, $func:ident, $ret_ty:ty, $default:expr $(, $arg:expr)*) => {{
+        let mut result: $ret_ty = $default;
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw $(, $arg)*, &mut result);
+            check_status(status)?;
+        }
+        Result::<$ret_ty>::Ok(result)
+    }};
+}
+
+/// Call ANI API function with primitive return value (result before last arg)
+///
+/// For APIs like Object_CallMethod_Int_A where signature is (env, obj, method, &result, args)
+macro_rules! ani_call_method_ret {
+    ($self:ident, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $method:expr, $args:expr) => {{
+        let mut result: $ret_ty = $default;
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw, $obj, $method, &mut result, $args);
+            check_status(status)?;
+        }
+        Result::<$ret_ty>::Ok(result)
+    }};
+}
+
+/// Call ANI API function with wrapped return value (result at end)
+///
+/// Usage: `ani_call_wrap!(self, FunctionName, sys_type, WrapperType, arg1, arg2, ...)`
+macro_rules! ani_call_wrap {
+    ($self:ident, $func:ident, $sys_ty:ty, $wrap_ty:ident $(, $arg:expr)*) => {{
+        let mut result: $sys_ty = ptr::null_mut();
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw $(, $arg)*, &mut result);
+            check_status(status)?;
+            Ok($wrap_ty::from_raw(result))
+        }
+    }};
+}
+
+/// Call ANI API function with wrapped return value (result before last arg)
+///
+/// For APIs like Object_CallMethod_Ref_A where signature is (env, obj, method, &result, args)
+macro_rules! ani_call_method_wrap {
+    ($self:ident, $func:ident, $sys_ty:ty, $wrap_ty:ident, $obj:expr, $method:expr, $args:expr) => {{
+        let mut result: $sys_ty = ptr::null_mut();
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw, $obj, $method, &mut result, $args);
+            check_status(status)?;
+            Ok($wrap_ty::from_raw(result))
+        }
+    }};
+}
+
+/// Call ANI API "by name" function with primitive return value
+///
+/// For APIs like Object_CallMethodByName_Int_A where signature is (env, obj, name, sig, &result, args)
+macro_rules! ani_call_by_name_ret {
+    ($self:ident, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $name:expr, $sig:expr, $args:expr) => {{
+        let mut result: $ret_ty = $default;
+        unsafe {
+            let api = &*(*$self.raw);
+            let status = (api.$func.unwrap())($self.raw, $obj, $name, $sig, &mut result, $args);
+            check_status(status)?;
+        }
+        Result::<$ret_ty>::Ok(result)
+    }};
+}
+
 /// ANI Environment Wrapper
 ///
 /// This is the main interface for interacting with ANI VM. All ANI operations go through this struct.
@@ -70,13 +162,7 @@ impl<'local> Env<'local> {
 
     /// Get ANI version
     pub fn get_version(&self) -> Result<u32> {
-        let mut version: u32 = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GetVersion.unwrap())(self.raw, &mut version);
-            check_status(status)?;
-        }
-        Ok(version)
+        ani_call_ret!(self, GetVersion, u32, 0)
     }
 
     // ========================================================================
@@ -91,14 +177,13 @@ impl<'local> Env<'local> {
     pub fn find_class(&self, descriptor: &str) -> Result<AniClass<'local>> {
         let c_descriptor = CString::new(descriptor)
             .map_err(|_| Error::new(Status::Error, "Invalid class descriptor"))?;
-        let mut result: sys::ani_class = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.FindClass.unwrap())(self.raw, c_descriptor.as_ptr(), &mut result);
-            check_status(status)?;
-            Ok(AniClass::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            FindClass,
+            sys::ani_class,
+            AniClass,
+            c_descriptor.as_ptr()
+        )
     }
 
     /// Find module
@@ -109,14 +194,13 @@ impl<'local> Env<'local> {
     pub fn find_module(&self, descriptor: &str) -> Result<AniModule<'local>> {
         let c_descriptor = CString::new(descriptor)
             .map_err(|_| Error::new(Status::Error, "Invalid module descriptor"))?;
-        let mut result: sys::ani_module = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.FindModule.unwrap())(self.raw, c_descriptor.as_ptr(), &mut result);
-            check_status(status)?;
-            Ok(AniModule::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            FindModule,
+            sys::ani_module,
+            AniModule,
+            c_descriptor.as_ptr()
+        )
     }
 
     /// Find namespace
@@ -127,28 +211,26 @@ impl<'local> Env<'local> {
     pub fn find_namespace(&self, descriptor: &str) -> Result<AniNamespace<'local>> {
         let c_descriptor = CString::new(descriptor)
             .map_err(|_| Error::new(Status::Error, "Invalid namespace descriptor"))?;
-        let mut result: sys::ani_namespace = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.FindNamespace.unwrap())(self.raw, c_descriptor.as_ptr(), &mut result);
-            check_status(status)?;
-            Ok(AniNamespace::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            FindNamespace,
+            sys::ani_namespace,
+            AniNamespace,
+            c_descriptor.as_ptr()
+        )
     }
 
     /// Find enum
     pub fn find_enum(&self, descriptor: &str) -> Result<AniEnum<'local>> {
         let c_descriptor = CString::new(descriptor)
             .map_err(|_| Error::new(Status::Error, "Invalid enum descriptor"))?;
-        let mut result: sys::ani_enum = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.FindEnum.unwrap())(self.raw, c_descriptor.as_ptr(), &mut result);
-            check_status(status)?;
-            Ok(AniEnum::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            FindEnum,
+            sys::ani_enum,
+            AniEnum,
+            c_descriptor.as_ptr()
+        )
     }
 
     // ========================================================================
@@ -172,20 +254,15 @@ impl<'local> Env<'local> {
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = CString::new(signature)
             .map_err(|_| Error::new(Status::Error, "Invalid method signature"))?;
-        let mut result: sys::ani_method = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Class_FindMethod.unwrap())(
-                self.raw,
-                class.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(AniMethod::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            Class_FindMethod,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw(),
+            c_name.as_ptr(),
+            c_sig.as_ptr()
+        )
     }
 
     /// Find class static method
@@ -199,20 +276,15 @@ impl<'local> Env<'local> {
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = CString::new(signature)
             .map_err(|_| Error::new(Status::Error, "Invalid method signature"))?;
-        let mut result: sys::ani_static_method = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Class_FindStaticMethod.unwrap())(
-                self.raw,
-                class.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(AniStaticMethod::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            Class_FindStaticMethod,
+            sys::ani_static_method,
+            AniStaticMethod,
+            class.as_raw(),
+            c_name.as_ptr(),
+            c_sig.as_ptr()
+        )
     }
 
     /// Find constructor
@@ -228,19 +300,14 @@ impl<'local> Env<'local> {
     pub fn find_field(&self, class: &AniClass<'_>, name: &str) -> Result<AniField> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
-        let mut result: sys::ani_field = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Class_FindField.unwrap())(
-                self.raw,
-                class.as_raw(),
-                c_name.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(AniField::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            Class_FindField,
+            sys::ani_field,
+            AniField,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
     }
 
     // ========================================================================
@@ -250,30 +317,20 @@ impl<'local> Env<'local> {
     /// Create new ANI string
     pub fn create_string(&self, s: &str) -> Result<AniString<'local>> {
         let bytes = s.as_bytes();
-        let mut result: sys::ani_string = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.String_NewUTF8.unwrap())(
-                self.raw,
-                bytes.as_ptr() as *const i8,
-                bytes.len(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(AniString::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            String_NewUTF8,
+            sys::ani_string,
+            AniString,
+            bytes.as_ptr() as *const i8,
+            bytes.len()
+        )
     }
 
     /// Get ANI string content
     pub fn get_string(&self, string: &AniString<'_>) -> Result<String> {
         // First get the string size
-        let mut size: sys::ani_size = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.String_GetUTF8Size.unwrap())(self.raw, string.as_raw(), &mut size);
-            check_status(status)?;
-        }
+        let size = ani_call_ret!(self, String_GetUTF8Size, sys::ani_size, 0, string.as_raw())?;
 
         // Allocate buffer and get string content
         let mut buffer = vec![0u8; size + 1];
@@ -306,47 +363,33 @@ impl<'local> Env<'local> {
         constructor: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<AniObject<'local>> {
-        let mut result: sys::ani_object = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_New_A.unwrap())(
-                self.raw,
-                class.as_raw(),
-                constructor.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(AniObject::from_raw(result))
-        }
+        ani_call_method_wrap!(
+            self,
+            Object_New_A,
+            sys::ani_object,
+            AniObject,
+            class.as_raw(),
+            constructor.as_raw(),
+            args.as_ptr()
+        )
     }
 
     /// Check if object is instance of specified type
     pub fn is_instance_of(&self, obj: &AniObject<'_>, class: &AniClass<'_>) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_InstanceOf.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                class.as_raw(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let result = ani_call_ret!(
+            self,
+            Object_InstanceOf,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            class.as_raw()
+        )?;
+        Ok(result != 0)
     }
 
     /// Get object type
     pub fn get_object_type(&self, obj: &AniObject<'_>) -> Result<AniType<'local>> {
-        let mut result: sys::ani_type = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_GetType.unwrap())(self.raw, obj.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(AniType::from_raw(result))
-        }
+        ani_call_wrap!(self, Object_GetType, sys::ani_type, AniType, obj.as_raw())
     }
 
     // ========================================================================
@@ -360,16 +403,13 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Void_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                args.as_ptr(),
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Object_CallMethod_Void_A,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     /// Call method returning int
@@ -379,19 +419,15 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<i32> {
-        let mut result: sys::ani_int = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Int_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Int_A,
+            sys::ani_int,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     /// Call a method returning long
@@ -401,19 +437,15 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<i64> {
-        let mut result: sys::ani_long = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Long_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Long_A,
+            sys::ani_long,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     /// Call a method returning double
@@ -423,19 +455,15 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<f64> {
-        let mut result: sys::ani_double = 0.0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Double_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Double_A,
+            sys::ani_double,
+            0.0,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     /// Call a method returning boolean
@@ -445,19 +473,16 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Boolean_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let result = ani_call_method_ret!(
+            self,
+            Object_CallMethod_Boolean_A,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )?;
+        Ok(result != 0)
     }
 
     /// Call a method returning object reference
@@ -467,19 +492,15 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<AniRef<'local>> {
-        let mut result: sys::ani_ref = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Ref_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                &mut result,
-                args.as_ptr(),
-            );
-            check_status(status)?;
-            Ok(AniRef::from_raw(result))
-        }
+        ani_call_method_wrap!(
+            self,
+            Object_CallMethod_Ref_A,
+            sys::ani_ref,
+            AniRef,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     // ========================================================================
@@ -496,21 +517,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_int = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Int_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Int_A,
+            sys::ani_int,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning long by name
@@ -523,21 +540,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_long = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Long_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Long_A,
+            sys::ani_long,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning double by name
@@ -550,21 +563,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_double = 0.0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Double_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Double_A,
+            sys::ani_double,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning float by name
@@ -577,21 +586,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_float = 0.0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Float_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Float_A,
+            sys::ani_float,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning boolean by name
@@ -604,21 +609,18 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Boolean_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        let result = ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Boolean_A,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )?;
+        Ok(result != 0)
     }
 
     /// Call a method returning byte by name
@@ -631,21 +633,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_byte = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Byte_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Byte_A,
+            sys::ani_byte,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning short by name
@@ -658,21 +656,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_short = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Short_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Short_A,
+            sys::ani_short,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a method returning char by name
@@ -685,21 +679,17 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        let mut result: sys::ani_char = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Char_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                &mut result,
-                ptr::null(), // No arguments
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Object_CallMethodByName_Char_A,
+            sys::ani_char,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null()
+        )
     }
 
     /// Call a void method by name
@@ -712,18 +702,15 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
-
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Void_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-                ptr::null(), // No arguments
-            );
-            check_status(status)
-        }
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call!(
+            self,
+            Object_CallMethodByName_Void_A,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            ptr::null::<sys::ani_value>()
+        )
     }
 
     /// Call a void method (using method handle)
@@ -733,16 +720,13 @@ impl<'local> Env<'local> {
         method: &AniMethod,
         args: &[sys::ani_value],
     ) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethod_Void_A.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                method.as_raw(),
-                args.as_ptr(),
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Object_CallMethod_Void_A,
+            obj.as_raw(),
+            method.as_raw(),
+            args.as_ptr()
+        )
     }
 
     // ========================================================================
@@ -817,18 +801,14 @@ impl<'local> Env<'local> {
     pub fn get_property_by_name_int(&self, obj: &AniObject<'_>, name: &str) -> Result<i32> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
-        let mut result: sys::ani_int = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_GetPropertyByName_Int.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Int,
+            sys::ani_int,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
     }
 
     /// Set int type property value by name
@@ -840,16 +820,13 @@ impl<'local> Env<'local> {
     ) -> Result<()> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_SetPropertyByName_Int.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                value,
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Int,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
     }
 
     // ========================================================================
@@ -862,16 +839,13 @@ impl<'local> Env<'local> {
         class: &AniClass<'_>,
         methods: &[sys::ani_native_function],
     ) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Class_BindNativeMethods.unwrap())(
-                self.raw,
-                class.as_raw(),
-                methods.as_ptr(),
-                methods.len(),
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Class_BindNativeMethods,
+            class.as_raw(),
+            methods.as_ptr(),
+            methods.len()
+        )
     }
 
     /// Bind native functions to a namespace
@@ -880,16 +854,13 @@ impl<'local> Env<'local> {
         namespace: &AniNamespace<'_>,
         functions: &[sys::ani_native_function],
     ) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Namespace_BindNativeFunctions.unwrap())(
-                self.raw,
-                namespace.as_raw(),
-                functions.as_ptr(),
-                functions.len(),
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Namespace_BindNativeFunctions,
+            namespace.as_raw(),
+            functions.as_ptr(),
+            functions.len()
+        )
     }
 
     /// Bind native functions to a module
@@ -898,16 +869,13 @@ impl<'local> Env<'local> {
         module: &AniModule<'_>,
         functions: &[sys::ani_native_function],
     ) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Module_BindNativeFunctions.unwrap())(
-                self.raw,
-                module.as_raw(),
-                functions.as_ptr(),
-                functions.len(),
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Module_BindNativeFunctions,
+            module.as_raw(),
+            functions.as_ptr(),
+            functions.len()
+        )
     }
 
     // ========================================================================
@@ -926,31 +894,19 @@ impl<'local> Env<'local> {
 
     /// Clear current exception
     pub fn clear_exception(&self) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.ResetError.unwrap())(self.raw);
-            check_status(status)
-        }
+        ani_call!(self, ResetError)
     }
 
     /// Describe current exception (print stack trace)
     pub fn describe_exception(&self) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.DescribeError.unwrap())(self.raw);
-            check_status(status)
-        }
+        ani_call!(self, DescribeError)
     }
 
     /// Throw an ANI error object
     ///
     /// This method throws an existing ANI error object (from `get_unhandled_error` or similar).
     pub fn throw_error(&self, error: &AniError<'_>) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.ThrowError.unwrap())(self.raw, error.as_raw());
-            check_status(status)
-        }
+        ani_call!(self, ThrowError, error.as_raw())
     }
 
     // ========================================================================
@@ -959,44 +915,36 @@ impl<'local> Env<'local> {
 
     /// Create a global reference
     pub fn create_global_ref<'a>(&self, obj: &AniRef<'a>) -> Result<GlobalRef> {
-        let mut result: sys::ani_ref = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GlobalReference_Create.unwrap())(self.raw, obj.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(GlobalRef::from_raw(result))
-        }
+        ani_call_wrap!(
+            self,
+            GlobalReference_Create,
+            sys::ani_ref,
+            GlobalRef,
+            obj.as_raw()
+        )
     }
 
     /// 删除全局引用
     pub fn delete_global_ref(&self, gref: GlobalRef) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GlobalReference_Delete.unwrap())(self.raw, gref.as_raw());
-            check_status(status)
-        }
+        ani_call!(self, GlobalReference_Delete, gref.as_raw())
     }
 
     /// 检查引用是否为 null
     pub fn is_null(&self, obj: &AniRef<'_>) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Reference_IsNull.unwrap())(self.raw, obj.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let result = ani_call_ret!(self, Reference_IsNull, sys::ani_boolean, 0, obj.as_raw())?;
+        Ok(result != 0)
     }
 
     /// 检查引用是否为 undefined
     pub fn is_undefined(&self, obj: &AniRef<'_>) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Reference_IsUndefined.unwrap())(self.raw, obj.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let result = ani_call_ret!(
+            self,
+            Reference_IsUndefined,
+            sys::ani_boolean,
+            0,
+            obj.as_raw()
+        )?;
+        Ok(result != 0)
     }
 
     /// 获取 null 对象引用
@@ -1053,14 +1001,15 @@ impl<'local> Env<'local> {
 
     /// Check if object is an instance of the specified class
     pub fn object_instance_of(&self, obj: &AniObject<'_>, cls: &AniClass<'_>) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status =
-                (api.Object_InstanceOf.unwrap())(self.raw, obj.as_raw(), cls.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(result != 0)
-        }
+        let result = ani_call_ret!(
+            self,
+            Object_InstanceOf,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            cls.as_raw()
+        )?;
+        Ok(result != 0)
     }
 
     // ========================================================================
@@ -1078,6 +1027,7 @@ impl<'local> Env<'local> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
 
         let mut result: sys::ani_ref = ptr::null_mut();
         unsafe {
@@ -1086,7 +1036,7 @@ impl<'local> Env<'local> {
                 self.raw,
                 obj.as_raw(),
                 c_name.as_ptr(),
-                c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null()),
+                sig_ptr,
                 &mut result,
                 arg,
             );
@@ -1103,18 +1053,14 @@ impl<'local> Env<'local> {
     pub fn get_property_by_name_double(&self, obj: &AniObject<'_>, name: &str) -> Result<f64> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
-        let mut result: sys::ani_double = 0.0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_GetPropertyByName_Double.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Double,
+            sys::ani_double,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
     }
 
     /// Set double type property value by name
@@ -1126,16 +1072,13 @@ impl<'local> Env<'local> {
     ) -> Result<()> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_SetPropertyByName_Double.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                value,
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Double,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
     }
 
     // ========================================================================
@@ -1214,12 +1157,7 @@ impl<'local> Env<'local> {
     /// }
     /// ```
     pub fn exist_unhandled_error(&self) -> Result<bool> {
-        let mut has_error: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.ExistUnhandledError.unwrap())(self.raw, &mut has_error);
-            check_status(status)?;
-        }
+        let has_error = ani_call_ret!(self, ExistUnhandledError, sys::ani_boolean, 0)?;
         Ok(has_error != 0)
     }
 
@@ -1248,11 +1186,7 @@ impl<'local> Env<'local> {
     ///
     /// This clears any pending exception so that subsequent ANI calls can proceed.
     pub fn reset_error(&self) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.ResetError.unwrap())(self.raw);
-            check_status(status)
-        }
+        ani_call!(self, ResetError)
     }
 
     /// Abort the process with an error message
@@ -1264,10 +1198,7 @@ impl<'local> Env<'local> {
     /// This function will terminate the process and never return.
     pub fn abort(&self, message: &str) -> ! {
         let c_message = CString::new(message).unwrap_or_else(|_| CString::new("Abort").unwrap());
-        unsafe {
-            let api = &*(*self.raw);
-            let _ = (api.Abort.unwrap())(self.raw, c_message.as_ptr());
-        }
+        let _ = ani_call!(self, Abort, c_message.as_ptr());
         // Abort should never return, but in case it does
         std::process::abort()
     }

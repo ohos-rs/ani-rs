@@ -9,9 +9,15 @@ keywords = ["ani", "arkts", "ohos", "harmonyos", "ffi"]
 categories = ["api-bindings", "development-tools::ffi"]
 
 [features]
+default = []
+# Enable anyhow error integration
+error_anyhow = ["dep:anyhow"]
 
 [dependencies]
 ani-sys = { path = "../sys" }
 ctor = "0.6"
+
+# Optional dependencies
+anyhow = { version = "1", optional = true }
 
 [dev-dependencies]

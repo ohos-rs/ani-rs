@@ -209,6 +209,70 @@ pub fn verify_token(token: &str) -> AuthResult<bool> {
 }
 
 // ===========================================================================
+// Example 6: Using anyhow (with error_anyhow feature)
+// ===========================================================================
+
+/// Example using anyhow for flexible error handling.
+/// Enable with: `ani = { features = ["error_anyhow"] }`
+#[cfg(feature = "anyhow_example")]
+mod anyhow_example {
+    use ani::prelude::*;
+    use ani_derive::ani;
+    use anyhow::{anyhow, Context};
+
+    /// Internal function that returns anyhow::Result.
+    /// Useful for operations that may fail in many ways.
+    fn load_config_internal(path: &str) -> anyhow::Result<String> {
+        if path.is_empty() {
+            return Err(anyhow!("Config path cannot be empty"));
+        }
+
+        // Simulate file operations with context
+        if !path.ends_with(".json") {
+            return Err(anyhow!("Invalid extension")).context("Config file must be a JSON file");
+        }
+
+        // Simulate successful read
+        Ok(format!("{{\"loaded_from\": \"{}\"}}", path))
+    }
+
+    /// Exported function using anyhow for error handling.
+    /// anyhow::Error automatically converts to ani::Error.
+    #[ani]
+    fn load_config(path: String) -> Result<String> {
+        let config = load_config_internal(&path)
+            .with_context(|| format!("Failed to load config from '{}'", path))?;
+        Ok(config)
+    }
+
+    /// Example showing how to combine multiple fallible operations.
+    #[ani]
+    fn process_data(input: String) -> Result<String> {
+        // Validate input is not empty
+        if input.is_empty() {
+            return Err(anyhow!("Input cannot be empty").into());
+        }
+
+        // Check for required format
+        if !input.contains(':') {
+            return Err(anyhow!("Input must contain key:value format")
+                .context("Invalid input format")
+                .into());
+        }
+
+        let parts: Vec<&str> = input.splitn(2, ':').collect();
+        let key = parts[0].trim();
+        let value = parts[1].trim();
+
+        if key.is_empty() {
+            return Err(anyhow!("Key cannot be empty").into());
+        }
+
+        Ok(format!("Processed {} = {}", key, value))
+    }
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
