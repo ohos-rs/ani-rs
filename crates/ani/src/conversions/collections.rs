@@ -179,8 +179,9 @@ impl<'env> FromAni<'env> for (i32, i32) {
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let vec: Vec<i32> = Vec::from_ani(env, value)?;
         if vec.len() != 2 {
-            return Err(Error::TypeConversion(
-                "Expected tuple of 2 elements".to_string(),
+            return Err(Error::new(
+                crate::error::Status::InvalidType,
+                "Expected tuple of 2 elements",
             ));
         }
         Ok((vec[0], vec[1]))

@@ -43,7 +43,7 @@ where
                 // Throw ANI exception
                 let error_msg = format!("{:?}", e);
                 let _ = throw_error(env, &error_msg);
-                Err(Error::Exception(error_msg))
+                Err(Error::new(crate::error::Status::PendingError, error_msg))
             }
         }
     }
@@ -75,7 +75,7 @@ pub fn throw_error(env: &Env<'_>, message: &str) -> Result<()> {
         let status = (api.ThrowError.unwrap())(env.as_raw(), error_obj.as_raw() as sys::ani_error);
 
         if status != sys::ani_status_ANI_OK {
-            return Err(Error::Status(crate::error::Status::from(status)));
+            return Err(Error::from_status(crate::error::Status::from(status)));
         }
 
         Ok(())
@@ -110,7 +110,7 @@ pub fn clear_exception(env: &Env<'_>) -> Result<()> {
         let api = &*(*env.as_raw());
         let status = (api.ResetError.unwrap())(env.as_raw());
         if status != sys::ani_status_ANI_OK {
-            return Err(Error::Status(crate::error::Status::from(status)));
+            return Err(Error::from_status(crate::error::Status::from(status)));
         }
         Ok(())
     }

@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "ani-derive"
-version = "0.0.1-alpha.1"
+version = "0.0.1-beta.1"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -27,7 +27,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -36,7 +35,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -45,7 +43,14 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
+]
+
+[[package]]
+name = "ani-example-error"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
 ]
 
 [[package]]
@@ -54,7 +59,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -63,7 +67,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -72,7 +75,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -81,7 +83,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -90,7 +91,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -99,7 +99,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -108,7 +107,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -117,7 +115,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]
@@ -126,7 +123,6 @@ version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
- "ani-sys",
 ]
 
 [[package]]

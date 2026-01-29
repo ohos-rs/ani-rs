@@ -3,7 +3,6 @@
 //! 演示如何处理 ArkTS 的 BigInt 类型
 //! BigInt 在 ANI 中对应 Lescompat/BigInt;
 
-use ani::prelude::*;
 use ani_derive::ani;
 
 // ============================================================================

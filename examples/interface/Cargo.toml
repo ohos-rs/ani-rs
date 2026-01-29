@@ -7,6 +7,5 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-ani = { path = "../../crates/ani", package = "ani" }
-ani-sys = { path = "../../crates/sys", package = "ani-sys" }
-ani-derive = { path = "../../crates/derive", package = "ani-derive" }
+ani = { workspace = true }
+ani-derive = { workspace = true }

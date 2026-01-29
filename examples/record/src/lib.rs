@@ -3,7 +3,6 @@
 //! 演示如何处理 ArkTS 的 Record<K, V> 类型
 //! Record 类似于 HashMap/Dictionary
 
-use ani::prelude::*;
 use ani_derive::ani;
 use std::collections::HashMap;
 

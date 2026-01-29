@@ -1,6 +1,6 @@
 [package]
 name = "ani-derive"
-version = "0.0.1-alpha.1"
+version = "0.0.1-beta.1"
 edition = "2024"
 description = "Procedural macros for ani-rs, providing napi-rs like ergonomics for ArkTS native development"
 license = "Apache-2.0"

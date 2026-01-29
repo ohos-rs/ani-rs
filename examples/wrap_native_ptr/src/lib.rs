@@ -3,7 +3,6 @@
 //! 演示如何在 ArkTS 对象中存储和管理 Rust 对象指针
 //! 这是实现类绑定的核心技术
 
-use ani::prelude::*;
 use ani_derive::ani;
 use std::collections::HashMap;
 use std::sync::Mutex;

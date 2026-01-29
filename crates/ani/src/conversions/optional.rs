@@ -2,13 +2,16 @@
 //!
 //! Implements conversion between Rust Option types and ANI nullable types
 //! - Option<T> <-> nullable T (null | T)
+//!
+//! This module provides generic support for Option<T> where T implements
+//! the required conversion traits (ToAni/FromAni).
 
 use crate::env::Env;
 use crate::error::Result;
 use crate::sys;
 use crate::types::*;
 
-use super::boxed::Boxable;
+use super::boxed::{Boxable, Unboxable};
 use super::traits::{FromAni, ToAni, TypeInfo};
 
 // ============================================================================
@@ -17,20 +20,41 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 
 impl<T: TypeInfo> TypeInfo for Option<T> {
     fn type_signature() -> &'static str {
-        // Option types need to use boxed types
-        // e.g., Option<i32> -> Lstd/core/Int;
+        // Option types use the inner type's signature
+        // For primitive types, this will be their boxed form when used as Option
         T::type_signature()
     }
+
     fn ani_c_type() -> &'static str {
-        "ani_object"
+        // Option always uses ani_ref since it can be null
+        "ani_ref"
     }
 }
 
 // ============================================================================
-// Conversion for Option<primitive types> - requires boxing
+// Generic Option<T> for Boxable/Unboxable types (primitives)
 // ============================================================================
 
-impl<'env> ToAni<'env> for Option<i32> {
+/// Marker trait for primitive types that need boxing when used in Option
+pub trait OptionalPrimitive<'env>:
+    Boxable<'env, Boxed = AniObject<'env>> + Unboxable<'env>
+{
+}
+
+// Implement OptionalPrimitive for all types that are both Boxable and Unboxable
+impl<'env> OptionalPrimitive<'env> for bool {}
+impl<'env> OptionalPrimitive<'env> for i8 {}
+impl<'env> OptionalPrimitive<'env> for i16 {}
+impl<'env> OptionalPrimitive<'env> for u16 {}
+impl<'env> OptionalPrimitive<'env> for i32 {}
+impl<'env> OptionalPrimitive<'env> for i64 {}
+impl<'env> OptionalPrimitive<'env> for f32 {}
+impl<'env> OptionalPrimitive<'env> for f64 {}
+
+impl<'env, T> ToAni<'env> for Option<T>
+where
+    T: OptionalPrimitive<'env>,
+{
     type Output = sys::ani_ref;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
@@ -44,36 +68,10 @@ impl<'env> ToAni<'env> for Option<i32> {
     }
 }
 
-impl<'env> FromAni<'env> for Option<i32> {
-    type Input = sys::ani_ref;
-
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
-            Ok(None)
-        } else {
-            // Unbox to get the value
-            let obj = unsafe { AniObject::from_raw(value as sys::ani_object) };
-            let unboxed = env.call_method_by_name_int(&obj, "unboxed", Some(":I"))?;
-            Ok(Some(unboxed))
-        }
-    }
-}
-
-impl<'env> ToAni<'env> for Option<i64> {
-    type Output = sys::ani_ref;
-
-    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        match self {
-            Some(value) => {
-                let boxed = value.box_value(env)?;
-                Ok(boxed.as_raw() as sys::ani_ref)
-            }
-            None => Ok(std::ptr::null_mut()),
-        }
-    }
-}
-
-impl<'env> FromAni<'env> for Option<i64> {
+impl<'env, T> FromAni<'env> for Option<T>
+where
+    T: OptionalPrimitive<'env>,
+{
     type Input = sys::ani_ref;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
@@ -81,63 +79,7 @@ impl<'env> FromAni<'env> for Option<i64> {
             Ok(None)
         } else {
             let obj = unsafe { AniObject::from_raw(value as sys::ani_object) };
-            let unboxed = env.call_method_by_name_long(&obj, "unboxed", Some(":J"))?;
-            Ok(Some(unboxed))
-        }
-    }
-}
-
-impl<'env> ToAni<'env> for Option<f64> {
-    type Output = sys::ani_ref;
-
-    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        match self {
-            Some(value) => {
-                let boxed = value.box_value(env)?;
-                Ok(boxed.as_raw() as sys::ani_ref)
-            }
-            None => Ok(std::ptr::null_mut()),
-        }
-    }
-}
-
-impl<'env> FromAni<'env> for Option<f64> {
-    type Input = sys::ani_ref;
-
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
-            Ok(None)
-        } else {
-            let obj = unsafe { AniObject::from_raw(value as sys::ani_object) };
-            let unboxed = env.call_method_by_name_double(&obj, "unboxed", Some(":D"))?;
-            Ok(Some(unboxed))
-        }
-    }
-}
-
-impl<'env> ToAni<'env> for Option<bool> {
-    type Output = sys::ani_ref;
-
-    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        match self {
-            Some(value) => {
-                let boxed = value.box_value(env)?;
-                Ok(boxed.as_raw() as sys::ani_ref)
-            }
-            None => Ok(std::ptr::null_mut()),
-        }
-    }
-}
-
-impl<'env> FromAni<'env> for Option<bool> {
-    type Input = sys::ani_ref;
-
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
-            Ok(None)
-        } else {
-            let obj = unsafe { AniObject::from_raw(value as sys::ani_object) };
-            let unboxed = env.call_method_by_name_boolean(&obj, "unboxed", Some(":Z"))?;
+            let unboxed = T::unbox(env, &obj)?;
             Ok(Some(unboxed))
         }
     }
@@ -176,22 +118,108 @@ impl<'env> FromAni<'env> for Option<String> {
 }
 
 // ============================================================================
-// Generic Option<T> implementation (for object types)
+// Option<AniObject> - objects can directly use null
 // ============================================================================
 
-/// General Option conversion helper
+impl<'env> ToAni<'env> for Option<AniObject<'env>> {
+    type Output = sys::ani_object;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        match self {
+            Some(obj) => Ok(obj.as_raw()),
+            None => Ok(std::ptr::null_mut()),
+        }
+    }
+}
+
+impl<'env> FromAni<'env> for Option<AniObject<'env>> {
+    type Input = sys::ani_object;
+
+    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(unsafe { AniObject::from_raw(value) }))
+        }
+    }
+}
+
+// ============================================================================
+// General Option conversion helper
+// ============================================================================
+
+/// General Option conversion helper utilities
 pub struct OptionHelper;
 
 impl OptionHelper {
     /// Check if ANI reference is null
+    #[inline]
     pub fn is_null(value: sys::ani_ref) -> bool {
         value.is_null()
     }
 
-    /// Convert null to None
-    pub fn null_to_none<T>(value: sys::ani_ref) -> Option<sys::ani_ref> {
+    /// Convert null to None, non-null to Some
+    #[inline]
+    pub fn null_to_none(value: sys::ani_ref) -> Option<sys::ani_ref> {
         if value.is_null() { None } else { Some(value) }
     }
+
+    /// Convert Option to nullable pointer
+    #[inline]
+    pub fn option_to_nullable<T>(opt: Option<*mut T>) -> *mut T {
+        opt.unwrap_or(std::ptr::null_mut())
+    }
+}
+
+// ============================================================================
+// Macro for extending Option support to custom types
+// ============================================================================
+
+/// Macro to implement Option<T> support for reference types
+///
+/// Use this macro to add Option support for custom types that implement
+/// ToAni and FromAni with reference-based outputs.
+///
+/// # Example
+///
+/// ```ignore
+/// impl_option_for_ref_type!(MyCustomType, sys::ani_object);
+/// ```
+#[macro_export]
+macro_rules! impl_option_for_ref_type {
+    ($ty:ty, $ani_ty:ty) => {
+        impl<'env> $crate::bindgen_runtime::ToAni<'env> for Option<$ty>
+        where
+            $ty: $crate::bindgen_runtime::ToAni<'env, Output = $ani_ty>,
+        {
+            type Output = $ani_ty;
+
+            fn to_ani(self, env: &$crate::env::Env<'env>) -> $crate::error::Result<Self::Output> {
+                match self {
+                    Some(value) => value.to_ani(env),
+                    None => Ok(std::ptr::null_mut()),
+                }
+            }
+        }
+
+        impl<'env> $crate::bindgen_runtime::FromAni<'env> for Option<$ty>
+        where
+            $ty: $crate::bindgen_runtime::FromAni<'env, Input = $ani_ty>,
+        {
+            type Input = $ani_ty;
+
+            fn from_ani(
+                env: &$crate::env::Env<'env>,
+                value: Self::Input,
+            ) -> $crate::error::Result<Self> {
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(<$ty>::from_ani(env, value)?))
+                }
+            }
+        }
+    };
 }
 
 #[cfg(test)]
@@ -201,12 +229,33 @@ mod tests {
     #[test]
     fn test_option_type_signature() {
         assert_eq!(<Option<i32>>::type_signature(), "I");
+        assert_eq!(<Option<i64>>::type_signature(), "J");
+        assert_eq!(<Option<f64>>::type_signature(), "D");
+        assert_eq!(<Option<bool>>::type_signature(), "Z");
         assert_eq!(<Option<String>>::type_signature(), "Lstd/core/String;");
+    }
+
+    #[test]
+    fn test_option_ani_c_type() {
+        assert_eq!(<Option<i32>>::ani_c_type(), "ani_ref");
+        assert_eq!(<Option<String>>::ani_c_type(), "ani_ref");
     }
 
     #[test]
     fn test_option_helper() {
         assert!(OptionHelper::is_null(std::ptr::null_mut()));
         assert!(!OptionHelper::is_null(1 as sys::ani_ref));
+
+        assert!(OptionHelper::null_to_none(std::ptr::null_mut()).is_none());
+        assert!(OptionHelper::null_to_none(1 as sys::ani_ref).is_some());
+    }
+
+    #[test]
+    fn test_option_to_nullable() {
+        let some_ptr: Option<*mut i32> = Some(1 as *mut i32);
+        let none_ptr: Option<*mut i32> = None;
+
+        assert!(!OptionHelper::option_to_nullable(some_ptr).is_null());
+        assert!(OptionHelper::option_to_nullable(none_ptr).is_null());
     }
 }

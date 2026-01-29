@@ -1,5 +1,5 @@
 [package]
-name = "ani-example-optional"
+name = "ani-example-error"
 version = "0.1.0"
 edition = "2021"
 

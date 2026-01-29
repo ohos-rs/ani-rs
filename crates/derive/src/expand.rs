@@ -112,7 +112,11 @@ pub fn expand_function(attrs: AniBindgenAttrs, func: ItemFn, prepare: TokenStrea
 
 /// Expand ani_bindgen for impl blocks
 /// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
-pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenStream) -> TokenStream {
+pub fn expand_impl(
+    attrs: AniBindgenAttrs,
+    impl_block: ItemImpl,
+    prepare: TokenStream,
+) -> TokenStream {
     let struct_name = if let syn::Type::Path(type_path) = &*impl_block.self_ty {
         type_path
             .path
@@ -179,7 +183,7 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenS
             wrappers.push(wrapper);
 
             let entry = quote! {
-                ani_sys::ani_native_function {
+                ani::sys::ani_native_function {
                     name: concat!(#ets_name, "\0").as_ptr() as *const std::os::raw::c_char,
                     signature: concat!(#signature, "\0").as_ptr() as *const std::os::raw::c_char,
                     pointer: #wrapper_name as *const std::os::raw::c_void,
@@ -209,8 +213,8 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenS
         #(#wrappers)*
 
         #[doc(hidden)]
-        pub unsafe fn #bind_fn_name(env: *mut ani_sys::ani_env) -> ani_sys::ani_status {
-            let mut cls: ani_sys::ani_class = std::ptr::null_mut();
+        pub unsafe fn #bind_fn_name(env: *mut ani::sys::ani_env) -> ani::sys::ani_status {
+            let mut cls: ani::sys::ani_class = std::ptr::null_mut();
             let class_name = concat!(#class_descriptor, "\0");
 
             let api = &*(*env);
@@ -220,11 +224,11 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenS
                 &mut cls
             );
 
-            if status != ani_sys::ani_status_ANI_OK {
+            if status != ani::sys::ani_status_ANI_OK {
                 return status;
             }
 
-            let methods: [ani_sys::ani_native_function; #methods_count] = [
+            let methods: [ani::sys::ani_native_function; #methods_count] = [
                 #(#method_entries),*
             ];
 
@@ -240,7 +244,11 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenS
 
 /// Expand ani_bindgen for structs
 /// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
-pub fn expand_struct(attrs: AniBindgenAttrs, struct_item: ItemStruct, prepare: TokenStream) -> TokenStream {
+pub fn expand_struct(
+    attrs: AniBindgenAttrs,
+    struct_item: ItemStruct,
+    prepare: TokenStream,
+) -> TokenStream {
     let struct_name = &struct_item.ident;
     let class_name = attrs
         .class

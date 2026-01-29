@@ -6,7 +6,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr;
 
-use crate::error::{Error, Result, check_status};
+use crate::error::{BusinessError, Error, Result, Status, check_status};
 use crate::sys;
 use crate::types::*;
 
@@ -38,7 +38,10 @@ impl<'local> Env<'local> {
     #[inline]
     pub unsafe fn from_raw(raw: *mut sys::ani_env) -> Result<Self> {
         if raw.is_null() {
-            return Err(Error::NullPointer("ani_env"));
+            return Err(Error::new(
+                Status::InvalidArgs,
+                format!("Null pointer: {}", "ani_env"),
+            ));
         }
         Ok(Self {
             raw,
@@ -87,7 +90,7 @@ impl<'local> Env<'local> {
     /// * `descriptor` - Class descriptor, e.g., "Lstd/core/String;"
     pub fn find_class(&self, descriptor: &str) -> Result<AniClass<'local>> {
         let c_descriptor = CString::new(descriptor)
-            .map_err(|_| Error::Custom("Invalid class descriptor".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid class descriptor"))?;
         let mut result: sys::ani_class = ptr::null_mut();
 
         unsafe {
@@ -105,7 +108,7 @@ impl<'local> Env<'local> {
     /// * `descriptor` - Module descriptor, e.g., "Lmy_module;"
     pub fn find_module(&self, descriptor: &str) -> Result<AniModule<'local>> {
         let c_descriptor = CString::new(descriptor)
-            .map_err(|_| Error::Custom("Invalid module descriptor".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid module descriptor"))?;
         let mut result: sys::ani_module = ptr::null_mut();
 
         unsafe {
@@ -123,7 +126,7 @@ impl<'local> Env<'local> {
     /// * `descriptor` - Namespace descriptor, e.g., "Lmodule/MyNamespace;"
     pub fn find_namespace(&self, descriptor: &str) -> Result<AniNamespace<'local>> {
         let c_descriptor = CString::new(descriptor)
-            .map_err(|_| Error::Custom("Invalid namespace descriptor".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid namespace descriptor"))?;
         let mut result: sys::ani_namespace = ptr::null_mut();
 
         unsafe {
@@ -137,7 +140,7 @@ impl<'local> Env<'local> {
     /// Find enum
     pub fn find_enum(&self, descriptor: &str) -> Result<AniEnum<'local>> {
         let c_descriptor = CString::new(descriptor)
-            .map_err(|_| Error::Custom("Invalid enum descriptor".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid enum descriptor"))?;
         let mut result: sys::ani_enum = ptr::null_mut();
 
         unsafe {
@@ -165,9 +168,10 @@ impl<'local> Env<'local> {
         name: &str,
         signature: &str,
     ) -> Result<AniMethod> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = CString::new(signature)
-            .map_err(|_| Error::Custom("Invalid method signature".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid method signature"))?;
         let mut result: sys::ani_method = ptr::null_mut();
 
         unsafe {
@@ -191,9 +195,10 @@ impl<'local> Env<'local> {
         name: &str,
         signature: &str,
     ) -> Result<AniStaticMethod> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = CString::new(signature)
-            .map_err(|_| Error::Custom("Invalid method signature".into()))?;
+            .map_err(|_| Error::new(Status::Error, "Invalid method signature"))?;
         let mut result: sys::ani_static_method = ptr::null_mut();
 
         unsafe {
@@ -221,7 +226,8 @@ impl<'local> Env<'local> {
 
     /// Find class field
     pub fn find_field(&self, class: &AniClass<'_>, name: &str) -> Result<AniField> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid field name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
         let mut result: sys::ani_field = ptr::null_mut();
 
         unsafe {
@@ -285,7 +291,8 @@ impl<'local> Env<'local> {
         }
 
         buffer.truncate(written);
-        String::from_utf8(buffer).map_err(|e| Error::Custom(format!("Invalid UTF-8: {}", e)))
+        String::from_utf8(buffer)
+            .map_err(|e| Error::new(Status::Error, format!("Invalid UTF-8: {}", e)))
     }
 
     // ========================================================================
@@ -486,7 +493,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<i32> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_int = 0;
@@ -512,7 +520,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<i64> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_long = 0;
@@ -538,7 +547,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<f64> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_double = 0.0;
@@ -564,7 +574,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<f32> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_float = 0.0;
@@ -590,7 +601,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<bool> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_boolean = 0;
@@ -616,7 +628,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<i8> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_byte = 0;
@@ -642,7 +655,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<i16> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_short = 0;
@@ -668,7 +682,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<u16> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_char = 0;
@@ -694,7 +709,8 @@ impl<'local> Env<'local> {
         name: &str,
         signature: Option<&str>,
     ) -> Result<()> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         unsafe {
@@ -761,7 +777,8 @@ impl<'local> Env<'local> {
 
     /// Get int type field value by name
     pub fn get_field_by_name_int(&self, obj: &AniObject<'_>, name: &str) -> Result<i32> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid field name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
         let mut result: sys::ani_int = 0;
         unsafe {
             let api = &*(*self.raw);
@@ -778,7 +795,8 @@ impl<'local> Env<'local> {
 
     /// Set int type field value by name
     pub fn set_field_by_name_int(&self, obj: &AniObject<'_>, name: &str, value: i32) -> Result<()> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid field name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
         unsafe {
             let api = &*(*self.raw);
             let status = (api.Object_SetFieldByName_Int.unwrap())(
@@ -798,7 +816,7 @@ impl<'local> Env<'local> {
     /// Get int type property value by name
     pub fn get_property_by_name_int(&self, obj: &AniObject<'_>, name: &str) -> Result<i32> {
         let c_name =
-            CString::new(name).map_err(|_| Error::Custom("Invalid property name".into()))?;
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
         let mut result: sys::ani_int = 0;
         unsafe {
             let api = &*(*self.raw);
@@ -821,7 +839,7 @@ impl<'local> Env<'local> {
         value: i32,
     ) -> Result<()> {
         let c_name =
-            CString::new(name).map_err(|_| Error::Custom("Invalid property name".into()))?;
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
         unsafe {
             let api = &*(*self.raw);
             let status = (api.Object_SetPropertyByName_Int.unwrap())(
@@ -924,7 +942,9 @@ impl<'local> Env<'local> {
         }
     }
 
-    /// Throw an exception
+    /// Throw an ANI error object
+    ///
+    /// This method throws an existing ANI error object (from `get_unhandled_error` or similar).
     pub fn throw_error(&self, error: &AniError<'_>) -> Result<()> {
         unsafe {
             let api = &*(*self.raw);
@@ -1033,7 +1053,8 @@ impl<'local> Env<'local> {
         signature: Option<&str>,
         arg: sys::ani_int,
     ) -> Result<AniRef<'local>> {
-        let c_name = CString::new(name).map_err(|_| Error::Custom("Invalid method name".into()))?;
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
 
         let mut result: sys::ani_ref = ptr::null_mut();
@@ -1059,7 +1080,7 @@ impl<'local> Env<'local> {
     /// Get double type property value by name
     pub fn get_property_by_name_double(&self, obj: &AniObject<'_>, name: &str) -> Result<f64> {
         let c_name =
-            CString::new(name).map_err(|_| Error::Custom("Invalid property name".into()))?;
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
         let mut result: sys::ani_double = 0.0;
         unsafe {
             let api = &*(*self.raw);
@@ -1082,7 +1103,7 @@ impl<'local> Env<'local> {
         value: f64,
     ) -> Result<()> {
         let c_name =
-            CString::new(name).map_err(|_| Error::Custom("Invalid property name".into()))?;
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
         unsafe {
             let api = &*(*self.raw);
             let status = (api.Object_SetPropertyByName_Double.unwrap())(
@@ -1093,5 +1114,139 @@ impl<'local> Env<'local> {
             );
             check_status(status)
         }
+    }
+
+    // ========================================================================
+    // Error Handling (High-Level)
+    // ========================================================================
+
+    /// Throw an error with a message into the ANI environment
+    ///
+    /// This creates an Error object and throws it as an exception.
+    /// Unlike [`throw_error`](Self::throw_error), this method takes a message string
+    /// and creates the error object automatically.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use ani::prelude::*;
+    ///
+    /// fn may_throw(env: &Env) -> Result<()> {
+    ///     if some_condition {
+    ///         env.throw_error_message("Something went wrong")?;
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn throw_error_message(&self, message: &str) -> Result<()> {
+        let err = Error::new(Status::Error, message);
+        let biz_err = BusinessError::from(err);
+        unsafe { biz_err.throw_into(self.raw) };
+        Ok(())
+    }
+
+    /// Throw a type error into the ANI environment
+    ///
+    /// This creates a BusinessError with type error status.
+    pub fn throw_type_error(&self, message: &str) -> Result<()> {
+        let err = Error::new(Status::InvalidType, message);
+        let biz_err = BusinessError::from(err);
+        unsafe { biz_err.throw_into(self.raw) };
+        Ok(())
+    }
+
+    /// Throw a range error into the ANI environment
+    ///
+    /// This creates a BusinessError with range error status.
+    pub fn throw_range_error(&self, message: &str) -> Result<()> {
+        let err = Error::new(Status::OutOfRange, message);
+        let biz_err = BusinessError::from(err);
+        unsafe { biz_err.throw_into(self.raw) };
+        Ok(())
+    }
+
+    /// Throw any Error as an ANI BusinessError
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use ani::prelude::*;
+    ///
+    /// let err = Error::new(Status::InvalidArgs, "Bad input");
+    /// env.throw(err)?;
+    /// ```
+    pub fn throw<S: AsRef<str> + std::fmt::Debug>(&self, error: Error<S>) -> Result<()> {
+        let biz_err = BusinessError::from(Error::new(Status::GenericFailure, error.to_string()));
+        unsafe { biz_err.throw_into(self.raw) };
+        Ok(())
+    }
+
+    /// Check if there's an unhandled error/exception pending
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if env.exist_unhandled_error()? {
+    ///     // Handle the error
+    ///     env.reset_error()?;
+    /// }
+    /// ```
+    pub fn exist_unhandled_error(&self) -> Result<bool> {
+        let mut has_error: sys::ani_boolean = 0;
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.ExistUnhandledError.unwrap())(self.raw, &mut has_error);
+            check_status(status)?;
+        }
+        Ok(has_error != 0)
+    }
+
+    /// Get the unhandled error if one exists
+    ///
+    /// Returns `None` if there is no pending error.
+    pub fn get_unhandled_error(&self) -> Result<Option<AniError<'local>>> {
+        if !self.exist_unhandled_error()? {
+            return Ok(None);
+        }
+
+        let mut result: sys::ani_error = ptr::null_mut();
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.GetUnhandledError.unwrap())(self.raw, &mut result);
+            check_status(status)?;
+            if result.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(AniError::from_raw(result)))
+            }
+        }
+    }
+
+    /// Clear/reset the pending error state
+    ///
+    /// This clears any pending exception so that subsequent ANI calls can proceed.
+    pub fn reset_error(&self) -> Result<()> {
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.ResetError.unwrap())(self.raw);
+            check_status(status)
+        }
+    }
+
+    /// Abort the process with an error message
+    ///
+    /// This is for unrecoverable errors that should terminate the process.
+    ///
+    /// # Safety
+    ///
+    /// This function will terminate the process and never return.
+    pub fn abort(&self, message: &str) -> ! {
+        let c_message = CString::new(message).unwrap_or_else(|_| CString::new("Abort").unwrap());
+        unsafe {
+            let api = &*(*self.raw);
+            let _ = (api.Abort.unwrap())(self.raw, c_message.as_ptr());
+        }
+        // Abort should never return, but in case it does
+        std::process::abort()
     }
 }

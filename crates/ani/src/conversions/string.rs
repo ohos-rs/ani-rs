@@ -152,7 +152,12 @@ impl<'env> FromAni<'env> for CString {
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
-        CString::new(s).map_err(|_| Error::TypeConversion("Invalid string for CString".into()))
+        CString::new(s).map_err(|_| {
+            Error::new(
+                crate::error::Status::InvalidType,
+                "Invalid string for CString",
+            )
+        })
     }
 }
 
@@ -167,36 +172,42 @@ impl<'env> FromAni<'env> for CString {
 /// Caller must ensure env and string pointers are valid
 pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -> Result<String> {
     if env.is_null() || string.is_null() {
-        return Err(Error::NullPointer("string"));
+        return Err(Error::new(
+            crate::error::Status::InvalidArgs,
+            format!("Null pointer: {}", "string"),
+        ));
     }
 
-    let api = unsafe { &*(*env) };
+    unsafe {
+        let api = &*(*env);
 
-    // 获取字符串长度
-    let mut len: usize = 0;
-    let status = (api.String_GetUTF8Size.unwrap())(env, string, &mut len);
-    if status != sys::ani_status_ANI_OK {
-        return Err(Error::Status(crate::error::Status::from(status)));
+        // 获取字符串长度
+        let mut len: usize = 0;
+        let status = (api.String_GetUTF8Size.unwrap())(env, string, &mut len);
+        if status != sys::ani_status_ANI_OK {
+            return Err(Error::from_status(crate::error::Status::from(status)));
+        }
+
+        // 分配缓冲区并获取内容
+        let mut buffer = vec![0u8; len + 1];
+        let mut chars_copied: usize = 0;
+
+        let status = (api.String_GetUTF8.unwrap())(
+            env,
+            string,
+            buffer.as_mut_ptr() as *mut i8,
+            len + 1,
+            &mut chars_copied,
+        );
+
+        if status != sys::ani_status_ANI_OK {
+            return Err(Error::from_status(crate::error::Status::from(status)));
+        }
+
+        buffer.truncate(chars_copied);
+        String::from_utf8(buffer)
+            .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid UTF-8 string"))
     }
-
-    // 分配缓冲区并获取内容
-    let mut buffer = vec![0u8; len + 1];
-    let mut chars_copied: usize = 0;
-
-    let status = (api.String_GetUTF8.unwrap())(
-        env,
-        string,
-        buffer.as_mut_ptr() as *mut i8,
-        len + 1,
-        &mut chars_copied,
-    );
-
-    if status != sys::ani_status_ANI_OK {
-        return Err(Error::Status(crate::error::Status::from(status)));
-    }
-
-    buffer.truncate(chars_copied);
-    String::from_utf8(buffer).map_err(|_| Error::TypeConversion("Invalid UTF-8 string".into()))
 }
 
 /// Create ANI string
@@ -206,20 +217,26 @@ pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -
 /// Caller must ensure env pointer is valid
 pub unsafe fn string_to_raw(env: *mut sys::ani_env, s: &str) -> Result<sys::ani_string> {
     if env.is_null() {
-        return Err(Error::NullPointer("env"));
+        return Err(Error::new(
+            crate::error::Status::InvalidArgs,
+            format!("Null pointer: {}", "env"),
+        ));
     }
 
-    let api = unsafe { &*(*env) };
-    let c_str = CString::new(s).map_err(|_| Error::TypeConversion("Invalid string".into()))?;
+    unsafe {
+        let api = &*(*env);
+        let c_str = CString::new(s)
+            .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid string"))?;
 
-    let mut result: sys::ani_string = std::ptr::null_mut();
-    let status = (api.String_NewUTF8.unwrap())(env, c_str.as_ptr(), s.len(), &mut result);
+        let mut result: sys::ani_string = std::ptr::null_mut();
+        let status = (api.String_NewUTF8.unwrap())(env, c_str.as_ptr(), s.len(), &mut result);
 
-    if status != sys::ani_status_ANI_OK {
-        return Err(Error::Status(crate::error::Status::from(status)));
+        if status != sys::ani_status_ANI_OK {
+            return Err(Error::from_status(crate::error::Status::from(status)));
+        }
+
+        Ok(result)
     }
-
-    Ok(result)
 }
 
 #[cfg(test)]

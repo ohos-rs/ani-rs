@@ -1,10 +1,60 @@
 //! ANI Error Handling
 //!
-//! Provides unified error types and result types
+//! Provides unified error types and result types that support custom business errors.
+//!
+//! # Usage
+//!
+//! ## Basic Usage with Status
+//!
+//! ```rust,ignore
+//! use ani::prelude::*;
+//!
+//! fn may_fail() -> Result<i32> {
+//!     Err(Error::new(Status::InvalidArgs, "Invalid arguments"))
+//! }
+//! ```
+//!
+//! ## Custom Error Types
+//!
+//! Like napi-rs, you can define custom error types:
+//!
+//! ```rust,ignore
+//! use ani::prelude::*;
+//!
+//! pub enum MyError {
+//!     InvalidInput,
+//!     NotFound,
+//!     Internal(String),
+//! }
+//!
+//! impl AsRef<str> for MyError {
+//!     fn as_ref(&self) -> &str {
+//!         match self {
+//!             MyError::InvalidInput => "InvalidInput",
+//!             MyError::NotFound => "NotFound",
+//!             MyError::Internal(_) => "InternalError",
+//!         }
+//!     }
+//! }
+//!
+//! fn custom_error() -> std::result::Result<(), Error<MyError>> {
+//!     Err(Error::new(MyError::InvalidInput, "The input is invalid"))
+//! }
+//! ```
 
+use std::ffi::CString;
 use std::fmt;
+use std::ptr;
+
+use crate::sys;
+
+// ============================================================================
+// Status Code
+// ============================================================================
 
 /// ANI Status Code
+///
+/// Standard status codes returned by ANI API calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Status {
@@ -25,7 +75,7 @@ pub enum Status {
     /// Not found
     NotFound = 7,
     /// Already bound
-    AlreadyBinded = 8,
+    AlreadyBound = 8,
     /// Reference limit exceeded
     OutOfRef = 9,
     /// Out of memory
@@ -38,10 +88,47 @@ pub enum Status {
     InvalidVersion = 13,
     /// Ambiguous
     Ambiguous = 14,
+    /// Generic failure for custom errors
+    GenericFailure = 100,
 }
 
-impl From<crate::sys::ani_status> for Status {
-    fn from(status: crate::sys::ani_status) -> Self {
+impl AsRef<str> for Status {
+    fn as_ref(&self) -> &str {
+        match self {
+            Status::Ok => "Ok",
+            Status::Error => "Error",
+            Status::InvalidArgs => "InvalidArgs",
+            Status::InvalidType => "InvalidType",
+            Status::InvalidDescriptor => "InvalidDescriptor",
+            Status::IncorrectRef => "IncorrectRef",
+            Status::PendingError => "PendingError",
+            Status::NotFound => "NotFound",
+            Status::AlreadyBound => "AlreadyBound",
+            Status::OutOfRef => "OutOfRef",
+            Status::OutOfMemory => "OutOfMemory",
+            Status::OutOfRange => "OutOfRange",
+            Status::BufferTooSmall => "BufferTooSmall",
+            Status::InvalidVersion => "InvalidVersion",
+            Status::Ambiguous => "Ambiguous",
+            Status::GenericFailure => "GenericFailure",
+        }
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status::GenericFailure
+    }
+}
+
+impl From<sys::ani_status> for Status {
+    fn from(status: sys::ani_status) -> Self {
         match status {
             0 => Status::Ok,
             1 => Status::Error,
@@ -51,7 +138,7 @@ impl From<crate::sys::ani_status> for Status {
             5 => Status::IncorrectRef,
             6 => Status::PendingError,
             7 => Status::NotFound,
-            8 => Status::AlreadyBinded,
+            8 => Status::AlreadyBound,
             9 => Status::OutOfRef,
             10 => Status::OutOfMemory,
             11 => Status::OutOfRange,
@@ -63,89 +150,238 @@ impl From<crate::sys::ani_status> for Status {
     }
 }
 
-impl From<Status> for crate::sys::ani_status {
+impl From<Status> for sys::ani_status {
     fn from(status: Status) -> Self {
-        status as crate::sys::ani_status
+        match status {
+            Status::Ok => 0,
+            Status::Error => 1,
+            Status::InvalidArgs => 2,
+            Status::InvalidType => 3,
+            Status::InvalidDescriptor => 4,
+            Status::IncorrectRef => 5,
+            Status::PendingError => 6,
+            Status::NotFound => 7,
+            Status::AlreadyBound => 8,
+            Status::OutOfRef => 9,
+            Status::OutOfMemory => 10,
+            Status::OutOfRange => 11,
+            Status::BufferTooSmall => 12,
+            Status::InvalidVersion => 13,
+            Status::Ambiguous => 14,
+            Status::GenericFailure => 1, // Maps to generic error
+        }
     }
 }
+
+// ============================================================================
+// Error Type
+// ============================================================================
 
 /// ANI Error Type
+///
+/// Generic over the status type `S`, which must implement `AsRef<str>`.
+/// This allows custom error types to be used as status codes.
+///
+/// # Type Parameters
+///
+/// * `S` - The status type, defaults to [`Status`]. Can be any type implementing `AsRef<str>`.
+///
+/// # Examples
+///
+/// ```rust
+/// use ani::error::{Error, Status};
+///
+/// // Using default Status
+/// let err = Error::new(Status::InvalidArgs, "Invalid argument");
+///
+/// // Using custom status type
+/// enum MyStatus {
+///     CustomError,
+/// }
+///
+/// impl AsRef<str> for MyStatus {
+///     fn as_ref(&self) -> &str {
+///         match self {
+///             MyStatus::CustomError => "CustomError",
+///         }
+///     }
+/// }
+///
+/// let custom_err: Error<MyStatus> = Error::new(MyStatus::CustomError, "Something went wrong");
+/// ```
 #[derive(Debug)]
-pub enum Error {
-    /// ANI status error
-    Status(Status),
-    /// Null pointer error
-    NullPointer(&'static str),
-    /// Type conversion error
-    TypeConversion(String),
-    /// ANI exception was thrown
-    Exception(String),
-    /// UTF-8 encoding error
-    Utf8Error(std::str::Utf8Error),
-    /// Custom error
-    Custom(String),
-    /// Class not found
-    ClassNotFound(String),
-    /// Method not found
-    MethodNotFound(String),
-    /// Field not found
-    FieldNotFound(String),
+pub struct Error<S: AsRef<str> = Status> {
+    /// The status/error code
+    pub status: S,
+    /// Human-readable error message
+    pub reason: String,
+    /// Optional cause of this error
+    pub cause: Option<Box<Error<Status>>>,
 }
 
-impl fmt::Display for Error {
+impl<S: AsRef<str>> Error<S> {
+    /// Create a new error with status and reason
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - The error status code
+    /// * `reason` - Human-readable error message
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ani::error::{Error, Status};
+    ///
+    /// let err = Error::new(Status::NotFound, "Resource not found");
+    /// ```
+    pub fn new<R: Into<String>>(status: S, reason: R) -> Self {
+        Self {
+            status,
+            reason: reason.into(),
+            cause: None,
+        }
+    }
+
+    /// Create an error from just a reason message, using default status
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ani::error::{Error, Status};
+    ///
+    /// let err: Error<Status> = Error::from_reason("Something went wrong");
+    /// ```
+    pub fn from_reason<R: Into<String>>(reason: R) -> Self
+    where
+        S: Default,
+    {
+        Self {
+            status: S::default(),
+            reason: reason.into(),
+            cause: None,
+        }
+    }
+
+    /// Set the cause of this error
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ani::error::{Error, Status};
+    ///
+    /// let mut err = Error::new(Status::Error, "Outer error");
+    /// err.set_cause(Error::new(Status::NotFound, "Inner error"));
+    /// ```
+    pub fn set_cause(&mut self, cause: Error<Status>) {
+        self.cause = Some(Box::new(cause));
+    }
+
+    /// Create an error with a cause
+    pub fn with_cause<R: Into<String>>(status: S, reason: R, cause: Error<Status>) -> Self {
+        Self {
+            status,
+            reason: reason.into(),
+            cause: Some(Box::new(cause)),
+        }
+    }
+
+    /// Get the status code as a string reference
+    pub fn status_str(&self) -> &str {
+        self.status.as_ref()
+    }
+}
+
+impl<S: AsRef<str> + fmt::Debug> fmt::Display for Error<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Status(s) => write!(f, "ANI status error: {:?}", s),
-            Error::NullPointer(name) => write!(f, "Null pointer: {}", name),
-            Error::TypeConversion(msg) => write!(f, "Type conversion error: {}", msg),
-            Error::Exception(msg) => write!(f, "ANI exception: {}", msg),
-            Error::Utf8Error(e) => write!(f, "UTF-8 error: {}", e),
-            Error::Custom(msg) => write!(f, "{}", msg),
-            Error::ClassNotFound(name) => write!(f, "Class not found: {}", name),
-            Error::MethodNotFound(name) => write!(f, "Method not found: {}", name),
-            Error::FieldNotFound(name) => write!(f, "Field not found: {}", name),
+        write!(f, "[{}] {}", self.status.as_ref(), self.reason)?;
+        if let Some(ref cause) = self.cause {
+            write!(f, "\n  Caused by: {}", cause)?;
         }
+        Ok(())
     }
 }
 
-impl std::error::Error for Error {
+impl<S: AsRef<str> + fmt::Debug> std::error::Error for Error<S> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Utf8Error(e) => Some(e),
-            _ => None,
-        }
+        self.cause.as_ref().map(|e| e as &dyn std::error::Error)
     }
 }
+
+// Convenience methods for common operations
+impl Error<Status> {
+    /// Create an error from ANI status code
+    pub fn from_status(status: Status) -> Self {
+        Self::new(status, format!("ANI error: {}", status))
+    }
+}
+
+// ============================================================================
+// Common Error Conversions
+// ============================================================================
 
 impl From<std::str::Utf8Error> for Error {
     fn from(e: std::str::Utf8Error) -> Self {
-        Error::Utf8Error(e)
+        Error::new(Status::Error, format!("UTF-8 error: {}", e))
+    }
+}
+
+impl From<std::ffi::NulError> for Error {
+    fn from(e: std::ffi::NulError) -> Self {
+        Error::new(Status::InvalidArgs, format!("Null byte in string: {}", e))
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::new(Status::Error, format!("IO error: {}", e))
     }
 }
 
 impl From<Status> for Error {
-    fn from(s: Status) -> Self {
-        Error::Status(s)
+    fn from(status: Status) -> Self {
+        Error::from_status(status)
     }
 }
 
-impl From<crate::sys::ani_status> for Error {
-    fn from(s: crate::sys::ani_status) -> Self {
-        Error::Status(Status::from(s))
+impl From<sys::ani_status> for Error {
+    fn from(status: sys::ani_status) -> Self {
+        Error::from_status(Status::from(status))
     }
 }
 
-/// ANI result type
-pub type Result<T> = std::result::Result<T, Error>;
+// ============================================================================
+// Result Type
+// ============================================================================
+
+/// ANI Result type
+///
+/// Alias for `std::result::Result<T, Error<S>>`.
+/// Defaults to using [`Status`] as the error status type.
+pub type Result<T, S = Status> = std::result::Result<T, Error<S>>;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 /// Convert ANI status code to Result
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use ani::error::check_status;
+/// use ani::sys;
+///
+/// fn call_ani_api(status: sys::ani_status) -> ani::error::Result<()> {
+///     check_status(status)
+/// }
+/// ```
 #[inline]
-pub fn check_status(status: crate::sys::ani_status) -> Result<()> {
+pub fn check_status(status: sys::ani_status) -> Result<()> {
     let s = Status::from(status);
     if s == Status::Ok {
         Ok(())
     } else {
-        Err(Error::Status(s))
+        Err(Error::from_status(s))
     }
 }
 
@@ -153,8 +389,223 @@ pub fn check_status(status: crate::sys::ani_status) -> Result<()> {
 #[inline]
 pub fn check_ptr<T>(ptr: *mut T, name: &'static str) -> Result<*mut T> {
     if ptr.is_null() {
-        Err(Error::NullPointer(name))
+        Err(Error::new(
+            Status::InvalidArgs,
+            format!("Null pointer: {}", name),
+        ))
     } else {
         Ok(ptr)
     }
+}
+
+// ============================================================================
+// BusinessError - ANI Error Wrapper
+// ============================================================================
+
+/// ANI Business Error wrapper
+///
+/// Wraps an [`Error`] and provides methods to throw it into the ANI environment.
+/// This corresponds to the `escompat.BusinessError` class in ANI.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use ani::error::{Error, Status, BusinessError};
+///
+/// let err = Error::new(Status::InvalidArgs, "Invalid argument");
+/// let biz_err = BusinessError::from(err);
+///
+/// // In a function that has access to env:
+/// // unsafe { biz_err.throw_into(env) };
+/// ```
+pub struct BusinessError<S: AsRef<str> = Status>(pub Error<S>);
+
+impl<S: AsRef<str>> From<Error<S>> for BusinessError<S> {
+    fn from(err: Error<S>) -> Self {
+        BusinessError(err)
+    }
+}
+
+impl<S: AsRef<str>> BusinessError<S> {
+    /// Create a new BusinessError
+    pub fn new<R: Into<String>>(status: S, reason: R) -> Self {
+        BusinessError(Error::new(status, reason))
+    }
+
+    /// Get a reference to the inner error
+    pub fn inner(&self) -> &Error<S> {
+        &self.0
+    }
+
+    /// Throw this error into the ANI environment
+    ///
+    /// # Safety
+    ///
+    /// The env pointer must be valid.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let err = Error::new(Status::InvalidArgs, "Bad input");
+    /// let biz_err = BusinessError::from(err);
+    /// unsafe { biz_err.throw_into(env) };
+    /// ```
+    pub unsafe fn throw_into(self, env: *mut sys::ani_env) {
+        if env.is_null() {
+            return;
+        }
+
+        unsafe {
+            // Check if there's already a pending exception
+            let mut has_error: sys::ani_boolean = 0;
+            let api = &*(*env);
+            let _ = (api.ExistUnhandledError.unwrap())(env, &mut has_error);
+            if has_error != 0 {
+                // Already has pending exception, don't throw another
+                return;
+            }
+
+            // Create error object and throw
+            if let Some(error) = self.create_error_object(env) {
+                let _ = (api.ThrowError.unwrap())(env, error);
+            }
+        }
+    }
+
+    /// Create an ANI BusinessError object
+    ///
+    /// # Safety
+    ///
+    /// The env pointer must be valid.
+    unsafe fn create_error_object(self, env: *mut sys::ani_env) -> Option<sys::ani_error> {
+        unsafe {
+            let api = &*(*env);
+
+            // Find BusinessError class - all ANI errors inherit from this
+            let class_descriptor = CString::new("Lescompat/BusinessError;").ok()?;
+            let mut err_cls: sys::ani_class = ptr::null_mut();
+            let status = (api.FindClass.unwrap())(env, class_descriptor.as_ptr(), &mut err_cls);
+            if status != 0 || err_cls.is_null() {
+                return None;
+            }
+
+            // Find constructor: BusinessError(code: int, message: String)
+            // or fallback to simple message constructor
+            let ctor_name = CString::new("<ctor>").ok()?;
+            let mut err_ctor: sys::ani_method = ptr::null_mut();
+            let status = (api.Class_FindMethod.unwrap())(
+                env,
+                err_cls,
+                ctor_name.as_ptr(),
+                ptr::null(), // Use default constructor signature
+                &mut err_ctor,
+            );
+            if status != 0 || err_ctor.is_null() {
+                return None;
+            }
+
+            // Create error message string
+            let message = self.0.reason.clone();
+            let mut msg_string: sys::ani_string = ptr::null_mut();
+            let status = (api.String_NewUTF8.unwrap())(
+                env,
+                message.as_ptr() as *const i8,
+                message.len(),
+                &mut msg_string,
+            );
+            if status != 0 || msg_string.is_null() {
+                return None;
+            }
+
+            // Create error object
+            let mut err_obj: sys::ani_object = ptr::null_mut();
+            let status =
+                (api.Object_New.unwrap())(env, err_cls, err_ctor, &mut err_obj, msg_string);
+            if status != 0 || err_obj.is_null() {
+                return None;
+            }
+
+            Some(err_obj as sys::ani_error)
+        }
+    }
+}
+
+impl BusinessError<Status> {
+    /// Create a BusinessError from just a reason message
+    pub fn from_reason<R: Into<String>>(reason: R) -> Self {
+        BusinessError(Error::from_reason(reason))
+    }
+}
+
+// Type aliases for backward compatibility
+/// Alias for BusinessError (deprecated, use BusinessError instead)
+#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
+pub type JsError<S = Status> = BusinessError<S>;
+/// Alias for BusinessError (deprecated, use BusinessError instead)
+#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
+pub type JsTypeError<S = Status> = BusinessError<S>;
+/// Alias for BusinessError (deprecated, use BusinessError instead)
+#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
+pub type JsRangeError<S = Status> = BusinessError<S>;
+
+// ============================================================================
+// Macros
+// ============================================================================
+
+/// Check ANI status and return error if not OK
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// ani_check!(api.SomeCall(env, arg));
+/// ```
+#[macro_export]
+macro_rules! ani_check {
+    ($expr:expr) => {{
+        let status = $expr;
+        $crate::error::check_status(status)?;
+    }};
+    ($expr:expr, $msg:expr) => {{
+        let status = $expr;
+        let s = $crate::error::Status::from(status);
+        if s != $crate::error::Status::Ok {
+            return Err($crate::error::Error::new(s, $msg));
+        }
+    }};
+}
+
+/// Create an error with formatted message
+///
+/// # Examples
+///
+/// ```rust
+/// use ani::ani_error;
+/// use ani::error::Status;
+///
+/// let err = ani_error!(Status::NotFound, "Resource {} not found", "user");
+/// ```
+#[macro_export]
+macro_rules! ani_error {
+    ($status:expr, $($msg:tt)*) => {
+        $crate::error::Error::new($status, format!($($msg)*))
+    };
+}
+
+/// Bail out with an error
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use ani::ani_bail;
+/// use ani::error::Status;
+///
+/// fn may_fail() -> ani::error::Result<()> {
+///     ani_bail!(Status::NotFound, "Not found");
+/// }
+/// ```
+#[macro_export]
+macro_rules! ani_bail {
+    ($status:expr, $($msg:tt)*) => {
+        return Err($crate::ani_error!($status, $($msg)*))
+    };
 }

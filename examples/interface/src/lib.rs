@@ -3,7 +3,6 @@
 //! 演示如何处理 ArkTS Interface 类型
 //! 注意: native 函数不能直接声明在 interface 中
 
-use ani::prelude::*;
 use ani_derive::ani;
 
 // ============================================================================

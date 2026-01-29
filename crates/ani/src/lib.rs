@@ -59,8 +59,12 @@ pub mod types;
 /// ```
 pub mod prelude {
     pub use crate::env::Env;
-    pub use crate::error::{Error, Result};
+    pub use crate::error::{BusinessError, Error, Result, Status, check_status};
     pub use crate::types::*;
+
+    // Deprecated type aliases for backward compatibility
+    #[allow(deprecated)]
+    pub use crate::error::{JsError, JsRangeError, JsTypeError};
 
     // Export from conversions module
     pub use crate::conversions::{

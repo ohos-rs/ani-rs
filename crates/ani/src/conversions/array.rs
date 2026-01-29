@@ -37,7 +37,7 @@ impl<'env> ToAni<'env> for Vec<i32> {
             let status = (api.Array_New_Int.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             // Set elements
@@ -51,7 +51,7 @@ impl<'env> ToAni<'env> for Vec<i32> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -73,7 +73,7 @@ impl<'env> FromAni<'env> for Vec<i32> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             // Allocate buffer
@@ -89,7 +89,7 @@ impl<'env> FromAni<'env> for Vec<i32> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -110,7 +110,7 @@ impl<'env> ToAni<'env> for Vec<i64> {
             let status = (api.Array_New_Long.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             if !self.is_empty() {
@@ -123,7 +123,7 @@ impl<'env> ToAni<'env> for Vec<i64> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -144,7 +144,7 @@ impl<'env> FromAni<'env> for Vec<i64> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             let mut buffer = vec![0i64; len];
@@ -159,7 +159,7 @@ impl<'env> FromAni<'env> for Vec<i64> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -180,7 +180,7 @@ impl<'env> ToAni<'env> for Vec<f64> {
             let status = (api.Array_New_Double.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             if !self.is_empty() {
@@ -193,7 +193,7 @@ impl<'env> ToAni<'env> for Vec<f64> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -214,7 +214,7 @@ impl<'env> FromAni<'env> for Vec<f64> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             let mut buffer = vec![0f64; len];
@@ -229,7 +229,7 @@ impl<'env> FromAni<'env> for Vec<f64> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -250,7 +250,7 @@ impl<'env> ToAni<'env> for Vec<f32> {
             let status = (api.Array_New_Float.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             if !self.is_empty() {
@@ -263,7 +263,7 @@ impl<'env> ToAni<'env> for Vec<f32> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -284,7 +284,7 @@ impl<'env> FromAni<'env> for Vec<f32> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             let mut buffer = vec![0f32; len];
@@ -299,7 +299,7 @@ impl<'env> FromAni<'env> for Vec<f32> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -320,7 +320,7 @@ impl<'env> ToAni<'env> for Vec<bool> {
             let status = (api.Array_New_Boolean.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             if !self.is_empty() {
@@ -337,7 +337,7 @@ impl<'env> ToAni<'env> for Vec<bool> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -358,7 +358,7 @@ impl<'env> FromAni<'env> for Vec<bool> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             let mut buffer: Vec<sys::ani_boolean> = vec![0; len];
@@ -373,7 +373,7 @@ impl<'env> FromAni<'env> for Vec<bool> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -394,7 +394,7 @@ impl<'env> ToAni<'env> for Vec<u8> {
             let status = (api.Array_New_Byte.unwrap())(env.as_raw(), self.len(), &mut array);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             if !self.is_empty() {
@@ -407,7 +407,7 @@ impl<'env> ToAni<'env> for Vec<u8> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 
@@ -428,7 +428,7 @@ impl<'env> FromAni<'env> for Vec<u8> {
                 (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
 
             if status != sys::ani_status_ANI_OK {
-                return Err(Error::Status(crate::error::Status::from(status)));
+                return Err(Error::from_status(crate::error::Status::from(status)));
             }
 
             let mut buffer: Vec<i8> = vec![0; len];
@@ -443,7 +443,7 @@ impl<'env> FromAni<'env> for Vec<u8> {
                 );
 
                 if status != sys::ani_status_ANI_OK {
-                    return Err(Error::Status(crate::error::Status::from(status)));
+                    return Err(Error::from_status(crate::error::Status::from(status)));
                 }
             }
 

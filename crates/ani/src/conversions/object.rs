@@ -35,7 +35,10 @@ impl<'env> FromAni<'env> for AniObject<'env> {
 
     fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
-            return Err(Error::NullPointer("object"));
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                format!("Null pointer: {}", "object"),
+            ));
         }
         Ok(unsafe { AniObject::from_raw(value) })
     }
@@ -67,7 +70,10 @@ impl<'env> FromAni<'env> for AniClass<'env> {
 
     fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
-            return Err(Error::NullPointer("class"));
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                format!("Null pointer: {}", "class"),
+            ));
         }
         Ok(unsafe { AniClass::from_raw(value) })
     }
@@ -99,7 +105,10 @@ impl<'env> FromAni<'env> for AniString<'env> {
 
     fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
-            return Err(Error::NullPointer("string"));
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                format!("Null pointer: {}", "string"),
+            ));
         }
         Ok(unsafe { AniString::from_raw(value) })
     }

@@ -15,14 +15,14 @@ pub fn generate_wrapper(
     let return_type = &func.sig.output;
 
     // 生成 wrapper 参数
-    let mut wrapper_params = vec![quote! { env: *mut ani_sys::ani_env }];
+    let mut wrapper_params = vec![quote! { env: *mut ani::sys::ani_env }];
 
     // 类方法需要额外的 this/class 参数
     if is_class_method {
         if is_static {
-            wrapper_params.push(quote! { _class: ani_sys::ani_class });
+            wrapper_params.push(quote! { _class: ani::sys::ani_class });
         } else {
-            wrapper_params.push(quote! { this: ani_sys::ani_object });
+            wrapper_params.push(quote! { this: ani::sys::ani_object });
         }
     }
 
@@ -144,6 +144,11 @@ fn generate_conversions(params: &[&FnArg]) -> TokenStream {
                             let #converted_name = #converted_name.as_str();
                         }
                     }
+                    _ if type_str.starts_with("Option<") => {
+                        // Extract inner type from Option<T>
+                        let inner_type_str = extract_option_inner_type(&type_str);
+                        generate_option_conversion(&param_name, &converted_name, &inner_type_str)
+                    }
                     _ => {
                         quote! { let #converted_name = #param_name; }
                     }
@@ -157,6 +162,138 @@ fn generate_conversions(params: &[&FnArg]) -> TokenStream {
     quote! { #(#conversions)* }
 }
 
+/// Extract inner type from Option<T> string
+fn extract_option_inner_type(type_str: &str) -> String {
+    // "Option<i32>" -> "i32"
+    // "Option<String>" -> "String"
+    if type_str.starts_with("Option<") && type_str.ends_with(">") {
+        type_str[7..type_str.len() - 1].to_string()
+    } else {
+        type_str.to_string()
+    }
+}
+
+/// Generate Option<T> conversion code
+fn generate_option_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    inner_type_str: &str,
+) -> TokenStream {
+    match inner_type_str {
+        // Primitive types that need unboxing
+        "i32" => quote! {
+            let #converted_name: Option<i32> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "i64" => quote! {
+            let #converted_name: Option<i64> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "i8" => quote! {
+            let #converted_name: Option<i8> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "i16" => quote! {
+            let #converted_name: Option<i16> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "u16" => quote! {
+            let #converted_name: Option<u16> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "f32" => quote! {
+            let #converted_name: Option<f32> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "f64" => quote! {
+            let #converted_name: Option<f64> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        "bool" => quote! {
+            let #converted_name: Option<bool> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let obj = ani::types::AniObject::from_raw(#param_name);
+                    ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
+                }
+            };
+        },
+        // String doesn't need unboxing, just null check (ani_string is nullable)
+        "String" => quote! {
+            let #converted_name: Option<String> = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    env_wrapper.get_string(&ani_str).ok()
+                }
+            };
+        },
+        // Default: treat as object
+        _ => quote! {
+            let #converted_name = {
+                if #param_name.is_null() {
+                    None
+                } else {
+                    Some(#param_name)
+                }
+            };
+        },
+    }
+}
+
 /// Generate return value conversion code
 fn generate_return_conversion(return_type: &ReturnType) -> TokenStream {
     match return_type {
@@ -166,12 +303,48 @@ fn generate_return_conversion(return_type: &ReturnType) -> TokenStream {
 
             // Handle Result type
             if type_str.starts_with("Result<") {
+                // Extract the Ok type from Result<T> or Result<T, E>
+                let inner_type_str = if let syn::Type::Path(type_path) = ty.as_ref() {
+                    if let Some(segment) = type_path.path.segments.last() {
+                        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                            if let Some(syn::GenericArgument::Type(ok_type)) = args.args.first() {
+                                quote!(#ok_type).to_string().replace(" ", "")
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                // Generate conversion for the Ok value based on its type
+                let ok_conversion = match inner_type_str.as_str() {
+                    "String" => quote! {
+                        let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                        match env_wrapper.create_string(&val) {
+                            Ok(s) => s.into_raw(),
+                            Err(_) => std::ptr::null_mut()
+                        }
+                    },
+                    "bool" => quote! { if val { 1 } else { 0 } },
+                    "()" => quote! {},
+                    _ => quote! { val },
+                };
+
                 return quote! {
                     match result {
-                        Ok(val) => val,
+                        Ok(val) => {
+                            #ok_conversion
+                        },
                         Err(e) => {
-                            // TODO: Throw ANI exception
-                            eprintln!("Error: {:?}", e);
+                            // Throw ANI exception
+                            let biz_err: ::ani::error::BusinessError = e.into();
+                            unsafe { biz_err.throw_into(env) };
                             Default::default()
                         }
                     }
@@ -210,23 +383,30 @@ fn rust_type_to_ani_type(ty: &syn::Type) -> TokenStream {
     let type_str = quote!(#ty).to_string().replace(" ", "");
 
     match type_str.as_str() {
-        "bool" => quote! { ani_sys::ani_boolean },
-        "i8" => quote! { ani_sys::ani_byte },
-        "u8" => quote! { ani_sys::ani_byte },
-        "i16" => quote! { ani_sys::ani_short },
-        "u16" => quote! { ani_sys::ani_char },
-        "char" => quote! { ani_sys::ani_char },
-        "i32" | "u32" => quote! { ani_sys::ani_int },
-        "i64" | "u64" => quote! { ani_sys::ani_long },
-        "f32" => quote! { ani_sys::ani_float },
-        "f64" => quote! { ani_sys::ani_double },
-        "String" | "&str" => quote! { ani_sys::ani_string },
+        "bool" => quote! { ani::sys::ani_boolean },
+        "i8" => quote! { ani::sys::ani_byte },
+        "u8" => quote! { ani::sys::ani_byte },
+        "i16" => quote! { ani::sys::ani_short },
+        "u16" => quote! { ani::sys::ani_char },
+        "char" => quote! { ani::sys::ani_char },
+        "i32" | "u32" => quote! { ani::sys::ani_int },
+        "i64" | "u64" => quote! { ani::sys::ani_long },
+        "f32" => quote! { ani::sys::ani_float },
+        "f64" => quote! { ani::sys::ani_double },
+        "String" | "&str" => quote! { ani::sys::ani_string },
         "()" => quote! { () },
         _ => {
             if type_str.starts_with("Vec<") {
-                quote! { ani_sys::ani_array }
+                quote! { ani::sys::ani_array }
             } else if type_str.starts_with("Option<") {
-                quote! { ani_sys::ani_object }
+                // Extract inner type from Option<T>
+                let inner_type_str = extract_option_inner_type(&type_str);
+                match inner_type_str.as_str() {
+                    // String can be nullable directly
+                    "String" => quote! { ani::sys::ani_string },
+                    // Primitive types need boxing, so they use ani_object
+                    _ => quote! { ani::sys::ani_object },
+                }
             } else if type_str.starts_with("Result<") {
                 // Extract Ok type
                 if let syn::Type::Path(type_path) = ty {
@@ -238,9 +418,9 @@ fn rust_type_to_ani_type(ty: &syn::Type) -> TokenStream {
                         }
                     }
                 }
-                quote! { ani_sys::ani_object }
+                quote! { ani::sys::ani_object }
             } else {
-                quote! { ani_sys::ani_object }
+                quote! { ani::sys::ani_object }
             }
         }
     }
@@ -256,8 +436,8 @@ pub fn generate_class_register(
 ) -> TokenStream {
     quote! {
         #[doc(hidden)]
-        pub unsafe extern "C" fn #register_name(env: *mut ani_sys::ani_env) -> ani_sys::ani_status {
-            let mut cls: ani_sys::ani_class = std::ptr::null_mut();
+        pub unsafe extern "C" fn #register_name(env: *mut ani::sys::ani_env) -> ani::sys::ani_status {
+            let mut cls: ani::sys::ani_class = std::ptr::null_mut();
             let class_name = concat!(#class_descriptor, "\0");
 
             let api = &*(*env);
@@ -267,12 +447,12 @@ pub fn generate_class_register(
                 &mut cls
             );
 
-            if status != ani_sys::ani_status_ANI_OK {
+            if status != ani::sys::ani_status_ANI_OK {
                 return status;
             }
 
             let methods = [
-                ani_sys::ani_native_function {
+                ani::sys::ani_native_function {
                     name: concat!(#func_name, "\0").as_ptr() as *const std::os::raw::c_char,
                     signature: concat!(#signature, "\0").as_ptr() as *const std::os::raw::c_char,
                     pointer: #wrapper_name as *const std::os::raw::c_void,
@@ -299,8 +479,8 @@ pub fn generate_namespace_register(
 ) -> TokenStream {
     quote! {
         #[doc(hidden)]
-        pub unsafe extern "C" fn #register_name(env: *mut ani_sys::ani_env) -> ani_sys::ani_status {
-            let mut ns: ani_sys::ani_namespace = std::ptr::null_mut();
+        pub unsafe extern "C" fn #register_name(env: *mut ani::sys::ani_env) -> ani::sys::ani_status {
+            let mut ns: ani::sys::ani_namespace = std::ptr::null_mut();
             let ns_name = concat!(#namespace_descriptor, "\0");
 
             let api = &*(*env);
@@ -310,12 +490,12 @@ pub fn generate_namespace_register(
                 &mut ns
             );
 
-            if status != ani_sys::ani_status_ANI_OK {
+            if status != ani::sys::ani_status_ANI_OK {
                 return status;
             }
 
             let functions = [
-                ani_sys::ani_native_function {
+                ani::sys::ani_native_function {
                     name: concat!(#func_name, "\0").as_ptr() as *const std::os::raw::c_char,
                     signature: concat!(#signature, "\0").as_ptr() as *const std::os::raw::c_char,
                     pointer: #wrapper_name as *const std::os::raw::c_void,
@@ -344,11 +524,11 @@ pub fn generate_module_register(
         // If no module specified, infer from filename
         quote! {
             // Use default module
-            let mut module: ani_sys::ani_module = std::ptr::null_mut();
+            let mut module: ani::sys::ani_module = std::ptr::null_mut();
         }
     } else {
         quote! {
-            let mut module: ani_sys::ani_module = std::ptr::null_mut();
+            let mut module: ani::sys::ani_module = std::ptr::null_mut();
             let module_name = concat!(#module_descriptor, "\0");
 
             let api = &*(*env);
@@ -358,7 +538,7 @@ pub fn generate_module_register(
                 &mut module
             );
 
-            if status != ani_sys::ani_status_ANI_OK {
+            if status != ani::sys::ani_status_ANI_OK {
                 return status;
             }
         }
@@ -366,11 +546,11 @@ pub fn generate_module_register(
 
     quote! {
         #[doc(hidden)]
-        pub unsafe extern "C" fn #register_name(env: *mut ani_sys::ani_env) -> ani_sys::ani_status {
+        pub unsafe extern "C" fn #register_name(env: *mut ani::sys::ani_env) -> ani::sys::ani_status {
             #find_module
 
             let functions = [
-                ani_sys::ani_native_function {
+                ani::sys::ani_native_function {
                     name: concat!(#func_name, "\0").as_ptr() as *const std::os::raw::c_char,
                     signature: concat!(#signature, "\0").as_ptr() as *const std::os::raw::c_char,
                     pointer: #wrapper_name as *const std::os::raw::c_void,
