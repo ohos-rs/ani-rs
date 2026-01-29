@@ -3,6 +3,7 @@
 //! 这个示例演示了类方法、构造函数、getter/setter 的绑定
 
 use ani::prelude::*;
+use ani_derive::ani;
 
 // ============================================================================
 // Calculator 类 - 演示类方法绑定
@@ -124,17 +125,9 @@ pub fn person_destroy(this: i64) {
 }
 
 // ============================================================================
-// 模块注册
+// 不再需要 ani_module! 宏！
+// ANI_Constructor 在第一个 #[ani] 宏展开时自动生成
 // ============================================================================
-
-ani_module! {
-    name: "new_class",
-    lib_name: "libani_example_new_class",
-    functions: [
-        create, add, subtract, multiply, divide,
-        person_new, person_get_name, person_get_age, person_set_age, greet, person_destroy
-    ],
-}
 
 #[cfg(test)]
 mod tests {

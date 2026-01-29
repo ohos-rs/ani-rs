@@ -8,4 +8,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ani = { path = "../../crates/ani", package = "ani" }
+ani-derive = { path = "../../crates/derive", package = "ani-derive" }
 ani-sys = { path = "../../crates/sys", package = "ani-sys" }

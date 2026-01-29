@@ -12,6 +12,6 @@ categories = ["api-bindings", "development-tools::ffi"]
 
 [dependencies]
 ani-sys = { path = "../sys" }
-ani_derive = { path = "../derive" }
+ctor = "0.6"
 
 [dev-dependencies]

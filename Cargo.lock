@@ -4,115 +4,15 @@ version = 4
 
 [[package]]
 name = "ani"
-version = "0.1.0"
-dependencies = [
- "ani-sys",
- "ani_derive",
-]
-
-[[package]]
-name = "ani-example-async-wrapper"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-bigint"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-call-method"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-interface"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-new-basic"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-new-class"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-optional"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-record"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-setfield"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-template"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-union"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-example-wrap-ptr"
-version = "0.1.0"
-dependencies = [
- "ani",
- "ani-sys",
-]
-
-[[package]]
-name = "ani-sys"
 version = "0.0.1-alpha.1"
+dependencies = [
+ "ani-sys",
+ "ctor",
+]
 
 [[package]]
-name = "ani_derive"
-version = "0.1.0"
+name = "ani-derive"
+version = "0.0.1-alpha.1"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -122,6 +22,118 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-async-wrapper"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-bigint"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-call-method"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-interface"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-new-basic"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-new-class"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-optional"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-record"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-setfield"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-template"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-union"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-example-wrap-ptr"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+ "ani-sys",
+]
+
+[[package]]
+name = "ani-sys"
+version = "0.0.1-alpha.1"
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -129,6 +141,37 @@ checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "ctor"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "424e0138278faeb2b401f174ad17e715c829512d74f3d1e81eb43365c2e0590e"
+dependencies = [
+ "ctor-proc-macro",
+ "dtor",
+]
+
+[[package]]
+name = "ctor-proc-macro"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
+
+[[package]]
+name = "dtor"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "404d02eeb088a82cfd873006cb713fe411306c7d182c344905e101fb1167d301"
+dependencies = [
+ "dtor-proc-macro",
+]
+
+[[package]]
+name = "dtor-proc-macro"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 
 [[package]]
 name = "equivalent"

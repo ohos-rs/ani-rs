@@ -6,8 +6,9 @@ A safe, ergonomic Rust library for ArkTS Native Interface (ANI), inspired by nap
 
 ```rust
 use ani::prelude::*;
+use ani_derive::ani;
 
-// Module-level function
+// Module-level function - automatically registered!
 #[ani]
 fn add(a: i32, b: i32) -> i32 {
     a + b
@@ -19,12 +20,9 @@ fn greet(name: String) -> String {
     format!("Hello, {}!", name)
 }
 
-// Register all functions
-ani_module! {
-    name: "my_module",
-    lib_name: "libmy_module",
-    functions: [add, greet],
-}
+// That's it! No ani_module! needed.
+// ANI_Constructor is automatically generated on first #[ani] usage.
+// Module name is derived from CARGO_PKG_NAME.
 ```
 
 ## Crates Overview
@@ -110,17 +108,6 @@ impl Person {
     fn greet(&self) -> String {
         format!("Hello, I'm {} and I'm {} years old", self.name, self.age)
     }
-}
-```
-
-### 5. Module Registration
-
-```rust
-ani_module! {
-    name: "my_module",
-    lib_name: "libmy_module",
-    functions: [add, subtract, multiply],
-    classes: [Person, Calculator],
 }
 ```
 

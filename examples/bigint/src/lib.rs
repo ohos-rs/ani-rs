@@ -4,6 +4,7 @@
 //! BigInt 在 ANI 中对应 Lescompat/BigInt;
 
 use ani::prelude::*;
+use ani_derive::ani;
 
 // ============================================================================
 // BigInt 基本操作

@@ -4,6 +4,7 @@
 //! 这是实现类绑定的核心技术
 
 use ani::prelude::*;
+use ani_derive::ani;
 use std::collections::HashMap;
 use std::sync::Mutex;
 

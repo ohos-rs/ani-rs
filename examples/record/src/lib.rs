@@ -4,6 +4,7 @@
 //! Record 类似于 HashMap/Dictionary
 
 use ani::prelude::*;
+use ani_derive::ani;
 use std::collections::HashMap;
 
 // ============================================================================

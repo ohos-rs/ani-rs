@@ -10,12 +10,14 @@ use crate::codegen::*;
 use crate::signature::*;
 
 /// Expand ani_bindgen for functions
-pub fn expand_function(attrs: AniBindgenAttrs, func: ItemFn) -> TokenStream {
+/// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
+pub fn expand_function(attrs: AniBindgenAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
     if attrs.skip {
-        return quote! { #func };
+        return quote! { #prepare #func };
     }
 
     let func_name = &func.sig.ident;
+    let func_name_str = func_name.to_string();
 
     // 确定 ArkTS 中的函数名（驼峰命名）
     let ets_name = attrs
@@ -42,28 +44,10 @@ pub fn expand_function(attrs: AniBindgenAttrs, func: ItemFn) -> TokenStream {
     // 生成 wrapper 函数名
     let wrapper_name = format_ident!("__ani_native_{}", func_name);
     let register_name = format_ident!("__ani_register_{}", func_name);
-    let info_name = format_ident!("__ANI_INFO_{}", func_name.to_string().to_uppercase());
+    let ctor_register_name = format_ident!("__ani_ctor_register_{}", func_name);
 
     // 生成 wrapper 函数
     let wrapper = generate_wrapper(&func, &wrapper_name, is_class_method, is_static);
-
-    // 确定绑定目标
-    let _binding_target = if let Some(ref class) = attrs.class {
-        let descriptor = class_to_descriptor(class);
-        quote! { BindingTarget::Class(#descriptor) }
-    } else if let Some(ref ns) = attrs.namespace {
-        let descriptor = namespace_to_descriptor(ns);
-        quote! { BindingTarget::Namespace(#descriptor) }
-    } else if let Some(ref module) = attrs.module {
-        let descriptor = if module.is_empty() {
-            String::new()
-        } else {
-            module_to_descriptor(module)
-        };
-        quote! { BindingTarget::Module(#descriptor) }
-    } else {
-        quote! { BindingTarget::Module("") }
-    };
 
     // 生成注册函数
     let register_fn = if let Some(ref class) = attrs.class {
@@ -99,26 +83,36 @@ pub fn expand_function(attrs: AniBindgenAttrs, func: ItemFn) -> TokenStream {
         )
     };
 
+    // 生成 ctor 自动注册函数
+    // 使用 #[ctor::ctor(crate_path = ::ani::ctor)] 在库加载时自动注册到全局注册表
+    let ctor_fn = quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        #[::ani::ctor::ctor(crate_path = ::ani::ctor)]
+        fn #ctor_register_name() {
+            ::ani::module_register::register_module_export(
+                #func_name_str,
+                #register_name
+            );
+        }
+    };
+
     quote! {
+        #prepare
+
         #func
 
         #wrapper
 
         #register_fn
 
-        /// Function binding information
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        pub static #info_name: (&str, &str, unsafe extern "C" fn(*mut ani_sys::ani_env) -> ani_sys::ani_status) = (
-            #ets_name,
-            #signature,
-            #register_name
-        );
+        #ctor_fn
     }
 }
 
 /// Expand ani_bindgen for impl blocks
-pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl) -> TokenStream {
+/// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
+pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl, prepare: TokenStream) -> TokenStream {
     let struct_name = if let syn::Type::Path(type_path) = &*impl_block.self_ty {
         type_path
             .path
@@ -205,6 +199,8 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl) -> TokenStream 
     let impl_self_ty = &impl_block.self_ty;
 
     quote! {
+        #prepare
+
         #(#impl_attrs)*
         impl #impl_generics #impl_self_ty {
             #(#original_methods)*
@@ -243,7 +239,8 @@ pub fn expand_impl(attrs: AniBindgenAttrs, impl_block: ItemImpl) -> TokenStream 
 }
 
 /// Expand ani_bindgen for structs
-pub fn expand_struct(attrs: AniBindgenAttrs, struct_item: ItemStruct) -> TokenStream {
+/// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
+pub fn expand_struct(attrs: AniBindgenAttrs, struct_item: ItemStruct, prepare: TokenStream) -> TokenStream {
     let struct_name = &struct_item.ident;
     let class_name = attrs
         .class
@@ -280,6 +277,8 @@ pub fn expand_struct(attrs: AniBindgenAttrs, struct_item: ItemStruct) -> TokenSt
     };
 
     quote! {
+        #prepare
+
         #struct_item
 
         impl #struct_name {
@@ -306,92 +305,15 @@ pub fn expand_class_derive(input: DeriveInput) -> TokenStream {
     }
 }
 
-/// Expand ani_module! macro
-pub fn expand_module(def: AniModuleDef) -> TokenStream {
-    let module_name = &def.name;
-
-    // 收集所有函数的注册调用
-    let function_registers: Vec<TokenStream> = def
-        .functions
-        .iter()
-        .map(|func| {
-            let register_name = format_ident!("__ani_register_{}", func);
-            quote! {
-                let status = #register_name(env);
-                if status != ani_sys::ani_status_ANI_OK {
-                    return status;
-                }
-            }
-        })
-        .collect();
-
-    // 收集所有类的绑定调用
-    let class_bindings: Vec<TokenStream> = def
-        .classes
-        .iter()
-        .map(|class| {
-            let bind_name = format_ident!("__ani_bind_{}", class.to_string().to_lowercase());
-            quote! {
-                let status = #bind_name(env);
-                if status != ani_sys::ani_status_ANI_OK {
-                    return status;
-                }
-            }
-        })
-        .collect();
-
-    // 初始化调用
-    let init_call = def
-        .init
-        .as_ref()
-        .map(|init| {
-            quote! { #init(); }
-        })
-        .unwrap_or_default();
-
-    quote! {
-        /// ANI module constructor
-        ///
-        /// Called automatically when ArkTS invokes loadLibrary
-        #[no_mangle]
-        pub unsafe extern "C" fn ANI_Constructor(
-            vm: *mut ani_sys::ani_vm,
-            result: *mut u32,
-        ) -> ani_sys::ani_status {
-            // Get environment
-            let api = &*(*vm);
-            let mut env: *mut ani_sys::ani_env = std::ptr::null_mut();
-
-            let status = (api.GetEnv.unwrap())(vm, ani_sys::ANI_VERSION_1, &mut env);
-            if status != ani_sys::ani_status_ANI_OK {
-                return status;
-            }
-
-            // Call initialization function
-            #init_call
-
-            // Bind module functions
-            #(#function_registers)*
-
-            // Bind class methods
-            #(#class_bindings)*
-
-            // Set version
-            *result = ani_sys::ANI_VERSION_1;
-            ani_sys::ani_status_ANI_OK
-        }
-
-        /// Module name
-        pub const ANI_MODULE_NAME: &str = #module_name;
-    }
-}
-
 /// Expand ani_init attribute
-pub fn expand_init(_attrs: AniInitAttrs, func: ItemFn) -> TokenStream {
+/// The `prepare` parameter contains auto-generated ANI_Constructor code (only for first invocation)
+pub fn expand_init(_attrs: AniInitAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
     let func_name = &func.sig.ident;
     let init_fn_name = format_ident!("__ani_init_{}", func_name);
 
     quote! {
+        #prepare
+
         #func
 
         #[doc(hidden)]

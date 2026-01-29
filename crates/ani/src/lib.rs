@@ -6,8 +6,9 @@
 //!
 //! ```rust,ignore
 //! use ani::prelude::*;
+//! use ani_derive::ani;
 //!
-//! // Simple function binding
+//! // Simple function binding - automatically registered!
 //! #[ani]
 //! fn add(a: i32, b: i32) -> i32 {
 //!     a + b
@@ -19,12 +20,9 @@
 //!     a * b
 //! }
 //!
-//! // Module registration
-//! ani_module! {
-//!     name: "my_module",
-//!     lib_name: "libmy_module",
-//!     functions: [add, multiply],
-//! }
+//! // That's it! No ani_module! needed.
+//! // ANI_Constructor is automatically generated on first #[ani] macro usage.
+//! // Module name is derived from CARGO_PKG_NAME.
 //! ```
 //!
 //! ## Architecture
@@ -34,9 +32,13 @@
 //! - `types`: ANI type wrappers (AniString, AniObject, etc.)
 //! - `error`: Error handling
 //! - `conversions`: Type conversion system (ToAni, FromAni traits)
+//! - `module_register`: Automatic registration system using `ctor`
 
 #![warn(missing_docs)]
 #![allow(clippy::upper_case_acronyms)]
+
+// Re-export ctor for use in generated code
+pub use ctor;
 
 // 重新导出 sys crate
 pub use ani_sys as sys;
@@ -46,10 +48,8 @@ pub mod bindgen_runtime;
 pub mod conversions;
 pub mod env;
 pub mod error;
+pub mod module_register;
 pub mod types;
-
-// re-export
-pub use ani_derive::{AniClass, ani, ani_module};
 
 /// Prelude module - commonly used types and traits
 ///
@@ -72,8 +72,6 @@ pub mod prelude {
     pub use crate::bindgen_runtime::{
         FromAni as BrFromAni, ToAni as BrToAni, TypeInfo as BrTypeInfo,
     };
-
-    pub use ani_derive::{AniClass, ani, ani_module};
 
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }

@@ -3,6 +3,7 @@
 //! 演示如何在 Rust 中包装同步操作为异步 Promise
 
 use ani::prelude::*;
+use ani_derive::ani;
 use std::thread;
 use std::time::Duration;
 

@@ -10,10 +10,11 @@ ANI-RS provides Rust bindings for the ArkTS 1.2 Native Interface (ANI), similar 
 
 **Key Features:**
 
-- 🚀 **Simple macros** - Just use `#[ani]` to export functions
+- 🚀 **Simple macros** - Just use `#[ani]` to export functions (auto-registered!)
 - 🔒 **Type safe** - Automatic conversion between Rust and ArkTS types
 - ⚡ **Zero-cost abstractions** - Minimal runtime overhead
 - 📦 **Module support** - Bind to modules, namespaces, and classes
+- 🎯 **Auto-registration** - No need to manually list functions or use `ani_module!`, just like napi-rs!
 
 ## Quick Start
 
@@ -24,15 +25,17 @@ ANI-RS provides Rust bindings for the ArkTS 1.2 Native Interface (ANI), similar 
 crate-type = ["cdylib"]
 
 [dependencies]
-ani = { git = "https://github.com/ohos-rs/ani-rs", package = "ani-core" }
+ani = { git = "https://github.com/ohos-rs/ani-rs" }
+ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 ```
 
 ### 2. Write your Rust code
 
 ```rust
 use ani::prelude::*;
+use ani_derive::ani;
 
-// Simple function binding
+// Simple function binding - automatically registered!
 #[ani]
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
@@ -43,12 +46,9 @@ pub fn greet(name: String) -> String {
     format!("Hello, {}!", name)
 }
 
-// Register the module
-ani_module! {
-    name: "my_module",
-    lib_name: "libmy_module",
-    functions: [add, greet],
-}
+// That's it! No ani_module! needed.
+// ANI_Constructor is automatically generated on first #[ani] macro usage.
+// Module name is derived from CARGO_PKG_NAME.
 ```
 
 ### 3. Corresponding ArkTS code
