@@ -1,17 +1,17 @@
-//! Interface 示例 - 创建 Interface 实例
+//! Interface Example - Creating Interface instances
 //!
-//! 演示如何处理 ArkTS Interface 类型
-//! 注意: native 函数不能直接声明在 interface 中
+//! Demonstrates how to handle ArkTS Interface types
+//! Note: native functions cannot be declared directly in interfaces
 
 use ani_derive::ani;
 
 // ============================================================================
-// Interface 实现的 Native 包装
+// Native Wrapper for Interface Implementation
 // ============================================================================
 
-/// 创建实现 Comparable 接口的对象
+/// Create object implementing Comparable interface
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// interface Comparable {
 ///     compareTo(other: Object): int;
@@ -27,14 +27,14 @@ use ani_derive::ani;
 /// ```
 #[ani]
 pub fn create_comparable(value: i32) -> i64 {
-    // 存储值并返回指针
+    // Store value and return pointer
     let boxed = Box::new(ComparableImpl { value });
     Box::into_raw(boxed) as i64
 }
 
-/// 比较两个 Comparable 对象
+/// Compare two Comparable objects
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function compareValues(a: long, b: long): int;
 /// ```
@@ -52,9 +52,9 @@ pub fn compare_values(a: i64, b: i64) -> i32 {
     }
 }
 
-/// 释放 Comparable 对象
+/// Release Comparable object
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function destroyComparable(ptr: long): void;
 /// ```
@@ -68,7 +68,7 @@ pub fn destroy_comparable(ptr: i64) {
 }
 
 // ============================================================================
-// 内部实现结构
+// Internal Implementation Struct
 // ============================================================================
 
 struct ComparableImpl {
@@ -76,12 +76,12 @@ struct ComparableImpl {
 }
 
 // ============================================================================
-// Serializable 接口示例
+// Serializable Interface Example
 // ============================================================================
 
-/// 创建可序列化对象
+/// Create serializable object
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// interface Serializable {
 ///     serialize(): string;
@@ -96,9 +96,9 @@ pub fn create_serializable(data: String) -> i64 {
     Box::into_raw(boxed) as i64
 }
 
-/// 序列化对象
+/// Serialize object
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function serialize(ptr: long): string;
 /// ```
@@ -113,9 +113,9 @@ pub fn serialize(ptr: i64) -> String {
     }
 }
 
-/// 反序列化对象
+/// Deserialize object
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function deserialize(ptr: long, json: string): void;
 /// ```
@@ -126,7 +126,7 @@ pub fn deserialize(ptr: i64, json: String) {
     }
     unsafe {
         let obj = &mut *(ptr as *mut SerializableImpl);
-        // 简单解析 - 实际应使用 JSON 库
+        // Simple parsing - should use JSON library in practice
         if json.contains("data") {
             if let Some(start) = json.find("\"data\":\"") {
                 let rest = &json[start + 8..];
@@ -138,7 +138,7 @@ pub fn deserialize(ptr: i64, json: String) {
     }
 }
 
-/// 获取序列化数据
+/// Get serialized data
 #[ani]
 pub fn get_data(ptr: i64) -> String {
     if ptr == 0 {
@@ -150,7 +150,7 @@ pub fn get_data(ptr: i64) -> String {
     }
 }
 
-/// 释放可序列化对象
+/// Release serializable object
 #[ani]
 pub fn destroy_serializable(ptr: i64) {
     if ptr != 0 {
@@ -165,12 +165,12 @@ struct SerializableImpl {
 }
 
 // ============================================================================
-// Iterable 接口示例
+// Iterable Interface Example
 // ============================================================================
 
-/// 创建可迭代对象
+/// Create iterable object
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// interface Iterable<T> {
 ///     hasNext(): boolean;
@@ -188,7 +188,7 @@ pub fn create_int_iterator(start: i32, end: i32) -> i64 {
     Box::into_raw(boxed) as i64
 }
 
-/// 检查是否还有下一个元素
+/// Check if there's a next element
 #[ani]
 pub fn iterator_has_next(ptr: i64) -> bool {
     if ptr == 0 {
@@ -200,7 +200,7 @@ pub fn iterator_has_next(ptr: i64) -> bool {
     }
 }
 
-/// 获取下一个元素
+/// Get next element
 #[ani]
 pub fn iterator_next(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -218,7 +218,7 @@ pub fn iterator_next(ptr: i64) -> i32 {
     }
 }
 
-/// 重置迭代器
+/// Reset iterator
 #[ani]
 pub fn iterator_reset(ptr: i64, start: i32) {
     if ptr == 0 {
@@ -230,7 +230,7 @@ pub fn iterator_reset(ptr: i64, start: i32) {
     }
 }
 
-/// 释放迭代器
+/// Release iterator
 #[ani]
 pub fn destroy_iterator(ptr: i64) {
     if ptr != 0 {
@@ -246,5 +246,5 @@ struct IntIterator {
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

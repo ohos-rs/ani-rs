@@ -324,7 +324,7 @@ impl<'env> ToAni<'env> for Vec<bool> {
             }
 
             if !self.is_empty() {
-                // 转换 bool 到 ani_boolean
+                // Convert bool to ani_boolean
                 let ani_bools: Vec<sys::ani_boolean> =
                     self.iter().map(|&b| if b { 1 } else { 0 }).collect();
 

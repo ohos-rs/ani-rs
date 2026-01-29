@@ -40,10 +40,10 @@
 // Re-export ctor for use in generated code
 pub use ctor;
 
-// 重新导出 sys crate
+// Re-export sys crate
 pub use ani_sys as sys;
 
-// 核心模块
+// Core modules
 pub mod bindgen_runtime;
 pub mod conversions;
 pub mod env;
@@ -60,7 +60,14 @@ pub mod types;
 pub mod prelude {
     pub use crate::env::Env;
     pub use crate::error::{BusinessError, Error, Result, Status, check_status};
-    pub use crate::types::*;
+    pub use crate::types::{
+        AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
+        AniEnum, AniError, AniField, AniFnObject, AniFunction, AniMethod, AniModule, AniNamespace,
+        AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString, AniType,
+        AniVariable, GlobalRef, WeakRef, ani_value_boolean, ani_value_byte, ani_value_char,
+        ani_value_double, ani_value_float, ani_value_int, ani_value_long, ani_value_ref,
+        ani_value_short, native_function,
+    };
 
     // Deprecated type aliases for backward compatibility
     #[allow(deprecated)]
@@ -78,6 +85,9 @@ pub mod prelude {
     pub use crate::bindgen_runtime::{
         FromAni as BrFromAni, ToAni as BrToAni, TypeInfo as BrTypeInfo,
     };
+
+    // Promise types
+    pub use crate::conversions::{Deferred, PromiseRaw};
 
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }

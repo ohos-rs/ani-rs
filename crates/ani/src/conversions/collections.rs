@@ -1,6 +1,6 @@
-//! 集合类型转换
+//! Collection Type Conversion
 //!
-//! 实现 Rust 集合类型和 ANI 类型之间的转换
+//! Implements conversion between Rust collection types and ANI types
 //! - HashMap<K, V> <-> Record<K, V>
 //! - HashSet<T> <-> Set<T>
 //! - BTreeMap<K, V> <-> Map<K, V>
@@ -28,21 +28,21 @@ impl<V: TypeInfo> TypeInfo for HashMap<String, V> {
     }
 }
 
-// HashMap<String, String> 的转换
+// HashMap<String, String> conversion
 impl<'env> ToAni<'env> for HashMap<String, String> {
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        // 创建 Record 对象
+        // Create Record object
         let record_class = env.find_class("Lescompat/Record;")?;
         let ctor = env.find_constructor(&record_class, ":V")?;
         let record = env.new_object(&record_class, &ctor, &[])?;
 
-        // 获取 set 方法
+        // Get set method
         let set_method =
             env.find_method(&record_class, "set", "Lstd/core/String;Lstd/core/Object;:V")?;
 
-        // 设置每个键值对
+        // Set each key-value pair
         for (key, value) in self {
             let ani_key = env.create_string(&key)?;
             let ani_value = env.create_string(&value)?;
@@ -59,7 +59,7 @@ impl<'env> ToAni<'env> for HashMap<String, String> {
     }
 }
 
-// HashMap<String, i32> 的转换
+// HashMap<String, i32> conversion
 impl<'env> ToAni<'env> for HashMap<String, i32> {
     type Output = AniObject<'env>;
 
@@ -134,7 +134,7 @@ impl<K: TypeInfo, V: TypeInfo> TypeInfo for BTreeMap<K, V> {
 }
 
 // ============================================================================
-// 元组类型
+// Tuple Types
 // ============================================================================
 
 impl TypeInfo for (i32, i32) {
@@ -164,7 +164,7 @@ impl TypeInfo for (String, String) {
     }
 }
 
-// 元组转换为数组
+// Tuple to array conversion
 impl<'env> ToAni<'env> for (i32, i32) {
     type Output = sys::ani_array_int;
 
@@ -205,10 +205,10 @@ impl<'env> ToAni<'env> for (f64, f64) {
 }
 
 // ============================================================================
-// JSON 值类型（用于动态数据）
+// JSON Value Type (for dynamic data)
 // ============================================================================
 
-/// 动态 ANI 值，类似于 JSON
+/// Dynamic ANI value, similar to JSON
 #[derive(Debug, Clone)]
 pub enum AniValue {
     /// Null value
@@ -239,37 +239,37 @@ impl TypeInfo for AniValue {
 }
 
 impl AniValue {
-    /// 从 bool 创建
+    /// Create from bool
     pub fn from_bool(v: bool) -> Self {
         AniValue::Bool(v)
     }
 
-    /// 从 i32 创建
+    /// Create from i32
     pub fn from_int(v: i32) -> Self {
         AniValue::Int(v)
     }
 
-    /// 从 i64 创建
+    /// Create from i64
     pub fn from_long(v: i64) -> Self {
         AniValue::Long(v)
     }
 
-    /// 从 f64 创建
+    /// Create from f64
     pub fn from_double(v: f64) -> Self {
         AniValue::Double(v)
     }
 
-    /// 从 String 创建
+    /// Create from String
     pub fn from_string(v: String) -> Self {
         AniValue::String(v)
     }
 
-    /// 检查是否为 null
+    /// Check if value is null
     pub fn is_null(&self) -> bool {
         matches!(self, AniValue::Null)
     }
 
-    /// 尝试获取 bool 值
+    /// Try to get bool value
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             AniValue::Bool(v) => Some(*v),
@@ -277,7 +277,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取 i32 值
+    /// Try to get i32 value
     pub fn as_int(&self) -> Option<i32> {
         match self {
             AniValue::Int(v) => Some(*v),
@@ -285,7 +285,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取 i64 值
+    /// Try to get i64 value
     pub fn as_long(&self) -> Option<i64> {
         match self {
             AniValue::Long(v) => Some(*v),
@@ -294,7 +294,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取 f64 值
+    /// Try to get f64 value
     pub fn as_double(&self) -> Option<f64> {
         match self {
             AniValue::Double(v) => Some(*v),
@@ -304,7 +304,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取字符串值
+    /// Try to get string value
     pub fn as_str(&self) -> Option<&str> {
         match self {
             AniValue::String(v) => Some(v),
@@ -312,7 +312,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取数组
+    /// Try to get array
     pub fn as_array(&self) -> Option<&Vec<AniValue>> {
         match self {
             AniValue::Array(v) => Some(v),
@@ -320,7 +320,7 @@ impl AniValue {
         }
     }
 
-    /// 尝试获取对象
+    /// Try to get object
     pub fn as_object(&self) -> Option<&HashMap<String, AniValue>> {
         match self {
             AniValue::Object(v) => Some(v),

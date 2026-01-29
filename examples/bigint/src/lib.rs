@@ -1,17 +1,17 @@
-//! BigInt 示例 - 解析 BigInt 参数
+//! BigInt Example - Parsing BigInt parameters
 //!
-//! 演示如何处理 ArkTS 的 BigInt 类型
-//! BigInt 在 ANI 中对应 Lescompat/BigInt;
+//! Demonstrates how to handle ArkTS BigInt type
+//! BigInt corresponds to Lescompat/BigInt; in ANI
 
 use ani_derive::ani;
 
 // ============================================================================
-// BigInt 基本操作
+// BigInt Basic Operations
 // ============================================================================
 
-/// 从 i64 创建 BigInt 值（返回 long 表示）
+/// Create BigInt value from i64 (returns long representation)
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function createBigInt(value: long): bigint;
 /// ```
@@ -20,43 +20,43 @@ pub fn create_big_int(value: i64) -> i64 {
     value
 }
 
-/// 将 BigInt 转换为 long
+/// Convert BigInt to long
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript  
 /// native function bigIntToLong(value: bigint): long;
 /// ```
 ///
-/// 注意: BigInt 的 Mangling 是 Lescompat/BigInt;
-/// 在 native 层接收时需要作为对象处理
+/// Note: BigInt's mangling is Lescompat/BigInt;
+/// When received in native layer, it needs to be handled as an object
 #[ani]
 pub fn big_int_to_long(value: i64) -> i64 {
     value
 }
 
 // ============================================================================
-// BigInt 算术运算
+// BigInt Arithmetic Operations
 // ============================================================================
 
-/// BigInt 加法
+/// BigInt addition
 #[ani]
 pub fn big_int_add(a: i64, b: i64) -> i64 {
     a.wrapping_add(b)
 }
 
-/// BigInt 减法
+/// BigInt subtraction
 #[ani]
 pub fn big_int_subtract(a: i64, b: i64) -> i64 {
     a.wrapping_sub(b)
 }
 
-/// BigInt 乘法
+/// BigInt multiplication
 #[ani]
 pub fn big_int_multiply(a: i64, b: i64) -> i64 {
     a.wrapping_mul(b)
 }
 
-/// BigInt 除法
+/// BigInt division
 #[ani]
 pub fn big_int_divide(a: i64, b: i64) -> i64 {
     if b == 0 {
@@ -66,7 +66,7 @@ pub fn big_int_divide(a: i64, b: i64) -> i64 {
     }
 }
 
-/// BigInt 取模
+/// BigInt modulo
 #[ani]
 pub fn big_int_modulo(a: i64, b: i64) -> i64 {
     if b == 0 {
@@ -77,45 +77,45 @@ pub fn big_int_modulo(a: i64, b: i64) -> i64 {
 }
 
 // ============================================================================
-// BigInt 位运算
+// BigInt Bitwise Operations
 // ============================================================================
 
-/// BigInt 按位与
+/// BigInt bitwise AND
 #[ani]
 pub fn big_int_and(a: i64, b: i64) -> i64 {
     a & b
 }
 
-/// BigInt 按位或
+/// BigInt bitwise OR
 #[ani]
 pub fn big_int_or(a: i64, b: i64) -> i64 {
     a | b
 }
 
-/// BigInt 按位异或
+/// BigInt bitwise XOR
 #[ani]
 pub fn big_int_xor(a: i64, b: i64) -> i64 {
     a ^ b
 }
 
-/// BigInt 左移
+/// BigInt left shift
 #[ani]
 pub fn big_int_shl(a: i64, bits: i32) -> i64 {
     a << bits
 }
 
-/// BigInt 右移
+/// BigInt right shift
 #[ani]
 pub fn big_int_shr(a: i64, bits: i32) -> i64 {
     a >> bits
 }
 
 // ============================================================================
-// BigInt 比较
+// BigInt Comparison
 // ============================================================================
 
-/// 比较两个 BigInt
-/// 返回: -1 if a < b, 0 if a == b, 1 if a > b
+/// Compare two BigInt values
+/// Returns: -1 if a < b, 0 if a == b, 1 if a > b
 #[ani]
 pub fn big_int_compare(a: i64, b: i64) -> i32 {
     match a.cmp(&b) {
@@ -125,23 +125,23 @@ pub fn big_int_compare(a: i64, b: i64) -> i32 {
     }
 }
 
-/// 检查 BigInt 是否为零
+/// Check if BigInt is zero
 #[ani]
 pub fn big_int_is_zero(value: i64) -> bool {
     value == 0
 }
 
-/// 检查 BigInt 是否为负数
+/// Check if BigInt is negative
 #[ani]
 pub fn big_int_is_negative(value: i64) -> bool {
     value < 0
 }
 
 // ============================================================================
-// BigInt 工具函数
+// BigInt Utility Functions
 // ============================================================================
 
-/// 获取 BigInt 的位数
+/// Get bit length of BigInt
 #[ani]
 pub fn big_int_bit_length(value: i64) -> i32 {
     if value == 0 {
@@ -151,19 +151,19 @@ pub fn big_int_bit_length(value: i64) -> i32 {
     }
 }
 
-/// 取绝对值
+/// Get absolute value
 #[ani]
 pub fn big_int_abs(value: i64) -> i64 {
     value.abs()
 }
 
-/// 取负值
+/// Negate value
 #[ani]
 pub fn big_int_negate(value: i64) -> i64 {
     -value
 }
 
-/// 计算幂次方 (a^b mod 2^64)
+/// Calculate power (a^b mod 2^64)
 #[ani]
 pub fn big_int_pow(base: i64, exp: i32) -> i64 {
     if exp < 0 {
@@ -183,5 +183,5 @@ pub fn big_int_pow(base: i64, exp: i32) -> i64 {
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

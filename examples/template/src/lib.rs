@@ -1,43 +1,43 @@
-//! Template 示例 - 处理模板类参数
+//! Template Example - Handling template class parameters
 //!
-//! 演示如何处理 ArkTS 的泛型参数
-//! 泛型参数在 ANI 中统一映射为 Lstd/core/Object;
+//! Demonstrates how to handle ArkTS generic parameters
+//! Generic parameters are uniformly mapped to Lstd/core/Object; in ANI
 
 use ani::prelude::*;
 use ani::sys;
 use ani_derive::ani;
 
 // ============================================================================
-// 基本泛型函数
+// Basic Generic Functions
 // ============================================================================
 
-/// 处理泛型参数
+/// Handle generic parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function identity<T>(value: T): T;
 /// ```
 ///
 /// Mangling: Lstd/core/Object;:Lstd/core/Object;
-/// 泛型 T 统一映射为 Object
+/// Generic T is uniformly mapped to Object
 #[no_mangle]
 pub extern "C" fn identity(
     _env: *mut sys::ani_env,
     _obj: sys::ani_object,
     value: sys::ani_object,
 ) -> sys::ani_object {
-    // 直接返回传入的对象
+    // Return the passed object directly
     value
 }
 
-/// 交换两个泛型值
+/// Swap two generic values
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function swap<T, U>(a: T, b: U): [U, T];
 /// ```
 ///
-/// 注意: 返回元组需要创建数组或元组对象
+/// Note: Returning tuple requires creating array or tuple object
 #[no_mangle]
 pub extern "C" fn get_first(
     _env: *mut sys::ani_env,
@@ -59,17 +59,17 @@ pub extern "C" fn get_second(
 }
 
 // ============================================================================
-// Array<T> 泛型
+// Array<T> Generic
 // ============================================================================
 
-/// 获取 Array<T> 的长度
+/// Get length of Array<T>
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function arrayLength<T>(arr: Array<T>): int;
 /// ```
 ///
-/// 注意: Array<T> 的 Mangling 是 Lescompat/Array; 而不是 ani_array
+/// Note: Array<T>'s mangling is Lescompat/Array; not ani_array
 #[no_mangle]
 pub extern "C" fn array_length(
     env: *mut sys::ani_env,
@@ -84,7 +84,7 @@ pub extern "C" fn array_length(
 
         let arr_obj = AniObject::from_raw(arr);
 
-        // 调用 Array 的 length 属性
+        // Call Array's length property
         match env.get_property_by_name_int(&arr_obj, "length") {
             Ok(len) => len,
             Err(_) => -1,
@@ -92,9 +92,9 @@ pub extern "C" fn array_length(
     }
 }
 
-/// 获取 Array<T> 的元素
+/// Get element of Array<T>
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function arrayGet<T>(arr: Array<T>, index: int): T;
 /// ```
@@ -113,7 +113,7 @@ pub extern "C" fn array_get(
 
         let arr_obj = AniObject::from_raw(arr);
 
-        // 调用 Array 的 $_get 方法
+        // Call Array's $_get method
         // Mangling: I:Lstd/core/Object;
         match env.call_method_by_name_ref(&arr_obj, "$_get", Some("I:Lstd/core/Object;"), index) {
             Ok(elem) => elem.as_raw(),
@@ -123,12 +123,12 @@ pub extern "C" fn array_get(
 }
 
 // ============================================================================
-// 泛型容器
+// Generic Container
 // ============================================================================
 
-/// 创建泛型容器
+/// Create generic container
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Container<T> {
 ///     private value: T;
@@ -145,7 +145,7 @@ pub fn create_int_container(value: i32) -> i64 {
     Box::into_raw(container) as i64
 }
 
-/// 获取容器值
+/// Get container value
 #[ani]
 pub fn container_get_int(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -157,7 +157,7 @@ pub fn container_get_int(ptr: i64) -> i32 {
     }
 }
 
-/// 设置容器值
+/// Set container value
 #[ani]
 pub fn container_set_int(ptr: i64, value: i32) {
     if ptr == 0 {
@@ -169,7 +169,7 @@ pub fn container_set_int(ptr: i64, value: i32) {
     }
 }
 
-/// 释放容器
+/// Release container
 #[ani]
 pub fn destroy_int_container(ptr: i64) {
     if ptr != 0 {
@@ -184,7 +184,7 @@ struct GenericContainer<T> {
 }
 
 // ============================================================================
-// 字符串泛型容器
+// String Generic Container
 // ============================================================================
 
 #[ani]
@@ -225,10 +225,10 @@ pub fn destroy_string_container(ptr: i64) {
 }
 
 // ============================================================================
-// 泛型对容器
+// Generic Pair Container
 // ============================================================================
 
-/// 创建键值对容器
+/// Create key-value pair container
 #[ani]
 pub fn create_pair(key: String, value: i32) -> i64 {
     let pair = Box::new(Pair { key, value });
@@ -272,5 +272,5 @@ struct Pair<K, V> {
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

@@ -117,7 +117,7 @@ macro_rules! ani_call_by_name_ret {
 #[repr(transparent)]
 pub struct Env<'local> {
     raw: *mut sys::ani_env,
-    // 使用 *const () 使 Env 非 Send/Sync
+    // Use *const () to make Env non-Send/Sync
     _marker: PhantomData<(&'local (), *const ())>,
 }
 
@@ -924,18 +924,18 @@ impl<'local> Env<'local> {
         )
     }
 
-    /// 删除全局引用
+    /// Delete a global reference
     pub fn delete_global_ref(&self, gref: GlobalRef) -> Result<()> {
         ani_call!(self, GlobalReference_Delete, gref.as_raw())
     }
 
-    /// 检查引用是否为 null
+    /// Check if the reference is null
     pub fn is_null(&self, obj: &AniRef<'_>) -> Result<bool> {
         let result = ani_call_ret!(self, Reference_IsNull, sys::ani_boolean, 0, obj.as_raw())?;
         Ok(result != 0)
     }
 
-    /// 检查引用是否为 undefined
+    /// Check if the reference is undefined
     pub fn is_undefined(&self, obj: &AniRef<'_>) -> Result<bool> {
         let result = ani_call_ret!(
             self,
@@ -947,7 +947,7 @@ impl<'local> Env<'local> {
         Ok(result != 0)
     }
 
-    /// 获取 null 对象引用
+    /// Get the null object reference
     pub fn get_null_object(&self) -> Result<sys::ani_object> {
         let mut result: sys::ani_ref = ptr::null_mut();
         unsafe {
@@ -958,7 +958,7 @@ impl<'local> Env<'local> {
         }
     }
 
-    /// 获取 undefined 对象引用
+    /// Get the undefined object reference
     pub fn get_undefined_object(&self) -> Result<sys::ani_object> {
         let mut result: sys::ani_ref = ptr::null_mut();
         unsafe {
@@ -1201,5 +1201,137 @@ impl<'local> Env<'local> {
         let _ = ani_call!(self, Abort, c_message.as_ptr());
         // Abort should never return, but in case it does
         std::process::abort()
+    }
+
+    // ========================================================================
+    // Promise Operations (Low-level API)
+    // ========================================================================
+    //
+    // For a higher-level Promise API, consider using `PromiseRaw` and `Deferred`
+    // from the `ani::conversions` module:
+    //
+    // ```rust,ignore
+    // use ani::conversions::{PromiseRaw, Deferred};
+    //
+    // // Immediately resolve a promise
+    // let promise = PromiseRaw::resolve_int(&env, 42)?;
+    //
+    // // Create a deferred promise for later resolution
+    // let (deferred, promise) = PromiseRaw::deferred(&env)?;
+    // deferred.resolve_string(&env, "done")?;
+    // ```
+
+    /// Create a new Promise with its resolver (low-level API)
+    ///
+    /// Returns a tuple of (resolver, promise). The resolver is used to either
+    /// resolve or reject the promise. Once resolved or rejected, the resolver
+    /// is automatically freed.
+    ///
+    /// **Note:** For a higher-level API, consider using [`PromiseRaw`](crate::conversions::PromiseRaw)
+    /// and [`Deferred`](crate::conversions::Deferred) from the `ani::conversions` module.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use ani::prelude::*;
+    ///
+    /// fn create_async_task(env: &Env) -> Result<AniObject> {
+    ///     let (resolver, promise) = env.promise_new()?;
+    ///
+    ///     // In a real scenario, you'd spawn a thread or async task
+    ///     // that eventually calls resolve or reject
+    ///     let result = env.create_string("done")?;
+    ///     env.promise_resolve(&resolver, &result.into())?;
+    ///
+    ///     Ok(promise)
+    /// }
+    /// ```
+    pub fn promise_new(&self) -> Result<(AniResolver, AniObject<'local>)> {
+        let mut resolver: sys::ani_resolver = ptr::null_mut();
+        let mut promise: sys::ani_object = ptr::null_mut();
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.Promise_New.unwrap())(self.raw, &mut resolver, &mut promise);
+            check_status(status)?;
+            Ok((
+                AniResolver::from_raw(resolver),
+                AniObject::from_raw(promise),
+            ))
+        }
+    }
+
+    /// Resolve a Promise with a value
+    ///
+    /// This resolves the promise associated with the given resolver and queues
+    /// any `then` callbacks. The resolver is freed after this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `resolver` - The resolver for the promise to resolve
+    /// * `value` - The value to resolve the promise with
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let (resolver, promise) = env.promise_new()?;
+    /// let result = env.create_string("success")?;
+    /// env.promise_resolve(&resolver, &result.into())?;
+    /// ```
+    pub fn promise_resolve(&self, resolver: &AniResolver, value: &AniRef<'_>) -> Result<()> {
+        ani_call!(
+            self,
+            PromiseResolver_Resolve,
+            resolver.as_raw(),
+            value.as_raw()
+        )
+    }
+
+    /// Reject a Promise with an error
+    ///
+    /// This rejects the promise associated with the given resolver and queues
+    /// any `catch` callbacks. The resolver is freed after this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `resolver` - The resolver for the promise to reject
+    /// * `error` - The error to reject the promise with
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let (resolver, promise) = env.promise_new()?;
+    /// let error = env.create_error("Something went wrong")?;
+    /// env.promise_reject(&resolver, &error)?;
+    /// ```
+    pub fn promise_reject(&self, resolver: &AniResolver, error: &AniError<'_>) -> Result<()> {
+        ani_call!(
+            self,
+            PromiseResolver_Reject,
+            resolver.as_raw(),
+            error.as_raw()
+        )
+    }
+
+    /// Reject a Promise with a string message
+    ///
+    /// Convenience method that creates an error from a message and rejects the promise.
+    ///
+    /// # Arguments
+    ///
+    /// * `resolver` - The resolver for the promise to reject
+    /// * `message` - The error message
+    pub fn promise_reject_with_message(&self, resolver: &AniResolver, message: &str) -> Result<()> {
+        // Create an error string and use it to reject
+        // Note: In ANI, we can cast a string to ani_error for rejection
+        let error_string = self.create_string(message)?;
+        unsafe {
+            let api = &*(*self.raw);
+            let status = (api.PromiseResolver_Reject.unwrap())(
+                self.raw,
+                resolver.as_raw(),
+                error_string.as_raw() as sys::ani_error,
+            );
+            check_status(status)
+        }
     }
 }

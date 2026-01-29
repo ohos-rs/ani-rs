@@ -1,17 +1,17 @@
-//! Wrap Native Ptr 示例 - 在 ETS 对象中保存 Native 对象指针
+//! Wrap Native Ptr Example - Storing Native object pointers in ETS objects
 //!
-//! 演示如何在 ArkTS 对象中存储和管理 Rust 对象指针
-//! 这是实现类绑定的核心技术
+//! Demonstrates how to store and manage Rust object pointers in ArkTS objects
+//! This is the core technique for implementing class bindings
 
 use ani_derive::ani;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 // ============================================================================
-// 基本指针包装
+// Basic Pointer Wrapping
 // ============================================================================
 
-/// Native 资源结构体
+/// Native resource struct
 pub struct NativeResource {
     id: i32,
     name: String,
@@ -28,9 +28,9 @@ impl NativeResource {
     }
 }
 
-/// 创建 Native 资源并返回指针
+/// Create Native resource and return pointer
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class NativeWrapper {
 ///     private nativePtr: long = 0;
@@ -48,7 +48,7 @@ pub fn create_native_resource(id: i32, name: String) -> i64 {
     Box::into_raw(resource) as i64
 }
 
-/// 获取资源 ID
+/// Get resource ID
 #[ani]
 pub fn get_resource_id(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -60,7 +60,7 @@ pub fn get_resource_id(ptr: i64) -> i32 {
     }
 }
 
-/// 获取资源名称
+/// Get resource name
 #[ani]
 pub fn get_resource_name(ptr: i64) -> String {
     if ptr == 0 {
@@ -72,7 +72,7 @@ pub fn get_resource_name(ptr: i64) -> String {
     }
 }
 
-/// 设置资源名称
+/// Set resource name
 #[ani]
 pub fn set_resource_name(ptr: i64, name: String) {
     if ptr == 0 {
@@ -84,7 +84,7 @@ pub fn set_resource_name(ptr: i64, name: String) {
     }
 }
 
-/// 添加数据到资源
+/// Add data to resource
 #[ani]
 pub fn resource_add_data(ptr: i64, byte: i32) {
     if ptr == 0 {
@@ -96,7 +96,7 @@ pub fn resource_add_data(ptr: i64, byte: i32) {
     }
 }
 
-/// 获取资源数据大小
+/// Get resource data size
 #[ani]
 pub fn resource_data_size(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -108,9 +108,9 @@ pub fn resource_data_size(ptr: i64) -> i32 {
     }
 }
 
-/// 释放 Native 资源
+/// Release Native resource
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class NativeWrapper {
 ///     dispose(): void {
@@ -133,10 +133,10 @@ pub fn destroy_native_resource(ptr: i64) {
 }
 
 // ============================================================================
-// 复杂对象包装
+// Complex Object Wrapping
 // ============================================================================
 
-/// 数据库连接模拟
+/// Database connection simulation
 #[allow(dead_code)]
 pub struct DatabaseConnection {
     connection_string: String,
@@ -171,14 +171,14 @@ impl DatabaseConnection {
     }
 }
 
-/// 创建数据库连接
+/// Create database connection
 #[ani]
 pub fn create_db_connection(connection_string: String) -> i64 {
     let conn = Box::new(DatabaseConnection::new(connection_string));
     Box::into_raw(conn) as i64
 }
 
-/// 连接数据库
+/// Connect to database
 #[ani]
 pub fn db_connect(ptr: i64) -> bool {
     if ptr == 0 {
@@ -190,7 +190,7 @@ pub fn db_connect(ptr: i64) -> bool {
     }
 }
 
-/// 断开数据库连接
+/// Disconnect from database
 #[ani]
 pub fn db_disconnect(ptr: i64) {
     if ptr == 0 {
@@ -202,7 +202,7 @@ pub fn db_disconnect(ptr: i64) {
     }
 }
 
-/// 检查是否已连接
+/// Check if connected
 #[ani]
 pub fn db_is_connected(ptr: i64) -> bool {
     if ptr == 0 {
@@ -214,7 +214,7 @@ pub fn db_is_connected(ptr: i64) -> bool {
     }
 }
 
-/// 执行查询
+/// Execute query
 #[ani]
 pub fn db_execute_query(ptr: i64, query: String) -> i32 {
     if ptr == 0 {
@@ -226,7 +226,7 @@ pub fn db_execute_query(ptr: i64, query: String) -> i32 {
     }
 }
 
-/// 获取查询计数
+/// Get query count
 #[ani]
 pub fn db_get_query_count(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -238,23 +238,23 @@ pub fn db_get_query_count(ptr: i64) -> i32 {
     }
 }
 
-/// 释放数据库连接
+/// Release database connection
 #[ani]
 pub fn destroy_db_connection(ptr: i64) {
     if ptr != 0 {
         unsafe {
             let mut conn = Box::from_raw(ptr as *mut DatabaseConnection);
             conn.disconnect();
-            // Box 会自动释放
+            // Box is automatically released
         }
     }
 }
 
 // ============================================================================
-// 带引用计数的对象管理
+// Reference Counted Object Management
 // ============================================================================
 
-/// 全局资源管理器
+/// Global resource manager
 static RESOURCE_MANAGER: Mutex<Option<HashMap<i64, i32>>> = Mutex::new(None);
 
 fn get_manager() -> std::sync::MutexGuard<'static, Option<HashMap<i64, i32>>> {
@@ -265,7 +265,7 @@ fn get_manager() -> std::sync::MutexGuard<'static, Option<HashMap<i64, i32>>> {
     guard
 }
 
-/// 增加引用计数
+/// Add reference count
 #[ani]
 pub fn add_ref(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -281,7 +281,7 @@ pub fn add_ref(ptr: i64) -> i32 {
     }
 }
 
-/// 减少引用计数，返回剩余计数
+/// Decrease reference count, returns remaining count
 #[ani]
 pub fn release_ref(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -301,7 +301,7 @@ pub fn release_ref(ptr: i64) -> i32 {
     0
 }
 
-/// 获取当前引用计数
+/// Get current reference count
 #[ani]
 pub fn get_ref_count(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -316,29 +316,29 @@ pub fn get_ref_count(ptr: i64) -> i32 {
 }
 
 // ============================================================================
-// 类型安全的指针包装
+// Type-Safe Pointer Wrapping
 // ============================================================================
 
-/// 使用类型标记的安全指针
+/// Create type-tagged safe pointer
 #[ani]
 pub fn create_typed_ptr(type_id: i32, value: i64) -> i64 {
-    // 将类型 ID 编码到高 32 位，值编码到低 32 位
+    // Encode type ID in high 32 bits, value in low 32 bits
     ((type_id as i64) << 32) | (value & 0xFFFFFFFF)
 }
 
-/// 获取类型 ID
+/// Get type ID
 #[ani]
 pub fn get_ptr_type_id(encoded: i64) -> i32 {
     ((encoded >> 32) & 0xFFFFFFFF) as i32
 }
 
-/// 获取指针值
+/// Get pointer value
 #[ani]
 pub fn get_ptr_value(encoded: i64) -> i64 {
     encoded & 0xFFFFFFFF
 }
 
-/// 验证指针类型
+/// Validate pointer type
 #[ani]
 pub fn validate_ptr_type(encoded: i64, expected_type: i32) -> bool {
     get_ptr_type_id(encoded) == expected_type

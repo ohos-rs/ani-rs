@@ -1,23 +1,23 @@
-//! Record 示例 - 处理简单 Record
+//! Record Example - Handling simple Record
 //!
-//! 演示如何处理 ArkTS 的 Record<K, V> 类型
-//! Record 类似于 HashMap/Dictionary
+//! Demonstrates how to handle ArkTS Record<K, V> type
+//! Record is similar to HashMap/Dictionary
 
 use ani_derive::ani;
 use std::collections::HashMap;
 
 // ============================================================================
-// Record 基本操作
+// Record Basic Operations
 // ============================================================================
 
-/// 创建一个简单的 Record
+/// Create a simple Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function createRecord(): Record<string, int>;
 /// ```
 ///
-/// 返回指向 HashMap 的指针
+/// Returns pointer to HashMap
 #[ani]
 pub fn create_record() -> i64 {
     let map: HashMap<String, i32> = HashMap::new();
@@ -25,9 +25,9 @@ pub fn create_record() -> i64 {
     Box::into_raw(boxed) as i64
 }
 
-/// 向 Record 中设置值
+/// Set value in Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordSet(record: long, key: string, value: int): void;
 /// ```
@@ -42,9 +42,9 @@ pub fn record_set(record: i64, key: String, value: i32) {
     }
 }
 
-/// 从 Record 中获取值
+/// Get value from Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordGet(record: long, key: string): int;
 /// ```
@@ -59,9 +59,9 @@ pub fn record_get(record: i64, key: String) -> i32 {
     }
 }
 
-/// 检查 Record 是否包含 key
+/// Check if Record contains key
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordHas(record: long, key: string): boolean;
 /// ```
@@ -76,9 +76,9 @@ pub fn record_has(record: i64, key: String) -> bool {
     }
 }
 
-/// 从 Record 中删除值
+/// Delete value from Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordDelete(record: long, key: string): boolean;
 /// ```
@@ -93,9 +93,9 @@ pub fn record_delete(record: i64, key: String) -> bool {
     }
 }
 
-/// 获取 Record 的大小
+/// Get Record size
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordSize(record: long): int;
 /// ```
@@ -110,9 +110,9 @@ pub fn record_size(record: i64) -> i32 {
     }
 }
 
-/// 清空 Record
+/// Clear Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function recordClear(record: long): void;
 /// ```
@@ -127,9 +127,9 @@ pub fn record_clear(record: i64) {
     }
 }
 
-/// 释放 Record
+/// Release Record
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function destroyRecord(record: long): void;
 /// ```
@@ -143,10 +143,10 @@ pub fn destroy_record(record: i64) {
 }
 
 // ============================================================================
-// Record<string, string> 操作
+// Record<string, string> Operations
 // ============================================================================
 
-/// 创建字符串 Record
+/// Create string Record
 #[ani]
 pub fn create_string_record() -> i64 {
     let map: HashMap<String, String> = HashMap::new();
@@ -154,7 +154,7 @@ pub fn create_string_record() -> i64 {
     Box::into_raw(boxed) as i64
 }
 
-/// 设置字符串值
+/// Set string value
 #[ani]
 pub fn string_record_set(record: i64, key: String, value: String) {
     if record == 0 {
@@ -166,7 +166,7 @@ pub fn string_record_set(record: i64, key: String, value: String) {
     }
 }
 
-/// 获取字符串值
+/// Get string value
 #[ani]
 pub fn string_record_get(record: i64, key: String) -> String {
     if record == 0 {
@@ -178,7 +178,7 @@ pub fn string_record_get(record: i64, key: String) -> String {
     }
 }
 
-/// 释放字符串 Record
+/// Release string Record
 #[ani]
 pub fn destroy_string_record(record: i64) {
     if record != 0 {
@@ -189,10 +189,10 @@ pub fn destroy_string_record(record: i64) {
 }
 
 // ============================================================================
-// Record 转换为 JSON 字符串
+// Record to JSON String Conversion
 // ============================================================================
 
-/// 将 int Record 转换为 JSON 字符串
+/// Convert int Record to JSON string
 #[ani]
 pub fn record_to_json(record: i64) -> String {
     if record == 0 {
@@ -204,12 +204,12 @@ pub fn record_to_json(record: i64) -> String {
             .iter()
             .map(|(k, v)| format!("\"{}\":{}", k, v))
             .collect();
-        parts.sort(); // 确保顺序一致
+        parts.sort(); // Ensure consistent ordering
         format!("{{{}}}", parts.join(","))
     }
 }
 
-/// 将字符串 Record 转换为 JSON 字符串
+/// Convert string Record to JSON string
 #[ani]
 pub fn string_record_to_json(record: i64) -> String {
     if record == 0 {
@@ -227,15 +227,15 @@ pub fn string_record_to_json(record: i64) -> String {
 }
 
 // ============================================================================
-// 批量操作
+// Batch Operations
 // ============================================================================
 
-/// 从 JSON 字符串解析 Record（简化版）
+/// Parse Record from JSON string (simplified)
 #[ani]
 pub fn record_from_json(json: String) -> i64 {
     let mut map: HashMap<String, i32> = HashMap::new();
 
-    // 简单解析 - 实际应使用 JSON 库
+    // Simple parsing - should use JSON library in practice
     let content = json.trim_start_matches('{').trim_end_matches('}');
     for pair in content.split(',') {
         let parts: Vec<&str> = pair.split(':').collect();
@@ -252,5 +252,5 @@ pub fn record_from_json(json: String) -> i64 {
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

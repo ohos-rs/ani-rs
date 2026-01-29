@@ -1,16 +1,16 @@
-//! 类绑定示例 - 展示如何绑定 Rust 结构体到 ArkTS 类
+//! Class Binding Example - Demonstrates how to bind Rust structs to ArkTS classes
 //!
-//! 这个示例演示了类方法、构造函数、getter/setter 的绑定
+//! This example shows class methods, constructors, getter/setter bindings
 
 use ani_derive::ani;
 
 // ============================================================================
-// Calculator 类 - 演示类方法绑定
+// Calculator Class - Demonstrates class method binding
 // ============================================================================
 
-/// 计算器类
+/// Calculator class
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Calculator {
 ///     native static create(): Calculator;
@@ -24,32 +24,32 @@ pub struct Calculator {
     _value: f64,
 }
 
-/// 创建计算器（静态方法）
+/// Create calculator (static method)
 #[ani(class = "Calculator", static)]
 pub fn create() -> i64 {
     let calc = Box::new(Calculator { _value: 0.0 });
     Box::into_raw(calc) as i64
 }
 
-/// 加法（实例方法）
+/// Addition (instance method)
 #[ani(class = "Calculator")]
 pub fn add(_this: i64, a: i32, b: i32) -> i32 {
     a + b
 }
 
-/// 减法（实例方法）
+/// Subtraction (instance method)
 #[ani(class = "Calculator")]
 pub fn subtract(_this: i64, a: i32, b: i32) -> i32 {
     a - b
 }
 
-/// 乘法（实例方法）
+/// Multiplication (instance method)
 #[ani(class = "Calculator")]
 pub fn multiply(_this: i64, a: f64, b: f64) -> f64 {
     a * b
 }
 
-/// 除法（实例方法）
+/// Division (instance method)
 #[ani(class = "Calculator")]
 pub fn divide(_this: i64, a: f64, b: f64) -> f64 {
     if b == 0.0 {
@@ -60,23 +60,23 @@ pub fn divide(_this: i64, a: f64, b: f64) -> f64 {
 }
 
 // ============================================================================
-// Person 类 - 演示带有状态的类
+// Person Class - Demonstrates stateful class
 // ============================================================================
 
-/// 人员类
+/// Person class
 pub struct Person {
     name: String,
     age: i32,
 }
 
-/// 创建 Person（构造函数）
+/// Create Person (constructor)
 #[ani(class = "Person", constructor)]
 pub fn person_new(name: String, age: i32) -> i64 {
     let person = Box::new(Person { name, age });
     Box::into_raw(person) as i64
 }
 
-/// 获取姓名
+/// Get name
 #[ani(class = "Person", name = "getName")]
 pub fn person_get_name(this: i64) -> String {
     unsafe {
@@ -85,7 +85,7 @@ pub fn person_get_name(this: i64) -> String {
     }
 }
 
-/// 获取年龄
+/// Get age
 #[ani(class = "Person", name = "getAge")]
 pub fn person_get_age(this: i64) -> i32 {
     unsafe {
@@ -94,7 +94,7 @@ pub fn person_get_age(this: i64) -> i32 {
     }
 }
 
-/// 设置年龄
+/// Set age
 #[ani(class = "Person", name = "setAge")]
 pub fn person_set_age(this: i64, age: i32) {
     unsafe {
@@ -103,7 +103,7 @@ pub fn person_set_age(this: i64, age: i32) {
     }
 }
 
-/// 问候
+/// Greeting
 #[ani(class = "Person")]
 pub fn greet(this: i64) -> String {
     unsafe {
@@ -115,7 +115,7 @@ pub fn greet(this: i64) -> String {
     }
 }
 
-/// 释放 Person
+/// Release Person
 #[ani(class = "Person", name = "destroy")]
 pub fn person_destroy(this: i64) {
     unsafe {
@@ -124,8 +124,8 @@ pub fn person_destroy(this: i64) {
 }
 
 // ============================================================================
-// 不再需要 ani_module! 宏！
-// ANI_Constructor 在第一个 #[ani] 宏展开时自动生成
+// No ani_module! macro needed!
+// ANI_Constructor is automatically generated on first #[ani] macro expansion
 // ============================================================================
 
 #[cfg(test)]
@@ -142,7 +142,7 @@ mod tests {
         assert!((multiply(calc_ptr, 2.0, 3.0) - 6.0).abs() < f64::EPSILON);
         assert!((divide(calc_ptr, 6.0, 2.0) - 3.0).abs() < f64::EPSILON);
 
-        // 清理
+        // Cleanup
         unsafe {
             let _ = Box::from_raw(calc_ptr as *mut Calculator);
         }
@@ -161,7 +161,7 @@ mod tests {
 
         assert_eq!(greet(person_ptr), "Hello, I'm Alice and I'm 31 years old!");
 
-        // 清理
+        // Cleanup
         person_destroy(person_ptr);
     }
 }

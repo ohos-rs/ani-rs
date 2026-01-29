@@ -1,18 +1,18 @@
-//! 调用方法示例 - 在 Native 调用 ArkTS 方法
+//! Call Method Example - Calling ArkTS methods from Native
 //!
-//! 演示如何从 Rust 调用 ArkTS 对象的方法
+//! Demonstrates how to call ArkTS object methods from Rust
 
 use ani::prelude::*;
 use ani::sys;
 use ani_derive::ani;
 
 // ============================================================================
-// 调用对象方法
+// Calling Object Methods
 // ============================================================================
 
-/// 调用对象的 int 方法
+/// Call object's int method
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Calculator {
 ///     add(a: int, b: int): int { return a + b; }
@@ -21,14 +21,14 @@ use ani_derive::ani;
 /// ```
 #[ani]
 pub fn call_add(_calc_ptr: i64, a: i32, b: i32) -> i32 {
-    // 这里演示直接计算，实际应该调用对象方法
-    // 真实调用需要使用 env.call_method_by_name_int()
+    // Here we demonstrate direct calculation, actual implementation should call object method
+    // Real call needs to use env.call_method_by_name_int()
     a + b
 }
 
-/// 调用对象的字符串方法
+/// Call object's string method
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Greeter {
 ///     greet(name: string): string { return "Hello, " + name; }
@@ -41,14 +41,14 @@ pub fn call_greet(greeter_ptr: i64, name: String) -> String {
 }
 
 // ============================================================================
-// 使用低级 API 调用方法
+// Using Low-Level API to Call Methods
 // ============================================================================
 
-/// 通过 env 调用对象方法的示例
+/// Example of calling object method through env
 ///
-/// 这个函数展示了如何使用 Env API 调用 ArkTS 对象的方法
+/// This function demonstrates how to use Env API to call ArkTS object methods
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function invokeMethod(obj: Object, methodName: string): int;
 /// ```
@@ -68,13 +68,13 @@ pub extern "C" fn invoke_object_method_int(
         let target_obj = AniObject::from_raw(target);
         let method_str = AniString::from_raw(method_name);
 
-        // 获取方法名
+        // Get method name
         let method_name_str = match env.get_string(&method_str) {
             Ok(s) => s,
             Err(_) => return -2,
         };
 
-        // 调用方法（无参数，返回 int）
+        // Call method (no arguments, returns int)
         match env.call_method_by_name_int(&target_obj, &method_name_str, Some(":I")) {
             Ok(result) => result,
             Err(_) => -3,
@@ -82,9 +82,9 @@ pub extern "C" fn invoke_object_method_int(
     }
 }
 
-/// 调用对象的 getter 方法
+/// Call object's getter method
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function getProperty(obj: Object, propName: string): int;
 /// ```
@@ -102,7 +102,7 @@ pub extern "C" fn get_property_int(
 
         let target_obj = AniObject::from_raw(target);
 
-        // 获取 int 属性值
+        // Get int property value
         match env.get_property_by_name_int(&target_obj, "value") {
             Ok(result) => result,
             Err(_) => -2,
@@ -111,12 +111,12 @@ pub extern "C" fn get_property_int(
 }
 
 // ============================================================================
-// 调用静态方法
+// Calling Static Methods
 // ============================================================================
 
-/// 调用类的静态方法
+/// Call class's static method
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class MathUtils {
 ///     static square(n: int): int { return n * n; }
@@ -125,14 +125,14 @@ pub extern "C" fn get_property_int(
 /// ```
 #[ani]
 pub fn call_static_square(n: i32) -> i32 {
-    // 简化版本 - 直接计算
-    // 实际需要通过 Class_FindMethod 和 Class_CallStaticMethod
+    // Simplified version - direct calculation
+    // Actual implementation needs Class_FindMethod and Class_CallStaticMethod
     n * n
 }
 
-/// 调用类的静态方法获取单例
+/// Call class's static method to get singleton
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Singleton {
 ///     static getInstance(): Singleton;
@@ -141,17 +141,17 @@ pub fn call_static_square(n: i32) -> i32 {
 /// ```
 #[ani]
 pub fn get_singleton() -> i64 {
-    // 返回模拟的单例指针
+    // Return simulated singleton pointer
     0x12345678
 }
 
 // ============================================================================
-// 调用带多参数的方法
+// Calling Methods with Multiple Arguments
 // ============================================================================
 
-/// 调用带多个参数的方法
+/// Call method with multiple arguments
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function callWithMultipleArgs(
 ///     obj: Object,
@@ -174,12 +174,12 @@ pub fn call_with_multiple_args(
 }
 
 // ============================================================================
-// 调用带返回对象的方法
+// Calling Methods that Return Objects
 // ============================================================================
 
-/// 调用返回字符串的方法
+/// Call method returning string
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function callGetString(obj: Object): string;
 /// ```
@@ -188,12 +188,12 @@ pub fn call_get_string(obj_ptr: i64) -> String {
     format!("String from object at {}", obj_ptr)
 }
 
-/// 调用返回数字的方法
+/// Call method returning number
 #[ani]
 pub fn call_get_number(obj_ptr: i64) -> f64 {
     obj_ptr as f64 * 1.5
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

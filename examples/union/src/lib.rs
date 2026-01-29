@@ -1,23 +1,23 @@
-//! Union 示例 - 使用 Either 类型处理联合类型
+//! Union Example - Using Either type to handle union types
 //!
-//! 演示如何使用 `Either` 类型优雅地处理 ArkTS 的联合类型 (Union Types)
-//! 联合类型在 ANI 中统一映射为 Lstd/core/Object;
+//! Demonstrates how to elegantly handle ArkTS union types using the `Either` type
+//! Union types are uniformly mapped to Lstd/core/Object; in ANI
 //!
-//! Either 类型自动处理：
-//! - 类型检查 (instanceof)
-//! - 装箱/拆箱 (boxing/unboxing)
-//! - 类型安全的模式匹配
+//! Either type automatically handles:
+//! - Type checking (instanceof)
+//! - Boxing/unboxing
+//! - Type-safe pattern matching
 
 use ani::conversions::{Either, Either3, Either4};
 use ani_derive::ani;
 
 // ============================================================================
-// 使用 #[ani] 宏 + Either 类型处理联合类型
+// Using #[ani] macro + Either type to handle union types
 // ============================================================================
 
-/// 使用 Either 处理 string | int 联合类型
+/// Handle string | int union type using Either
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// type StringOrInt = string | int;
 /// native function handleStringOrIntEither(value: StringOrInt): string;
@@ -30,9 +30,9 @@ pub fn handle_string_or_int_either(value: Either<String, i32>) -> String {
     }
 }
 
-/// 使用 Either3 处理三类型联合
+/// Handle three-type union using Either3
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// type ThreeTypes = string | int | boolean;
 /// native function handleThreeTypes(value: ThreeTypes): string;
@@ -46,9 +46,9 @@ pub fn handle_three_types(value: Either3<String, i32, bool>) -> String {
     }
 }
 
-/// 使用 Either4 处理四类型联合
+/// Handle four-type union using Either4
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// type FourTypes = string | int | boolean | double;
 /// native function handleFourTypes(value: FourTypes): string;
@@ -63,9 +63,9 @@ pub fn handle_four_types(value: Either4<String, i32, bool, f64>) -> String {
     }
 }
 
-/// 返回联合类型 - 使用 Either
+/// Return union type - using Either
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function returnEither(useString: boolean): string | int;
 /// ```
@@ -79,11 +79,11 @@ pub fn return_either(use_string: bool) -> Either<String, i32> {
 }
 
 // ============================================================================
-// 辅助函数示例
+// Helper Function Examples
 // ============================================================================
 
-/// 处理简单的数值或字符串
-/// 返回类型标识码: 0=unknown, 1=int, 2=string
+/// Handle simple numeric or string value
+/// Returns type identifier code: 0=unknown, 1=int, 2=string
 #[ani]
 pub fn get_type_code(value_type: i32) -> i32 {
     match value_type {
@@ -93,7 +93,7 @@ pub fn get_type_code(value_type: i32) -> i32 {
     }
 }
 
-/// 根据类型创建不同的值
+/// Create different values based on type
 #[ani]
 pub fn create_by_type(type_code: i32, int_val: i32, str_val: String) -> String {
     match type_code {

@@ -5,6 +5,8 @@
 use quote::quote;
 use syn::{FnArg, ReturnType, Signature, Type};
 
+use crate::codegen::should_skip_in_signature;
+
 /// Generate ANI signature from Rust type
 pub fn rust_type_to_signature(ty: &Type) -> String {
     let type_str = quote!(#ty).to_string().replace(" ", "");
@@ -29,7 +31,7 @@ pub fn rust_type_to_signature(ty: &Type) -> String {
     }
 }
 
-/// Resolve signature for complex types (Option, Vec, Result, Either, etc.)
+/// Resolve signature for complex types (Option, Vec, Result, Either, PromiseRaw, etc.)
 fn resolve_complex_type_signature(ty: &Type, type_str: &str) -> String {
     // Option<T>
     if type_str.starts_with("Option<") {
@@ -44,6 +46,11 @@ fn resolve_complex_type_signature(ty: &Type, type_str: &str) -> String {
     // Result<T, E>
     if type_str.starts_with("Result<") {
         return resolve_result_signature(ty);
+    }
+
+    // PromiseRaw - returns Promise object
+    if type_str.starts_with("PromiseRaw") {
+        return "Lstd/core/Object;".to_string();
     }
 
     // Either types (union types in ArkTS)
@@ -134,6 +141,9 @@ fn get_boxed_signature(ty: &Type) -> String {
 // ============================================================================
 
 /// Generate ANI signature from function signature
+///
+/// This function automatically skips injected parameters (Env, This, Class)
+/// since they are not part of the ArkTS function signature.
 pub fn generate_fn_signature(sig: &Signature, skip_first: bool) -> String {
     generate_signature_from_inputs(&sig.inputs, &sig.output, skip_first)
 }
@@ -146,7 +156,14 @@ fn generate_signature_from_inputs(
 ) -> String {
     let mut sig = String::new();
 
-    let params: Vec<_> = inputs.iter().skip(if skip_first { 1 } else { 0 }).collect();
+    // Filter out:
+    // 1. First parameter if skip_first is true (for class methods)
+    // 2. All injected parameters (Env, This, Class)
+    let params: Vec<_> = inputs
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .filter(|arg| !should_skip_in_signature(arg))
+        .collect();
 
     for input in params {
         if let FnArg::Typed(pat_type) = input {

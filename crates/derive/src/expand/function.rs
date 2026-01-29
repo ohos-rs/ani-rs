@@ -9,7 +9,7 @@ use syn::{FnArg, ItemFn};
 
 use crate::codegen::{
     generate_class_register, generate_module_register, generate_namespace_register,
-    generate_wrapper,
+    generate_wrapper, has_this_injection,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
@@ -38,10 +38,18 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
         .first()
         .is_some_and(|arg| matches!(arg, FnArg::Receiver(_)));
 
-    let is_static = attrs.is_static || !has_self;
+    // Check if function has This injection (alternative way to indicate instance method)
+    let has_this = has_this_injection(&func);
+
+    // is_static is false if:
+    // 1. Explicitly marked as static with attrs.is_static
+    // 2. Has self receiver
+    // 3. Has This parameter injection
+    let is_static = attrs.is_static || (!has_self && !has_this);
     let is_class_method = attrs.class.is_some();
 
     // Generate signature
+    // Note: generate_fn_signature automatically skips injected parameters (Env, This, Class)
     let signature = attrs
         .signature
         .clone()

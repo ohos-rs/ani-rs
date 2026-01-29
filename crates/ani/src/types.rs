@@ -213,6 +213,19 @@ define_opaque_type!(
 );
 
 // ============================================================================
+// Promise Types
+// ============================================================================
+
+define_opaque_type!(
+    /// ANI resolver type for Promise resolution/rejection
+    ///
+    /// The resolver is used to resolve or reject a Promise that was created
+    /// along with it. Once a Promise is resolved or rejected, the resolver
+    /// is automatically freed.
+    AniResolver, sys::ani_resolver
+);
+
+// ============================================================================
 // Global References
 // ============================================================================
 
@@ -242,7 +255,7 @@ impl GlobalRef {
     }
 }
 
-// GlobalRef 可以在线程间传递
+// GlobalRef can be transferred between threads
 unsafe impl Send for GlobalRef {}
 unsafe impl Sync for GlobalRef {}
 

@@ -1,18 +1,18 @@
-//! SetField 示例 - 读写 Field
+//! SetField Example - Reading and Writing Fields
 //!
-//! 演示如何在 Native 层读写 ArkTS 对象的字段
+//! Demonstrates how to read and write ArkTS object fields in Native layer
 
 use ani::prelude::*;
 use ani::sys;
 use ani_derive::ani;
 
 // ============================================================================
-// 读取字段值
+// Reading Field Values
 // ============================================================================
 
-/// 获取对象的 int 字段
+/// Get object's int field
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Person {
 ///     age: int = 0;
@@ -33,7 +33,7 @@ pub extern "C" fn get_age(
 
         let person_obj = AniObject::from_raw(person);
 
-        // 通过字段名获取值
+        // Get value by field name
         match env.get_field_by_name_int(&person_obj, "age") {
             Ok(age) => age,
             Err(_) => 0,
@@ -41,9 +41,9 @@ pub extern "C" fn get_age(
     }
 }
 
-/// 获取对象的 double 字段
+/// Get object's double field
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Product {
 ///     price: double = 0.0;
@@ -64,7 +64,7 @@ pub extern "C" fn get_price(
 
         let product_obj = AniObject::from_raw(product);
 
-        // 获取 double 字段
+        // Get double field
         match env.get_property_by_name_double(&product_obj, "price") {
             Ok(price) => price,
             Err(_) => 0.0,
@@ -73,12 +73,12 @@ pub extern "C" fn get_price(
 }
 
 // ============================================================================
-// 设置字段值
+// Setting Field Values
 // ============================================================================
 
-/// 设置对象的 int 字段
+/// Set object's int field
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Person {
 ///     age: int = 0;
@@ -100,14 +100,14 @@ pub extern "C" fn set_age(
 
         let person_obj = AniObject::from_raw(person);
 
-        // 设置字段值
+        // Set field value
         let _ = env.set_field_by_name_int(&person_obj, "age", age);
     }
 }
 
-/// 设置对象的 double 字段
+/// Set object's double field
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// class Product {
 ///     price: double = 0.0;
@@ -129,30 +129,30 @@ pub extern "C" fn set_price(
 
         let product_obj = AniObject::from_raw(product);
 
-        // 设置 double 字段
+        // Set double field
         let _ = env.set_property_by_name_double(&product_obj, "price", price);
     }
 }
 
 // ============================================================================
-// 批量读写字段
+// Batch Reading and Writing Fields
 // ============================================================================
 
-/// 结构体用于存储字段值
+/// Struct for storing field values
 struct PersonData {
     name: String,
     age: i32,
     height: f64,
 }
 
-/// 创建 PersonData
+/// Create PersonData
 #[ani]
 pub fn create_person_data(name: String, age: i32, height: f64) -> i64 {
     let data = Box::new(PersonData { name, age, height });
     Box::into_raw(data) as i64
 }
 
-/// 获取 name
+/// Get name
 #[ani]
 pub fn person_data_get_name(ptr: i64) -> String {
     if ptr == 0 {
@@ -164,7 +164,7 @@ pub fn person_data_get_name(ptr: i64) -> String {
     }
 }
 
-/// 设置 name
+/// Set name
 #[ani]
 pub fn person_data_set_name(ptr: i64, name: String) {
     if ptr == 0 {
@@ -176,7 +176,7 @@ pub fn person_data_set_name(ptr: i64, name: String) {
     }
 }
 
-/// 获取 age
+/// Get age
 #[ani]
 pub fn person_data_get_age(ptr: i64) -> i32 {
     if ptr == 0 {
@@ -188,7 +188,7 @@ pub fn person_data_get_age(ptr: i64) -> i32 {
     }
 }
 
-/// 设置 age
+/// Set age
 #[ani]
 pub fn person_data_set_age(ptr: i64, age: i32) {
     if ptr == 0 {
@@ -200,7 +200,7 @@ pub fn person_data_set_age(ptr: i64, age: i32) {
     }
 }
 
-/// 获取 height
+/// Get height
 #[ani]
 pub fn person_data_get_height(ptr: i64) -> f64 {
     if ptr == 0 {
@@ -212,7 +212,7 @@ pub fn person_data_get_height(ptr: i64) -> f64 {
     }
 }
 
-/// 设置 height
+/// Set height
 #[ani]
 pub fn person_data_set_height(ptr: i64, height: f64) {
     if ptr == 0 {
@@ -224,7 +224,7 @@ pub fn person_data_set_height(ptr: i64, height: f64) {
     }
 }
 
-/// 释放 PersonData
+/// Release PersonData
 #[ani]
 pub fn destroy_person_data(ptr: i64) {
     if ptr != 0 {
@@ -235,12 +235,12 @@ pub fn destroy_person_data(ptr: i64) {
 }
 
 // ============================================================================
-// 使用 Field 句柄（高性能版本）
+// Using Field Handle (High-Performance Version)
 // ============================================================================
 
-/// 通过 Field 句柄获取值（比通过名称更快）
+/// Get value by Field handle (faster than by name)
 ///
-/// 这需要先通过 Class_FindField 获取 Field 句柄
+/// This requires first obtaining Field handle through Class_FindField
 #[no_mangle]
 pub extern "C" fn get_field_by_handle(
     env: *mut sys::ani_env,
@@ -264,7 +264,7 @@ pub extern "C" fn get_field_by_handle(
     }
 }
 
-/// 通过 Field 句柄设置值
+/// Set value by Field handle
 #[no_mangle]
 pub extern "C" fn set_field_by_handle(
     env: *mut sys::ani_env,
@@ -287,5 +287,5 @@ pub extern "C" fn set_field_by_handle(
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

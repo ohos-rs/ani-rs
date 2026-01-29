@@ -11,21 +11,50 @@
 //! - **codegen**: Code generation (wrappers, registration functions)
 //! - **expand**: Macro expansion for functions, impl blocks, and structs
 //!
+//! ## Parameter Injection System
+//!
+//! Similar to napi-rs, the `#[ani]` macro supports automatic parameter injection.
+//! These parameters are automatically provided by the macro and do NOT appear
+//! in the ArkTS function signature:
+//!
+//! - `env: &Env<'_>` - ANI environment for creating objects, Promises, etc.
+//! - `this: &AniObject<'_>` - Instance object for class methods
+//! - `class: &AniClass<'_>` - Class object for static methods
+//!
 //! ## Usage Examples
 //!
 //! ```rust,ignore
 //! use ani_derive::ani;
+//! use ani::prelude::*;
 //!
-//! // Module-level function
+//! // Simple function - no injection needed
 //! #[ani]
 //! fn add(a: i32, b: i32) -> i32 {
 //!     a + b
 //! }
 //!
-//! // Class method
-//! #[ani(class = "Calculator")]
-//! fn multiply(&self, a: f64, b: f64) -> f64 {
-//!     a * b
+//! // Function with Env injection - for Promise creation, object creation, etc.
+//! // ArkTS signature: native function createPromise(value: int): Promise<Int>;
+//! #[ani]
+//! fn create_promise(env: &Env<'_>, value: i32) -> sys::ani_object {
+//!     // env is automatically injected, not part of ArkTS signature
+//!     PromiseRaw::resolve_int(env, value).unwrap().into_raw()
+//! }
+//!
+//! // Class instance method with This injection
+//! // ArkTS signature: class MyClass { native getName(): string; }
+//! #[ani(class = "MyClass")]
+//! fn get_name(env: &Env<'_>, this: &AniObject<'_>) -> String {
+//!     // Both env and this are automatically injected
+//!     "name".to_string()
+//! }
+//!
+//! // Static method with Env injection
+//! // ArkTS signature: class MyClass { static native create(name: string): MyClass; }
+//! #[ani(class = "MyClass", static)]
+//! fn create(env: &Env<'_>, name: String) -> sys::ani_object {
+//!     // env is automatically injected
+//!     std::ptr::null_mut()
 //! }
 //!
 //! // Namespace function

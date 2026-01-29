@@ -181,14 +181,14 @@ pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -
     unsafe {
         let api = &*(*env);
 
-        // 获取字符串长度
+        // Get string length
         let mut len: usize = 0;
         let status = (api.String_GetUTF8Size.unwrap())(env, string, &mut len);
         if status != sys::ani_status_ANI_OK {
             return Err(Error::from_status(crate::error::Status::from(status)));
         }
 
-        // 分配缓冲区并获取内容
+        // Allocate buffer and get content
         let mut buffer = vec![0u8; len + 1];
         let mut chars_copied: usize = 0;
 

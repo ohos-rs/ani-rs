@@ -194,15 +194,15 @@ impl<A: TypeInfo, B: TypeInfo, C: TypeInfo, D: TypeInfo, E: TypeInfo, F: TypeInf
 /// Macro for generating method signatures
 #[macro_export]
 macro_rules! ani_signature {
-    // 无参数返回 void
+    // No arguments, returns void
     (() -> ()) => { ":V" };
 
-    // 无参数有返回值
+    // No arguments, has return value
     (() -> $ret:ty) => {
         concat!(":", <$ret as $crate::conversions::TypeInfo>::type_signature())
     };
 
-    // 有参数返回 void
+    // Has arguments, returns void
     (($($arg:ty),+) -> ()) => {
         concat!(
             $(<$arg as $crate::conversions::TypeInfo>::type_signature()),+,
@@ -210,7 +210,7 @@ macro_rules! ani_signature {
         )
     };
 
-    // 有参数有返回值
+    // Has arguments, has return value
     (($($arg:ty),+) -> $ret:ty) => {
         concat!(
             $(<$arg as $crate::conversions::TypeInfo>::type_signature()),+,

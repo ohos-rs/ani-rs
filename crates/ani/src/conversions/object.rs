@@ -182,7 +182,7 @@ impl<T> NativePointer<T> {
 impl<T> TypeInfo for NativePointer<T> {
     fn type_signature() -> &'static str {
         "J"
-    } // 作为 long 传递
+    } // passed as long
     fn ani_c_type() -> &'static str {
         "ani_long"
     }
@@ -205,17 +205,17 @@ impl<'env, T> FromAni<'env> for NativePointer<T> {
 }
 
 // ============================================================================
-// 通用对象转换辅助
+// Generic Object Conversion Helper
 // ============================================================================
 
-/// 对象转换辅助 trait
+/// Object conversion helper trait
 pub trait ObjectConversion<'env> {
-    /// 从 AniObject 转换
+    /// Convert from AniObject
     fn from_ani_object(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self>
     where
         Self: Sized;
 
-    /// 转换为 AniObject
+    /// Convert to AniObject
     fn to_ani_object(&self, env: &Env<'env>) -> Result<AniObject<'env>>;
 }
 

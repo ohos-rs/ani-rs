@@ -62,6 +62,11 @@ fn resolve_complex_ani_type(ty: &Type, type_str: &str) -> TokenStream {
         return quote! { ani::sys::ani_object };
     }
 
+    // PromiseRaw returns ani_object
+    if type_str.starts_with("PromiseRaw") {
+        return quote! { ani::sys::ani_object };
+    }
+
     quote! { ani::sys::ani_object }
 }
 
@@ -238,12 +243,31 @@ pub fn generate_return_conversion(return_type: &ReturnType) -> TokenStream {
         ReturnType::Type(_, ty) => {
             let type_str = quote!(#ty).to_string().replace(" ", "");
 
+            // Handle Result<PromiseRaw, E> specially
+            if is_result_promise_type(&type_str) {
+                return generate_result_promise_return_conversion();
+            }
+
             // Handle Result<T, E>
             if type_str.starts_with("Result<") {
                 return generate_result_return_conversion(ty);
             }
 
             generate_simple_return_conversion(&type_str)
+        }
+    }
+}
+
+/// Generate return conversion for Result<PromiseRaw, E>
+fn generate_result_promise_return_conversion() -> TokenStream {
+    quote! {
+        match result {
+            Ok(promise) => promise.into_raw(),
+            Err(e) => {
+                let biz_err: ::ani::error::BusinessError = e.into();
+                unsafe { biz_err.throw_into(env) };
+                std::ptr::null_mut()
+            }
         }
     }
 }
@@ -270,8 +294,17 @@ fn generate_simple_return_conversion(type_str: &str) -> TokenStream {
                 Err(_) => std::ptr::null_mut()
             }
         },
+        // PromiseRaw - extract raw ani_object
+        _ if type_str.starts_with("PromiseRaw") => quote! {
+            result.into_raw()
+        },
         _ => quote! { result },
     }
+}
+
+/// Check if type is a Result containing PromiseRaw
+fn is_result_promise_type(type_str: &str) -> bool {
+    type_str.starts_with("Result<PromiseRaw")
 }
 
 /// Generate return conversion for Result<T, E>

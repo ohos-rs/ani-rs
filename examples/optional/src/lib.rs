@@ -1,25 +1,25 @@
-//! Optional 参数示例 - 处理可选参数
+//! Optional Parameter Example - Handling optional parameters
 //!
-//! 演示如何处理 ArkTS 的可选参数 (?)
-//! 使用泛型 Option<T> 实现，所有实现了 ToAni/FromAni 的类型都支持 Option
+//! Demonstrates how to handle ArkTS optional parameters (?)
+//! Uses generic Option<T> implementation, all types implementing ToAni/FromAni support Option
 //!
-//! 注意: 可选的基本类型会被自动装箱，如 int? -> Lstd/core/Int;
+//! Note: Optional primitive types are automatically boxed, e.g., int? -> Lstd/core/Int;
 
 use ani_derive::ani;
 
 // ============================================================================
-// 基本可选参数 - 使用 #[ani] 宏和 Option<T>
+// Basic Optional Parameters - Using #[ani] macro and Option<T>
 // ============================================================================
 
-/// 处理可选的 int 参数
+/// Handle optional int parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalInt(required: int, optional?: int): int;
 /// ```
 ///
 /// Mangling: ILstd/core/Int;:I
-/// Option<i32> 会自动处理装箱的 Int，None 表示 null
+/// Option<i32> automatically handles boxed Int, None represents null
 #[ani]
 pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
     match optional {
@@ -28,9 +28,9 @@ pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
     }
 }
 
-/// 处理可选的 double 参数
+/// Handle optional double parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalDouble(required: double, optional?: double): double;
 /// ```
@@ -44,9 +44,9 @@ pub fn with_optional_double(required: f64, optional: Option<f64>) -> f64 {
     }
 }
 
-/// 处理可选的 boolean 参数
+/// Handle optional boolean parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalBoolean(value: int, flag?: boolean): int;
 /// ```
@@ -61,18 +61,18 @@ pub fn with_optional_boolean(value: i32, flag: Option<bool>) -> i32 {
 }
 
 // ============================================================================
-// 可选字符串参数（引用类型不需要装箱）
+// Optional String Parameters (reference types don't need boxing)
 // ============================================================================
 
-/// 处理可选的 string 参数
+/// Handle optional string parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalString(required: string, optional?: string): string;
 /// ```
 ///
 /// Mangling: Lstd/core/String;Lstd/core/String;:Lstd/core/String;
-/// 引用类型的可选参数不会装箱，直接传 null
+/// Reference type optional parameters are not boxed, null is passed directly
 #[ani]
 pub fn with_optional_string(required: String, optional: Option<String>) -> String {
     match optional {
@@ -82,12 +82,12 @@ pub fn with_optional_string(required: String, optional: Option<String>) -> Strin
 }
 
 // ============================================================================
-// 多个可选参数
+// Multiple Optional Parameters
 // ============================================================================
 
-/// 处理多个可选参数
+/// Handle multiple optional parameters
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withMultipleOptional(
 ///     a: int,
@@ -104,12 +104,12 @@ pub fn with_multiple_optional(a: i32, b: Option<i32>, c: Option<i32>, d: Option<
 }
 
 // ============================================================================
-// 更多类型示例 - 展示泛型支持的其他类型
+// More Type Examples - Demonstrating generic support for other types
 // ============================================================================
 
-/// 处理可选的 long (i64) 参数
+/// Handle optional long (i64) parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalLong(required: long, optional?: long): long;
 /// ```
@@ -121,9 +121,9 @@ pub fn with_optional_long(required: i64, optional: Option<i64>) -> i64 {
     }
 }
 
-/// 处理可选的 float (f32) 参数
+/// Handle optional float (f32) parameter
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withOptionalFloat(required: float, optional?: float): float;
 /// ```
@@ -136,32 +136,32 @@ pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
 }
 
 // ============================================================================
-// 简化版本（使用宏包装）
+// Simplified Version (using macro wrapper)
 // ============================================================================
 
-/// 使用宏的简化版本 - 有默认值的参数
+/// Simplified version using macro - parameter with default value
 ///
-/// 对应的 ArkTS 定义:
+/// Corresponding ArkTS definition:
 /// ```typescript
 /// native function withDefault(value: int, multiplier: int = 1): int;
 /// ```
 ///
-/// 注意: 带默认值的参数与可选参数处理方式相同
+/// Note: Parameters with default values are handled the same as optional parameters
 #[ani]
 pub fn with_default_simple(value: i32, multiplier: i32) -> i32 {
     value * multiplier
 }
 
-/// 可选参数计数
+/// Optional parameter count
 ///
-/// 统计有多少个非 null 的可选参数
+/// Count how many non-null optional parameters
 #[ani]
 pub fn count_provided_args() -> i32 {
-    // 这个函数只是演示目的
-    // 实际需要检查每个参数是否为 null
+    // This function is for demonstration purposes only
+    // In practice, each parameter needs to be checked for null
     0
 }
 
 // ============================================================================
-// 模块初始化
+// Module Initialization
 // ============================================================================

@@ -1,41 +1,41 @@
-//! 基础示例 - 展示 ani-rs 的简单使用方法
+//! Basic Example - Demonstrates simple usage of ani-rs
 //!
-//! 这个示例演示了如何使用 `#[ani]` 宏创建 ANI 绑定，类似于 napi-rs。
+//! This example shows how to use the `#[ani]` macro to create ANI bindings, similar to napi-rs.
 //!
-//! `#[ani]` 是一个统一的宏，可以用于：
-//! - 模块级函数绑定（自动注册，无需手动列出！）
-//! - 类方法绑定（实例方法和静态方法）
-//! - 命名空间函数绑定
-//! - 初始化函数标记
+//! `#[ani]` is a unified macro that can be used for:
+//! - Module-level function binding (auto-registration, no manual listing needed!)
+//! - Class method binding (instance methods and static methods)
+//! - Namespace function binding
+//! - Initialization function marking
 //!
-//! 使用 `ctor` crate 实现类似 napi-rs 的自动注册机制，
-//! 所有标记了 `#[ani]` 的函数会在库加载时自动注册到全局注册表中。
+//! Uses the `ctor` crate to implement napi-rs-like auto-registration mechanism,
+//! all functions marked with `#[ani]` are automatically registered to the global registry when the library loads.
 
 use ani_derive::ani;
 
 // ============================================================================
-// 基础数学函数 - 模块级别（自动注册！）
+// Basic Math Functions - Module Level (Auto-registered!)
 // ============================================================================
 
-/// 两数相加
+/// Add two numbers
 #[ani]
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
-/// 两数相减
+/// Subtract two numbers
 #[ani]
 pub fn subtract(a: i32, b: i32) -> i32 {
     a - b
 }
 
-/// 两数相乘
+/// Multiply two numbers
 #[ani]
 pub fn multiply(a: i32, b: i32) -> i32 {
     a * b
 }
 
-/// 两数相除（b 为 0 时返回 0）
+/// Divide two numbers (returns 0 when b is 0)
 #[ani]
 pub fn divide(a: i32, b: i32) -> i32 {
     if b == 0 {
@@ -46,26 +46,26 @@ pub fn divide(a: i32, b: i32) -> i32 {
 }
 
 // ============================================================================
-// 字符串操作
+// String Operations
 // ============================================================================
 
-/// 问候函数
+/// Greeting function
 #[ani]
 pub fn greet(name: String) -> String {
     format!("Hello, {}!", name)
 }
 
-/// 字符串长度
+/// String length
 #[ani]
 pub fn string_length(s: String) -> i32 {
     s.len() as i32
 }
 
 // ============================================================================
-// 高级数学函数
+// Advanced Math Functions
 // ============================================================================
 
-/// 计算阶乘
+/// Calculate factorial
 #[ani]
 pub fn factorial(n: i32) -> i64 {
     if n <= 1 {
@@ -75,7 +75,7 @@ pub fn factorial(n: i32) -> i64 {
     }
 }
 
-/// 判断是否为质数
+/// Check if a number is prime
 #[ani]
 pub fn is_prime(n: i32) -> bool {
     if n <= 1 {
@@ -97,7 +97,7 @@ pub fn is_prime(n: i32) -> bool {
     true
 }
 
-/// 计算最大公约数
+/// Calculate greatest common divisor
 #[ani]
 pub fn gcd(mut a: i32, mut b: i32) -> i32 {
     a = a.abs();
@@ -110,7 +110,7 @@ pub fn gcd(mut a: i32, mut b: i32) -> i32 {
     a
 }
 
-/// 计算斐波那契数
+/// Calculate Fibonacci number
 #[ani]
 pub fn fibonacci(n: i32) -> i64 {
     if n <= 0 {
@@ -130,8 +130,8 @@ pub fn fibonacci(n: i32) -> i64 {
 }
 
 // ============================================================================
-// 不再需要 ani_module! 宏！
-// ANI_Constructor 在第一个 #[ani] 宏展开时自动生成
+// No ani_module! macro needed!
+// ANI_Constructor is automatically generated on first #[ani] macro expansion
 // ============================================================================
 
 #[cfg(test)]
