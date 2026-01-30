@@ -140,6 +140,15 @@ impl<T: TypeInfo> TypeInfo for Vec<T> {
     }
 }
 
+impl TypeInfo for crate::conversions::ArrayBuffer {
+    fn type_signature() -> &'static str {
+        "Lescompat/ArrayBuffer;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_arraybuffer"
+    }
+}
+
 // ============================================================================
 // ToAni Trait - Rust to ANI Conversion
 // ============================================================================

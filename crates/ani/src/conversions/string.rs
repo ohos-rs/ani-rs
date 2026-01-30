@@ -12,6 +12,7 @@ use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::sys;
 use crate::types::AniString;
+use crate::ani_call_ret;
 
 use super::traits::{FromAni, ToAni, TypeInfo};
 
@@ -177,37 +178,14 @@ pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -
             format!("Null pointer: {}", "string"),
         ));
     }
-
-    unsafe {
-        let api = &*(*env);
-
-        // Get string length
-        let mut len: usize = 0;
-        let status = (api.String_GetUTF8Size.unwrap())(env, string, &mut len);
-        if status != sys::ani_status_ANI_OK {
-            return Err(Error::from_status(crate::error::Status::from(status)));
-        }
-
-        // Allocate buffer and get content
-        let mut buffer = vec![0u8; len + 1];
-        let mut chars_copied: usize = 0;
-
-        let status = (api.String_GetUTF8.unwrap())(
-            env,
-            string,
-            buffer.as_mut_ptr() as *mut i8,
-            len + 1,
-            &mut chars_copied,
-        );
-
-        if status != sys::ani_status_ANI_OK {
-            return Err(Error::from_status(crate::error::Status::from(status)));
-        }
-
-        buffer.truncate(chars_copied);
-        String::from_utf8(buffer)
-            .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid UTF-8 string"))
-    }
+    let env_ref = unsafe { Env::from_raw_unchecked(env) };
+    let len: usize = ani_call_ret!(env_ref, String_GetUTF8Size, usize, 0, string)?;
+    let mut buffer = vec![0u8; len + 1];
+    let chars_copied: usize =
+        ani_call_ret!(env_ref, String_GetUTF8, usize, 0, string, buffer.as_mut_ptr() as *mut i8, len + 1)?;
+    buffer.truncate(chars_copied);
+    String::from_utf8(buffer)
+        .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid UTF-8 string"))
 }
 
 /// Create ANI string
@@ -222,21 +200,10 @@ pub unsafe fn string_to_raw(env: *mut sys::ani_env, s: &str) -> Result<sys::ani_
             format!("Null pointer: {}", "env"),
         ));
     }
-
-    unsafe {
-        let api = &*(*env);
-        let c_str = CString::new(s)
-            .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid string"))?;
-
-        let mut result: sys::ani_string = std::ptr::null_mut();
-        let status = (api.String_NewUTF8.unwrap())(env, c_str.as_ptr(), s.len(), &mut result);
-
-        if status != sys::ani_status_ANI_OK {
-            return Err(Error::from_status(crate::error::Status::from(status)));
-        }
-
-        Ok(result)
-    }
+    let env_ref = unsafe { Env::from_raw_unchecked(env) };
+    let c_str = CString::new(s)
+        .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid string"))?;
+    ani_call_ret!(env_ref, String_NewUTF8, sys::ani_string, std::ptr::null_mut(), c_str.as_ptr(), s.len())
 }
 
 #[cfg(test)]

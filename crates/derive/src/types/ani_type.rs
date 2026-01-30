@@ -109,6 +109,8 @@ pub enum AniType {
     Promise(PromiseType),
     /// AniObject - raw object type
     AniObject,
+    /// ArrayBuffer - binary data buffer type
+    ArrayBuffer,
     /// Tuple type (for function arguments)
     Tuple(Vec<AniType>),
     /// Unknown/custom type - fallback to object
@@ -177,6 +179,11 @@ impl AniType {
         // Check for AniObject
         if ident == "AniObject" {
             return AniType::AniObject;
+        }
+
+        // Check for ArrayBuffer types
+        if ident == "ArrayBuffer" || ident == "ArrayBufferSlice" {
+            return AniType::ArrayBuffer;
         }
 
         // Check for Either types
@@ -348,6 +355,7 @@ impl AniType {
             AniType::Either(_) => quote! { ani::sys::ani_object },
             AniType::Promise(_) => quote! { ani::sys::ani_object },
             AniType::AniObject => quote! { ani::sys::ani_object },
+            AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
             AniType::Unknown(_) => quote! { ani::sys::ani_object },
         }
@@ -414,6 +422,7 @@ impl AniType {
             AniType::Either(_) => "Lstd/core/Object;".to_string(),
             AniType::Promise(_) => "Lstd/core/Object;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
+            AniType::ArrayBuffer => "Lescompat/ArrayBuffer;".to_string(),
             AniType::Tuple(elements) => {
                 // Tuple generates signature for each element
                 elements

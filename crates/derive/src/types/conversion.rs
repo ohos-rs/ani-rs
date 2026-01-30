@@ -89,6 +89,13 @@ fn generate_type_conversion(
             generate_ref_conversion(param_name, converted_name, ty)
         }
 
+        // ArrayBuffer / ArrayBufferSlice - from_ani(ani_arraybuffer)
+        AniType::ArrayBuffer => generate_arraybuffer_param_conversion(
+            param_name,
+            converted_name,
+            ty,
+        ),
+
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
     }
@@ -239,6 +246,21 @@ fn generate_ref_conversion(param_name: &Ident, converted_name: &Ident, ty: &Type
     }
 }
 
+/// Generate ArrayBuffer / ArrayBufferSlice parameter conversion (ani_arraybuffer -> Rust)
+fn generate_arraybuffer_param_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_arraybuffer)
+                .expect("Failed to convert ArrayBuffer type")
+        };
+    }
+}
+
 // ============================================================================
 // Return Value Conversion
 // ============================================================================
@@ -309,6 +331,15 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
         // Unit type - no return
         AniType::Unit => quote! {},
 
+        // ArrayBuffer / Vec<u8> - use ToAni (Rust -> ani_arraybuffer)
+        AniType::ArrayBuffer => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
+                Ok(ab) => ab,
+                Err(_) => std::ptr::null_mut()
+            }
+        },
+
         // Either types - use ToAni
         AniType::Either(_) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
@@ -364,6 +395,13 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
         },
         AniType::Primitive(PrimitiveType::Bool) => quote! { if val { 1 } else { 0 } },
         AniType::Unit => quote! {},
+        AniType::ArrayBuffer => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
+                Ok(ab) => ab,
+                Err(_) => std::ptr::null_mut()
+            }
+        },
         _ => quote! { val },
     };
 

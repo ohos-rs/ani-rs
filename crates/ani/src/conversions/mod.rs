@@ -18,6 +18,7 @@
 //! - `traits` - Core conversion traits
 
 mod array;
+mod arraybuffer;
 mod boxed;
 mod collections;
 mod either;
@@ -34,6 +35,7 @@ mod traits;
 mod undefined;
 
 // Re-export all public items
+pub use arraybuffer::*;
 pub use boxed::*;
 pub use collections::*;
 pub use either::*;

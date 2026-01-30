@@ -23,6 +23,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-arraybuffer"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-async-wrapper"
 version = "0.1.0"
 dependencies = [

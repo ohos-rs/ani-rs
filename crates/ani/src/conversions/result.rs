@@ -8,6 +8,7 @@ use std::fmt::Debug;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::sys;
+use crate::{ani_call, ani_call_ret_result};
 
 use super::traits::{ToAni, TypeInfo};
 
@@ -55,31 +56,12 @@ where
 
 /// Throw an ANI error
 pub fn throw_error(env: &Env<'_>, message: &str) -> Result<()> {
-    unsafe {
-        let api = &*(*env.as_raw());
-
-        // Create error message string
-        let ani_msg = env.create_string(message)?;
-
-        // Find Error class
-        let error_class = env.find_class("Lstd/core/Error;")?;
-
-        // Find constructor
-        let ctor = env.find_constructor(&error_class, "Lstd/core/String;:V")?;
-
-        // Create error object
-        let args = [crate::types::ani_value_ref(ani_msg.as_raw() as sys::ani_ref)];
-        let error_obj = env.new_object(&error_class, &ctor, &args[..])?;
-
-        // Throw exception
-        let status = (api.ThrowError.unwrap())(env.as_raw(), error_obj.as_raw() as sys::ani_error);
-
-        if status != sys::ani_status_ANI_OK {
-            return Err(Error::from_status(crate::error::Status::from(status)));
-        }
-
-        Ok(())
-    }
+    let ani_msg = env.create_string(message)?;
+    let error_class = env.find_class("Lstd/core/Error;")?;
+    let ctor = env.find_constructor(&error_class, "Lstd/core/String;:V")?;
+    let args = [crate::types::ani_value_ref(ani_msg.as_raw() as sys::ani_ref)];
+    let error_obj = env.new_object(&error_class, &ctor, &args[..])?;
+    ani_call!(env, ThrowError, error_obj.as_raw() as sys::ani_error)
 }
 
 /// Throw a type error
@@ -96,38 +78,21 @@ pub fn throw_null_error(env: &Env<'_>, name: &str) -> Result<()> {
 
 /// Check if there is a pending exception
 pub fn check_exception(env: &Env<'_>) -> bool {
-    unsafe {
-        let api = &*(*env.as_raw());
-        let mut has_error: sys::ani_boolean = 0;
-        let status = (api.ExistUnhandledError.unwrap())(env.as_raw(), &mut has_error);
-        status == sys::ani_status_ANI_OK && has_error != 0
-    }
+    ani_call_ret_result!(env, ExistUnhandledError, sys::ani_boolean, 0)
+        .map(|r| r != 0)
+        .unwrap_or(false)
 }
 
 /// Clear pending exception
 pub fn clear_exception(env: &Env<'_>) -> Result<()> {
-    unsafe {
-        let api = &*(*env.as_raw());
-        let status = (api.ResetError.unwrap())(env.as_raw());
-        if status != sys::ani_status_ANI_OK {
-            return Err(Error::from_status(crate::error::Status::from(status)));
-        }
-        Ok(())
-    }
+    ani_call!(env, ResetError)
 }
 
 /// Get current exception
 pub fn get_exception(env: &Env<'_>) -> Option<sys::ani_error> {
-    unsafe {
-        let api = &*(*env.as_raw());
-        let mut error: sys::ani_error = std::ptr::null_mut();
-        let status = (api.GetUnhandledError.unwrap())(env.as_raw(), &mut error);
-        if status == sys::ani_status_ANI_OK && !error.is_null() {
-            Some(error)
-        } else {
-            None
-        }
-    }
+    ani_call_ret_result!(env, GetUnhandledError, sys::ani_error, std::ptr::null_mut())
+        .ok()
+        .filter(|p| !p.is_null())
 }
 
 // ============================================================================

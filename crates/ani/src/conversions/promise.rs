@@ -45,6 +45,7 @@ use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
 use crate::types::{AniObject, AniRef, AniResolver};
+use crate::{ani_call, ani_call_2ret};
 
 /// Raw Promise value in ANI
 ///
@@ -119,29 +120,18 @@ impl<'env> PromiseRaw<'env> {
     /// let promise = PromiseRaw::resolve(&env, &result.into())?;
     /// ```
     pub fn resolve(env: &Env<'env>, value: &AniRef<'_>) -> Result<Self> {
-        let mut resolver: sys::ani_resolver = ptr::null_mut();
-        let mut promise: sys::ani_object = ptr::null_mut();
+        let (resolver, promise) = ani_call_2ret!(
+            env,
+            Promise_New,
+            sys::ani_resolver,
+            sys::ani_object,
+            ptr::null_mut(),
+            ptr::null_mut()
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to create promise"))?;
 
-        unsafe {
-            let api = &*(*env.as_raw());
-            let status = (api.Promise_New.unwrap())(env.as_raw(), &mut resolver, &mut promise);
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to create promise",
-                ));
-            }
-
-            // Resolve the promise
-            let status =
-                (api.PromiseResolver_Resolve.unwrap())(env.as_raw(), resolver, value.as_raw());
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to resolve promise",
-                ));
-            }
-        }
+        ani_call!(env, PromiseResolver_Resolve, resolver, value.as_raw())
+            .map_err(|_| Error::new(Status::GenericFailure, "Failed to resolve promise"))?;
 
         Ok(Self {
             inner: promise,
@@ -184,35 +174,24 @@ impl<'env> PromiseRaw<'env> {
     /// let promise = PromiseRaw::reject(&env, "Something went wrong")?;
     /// ```
     pub fn reject(env: &Env<'env>, error: impl AsRef<str>) -> Result<Self> {
-        let mut resolver: sys::ani_resolver = ptr::null_mut();
-        let mut promise: sys::ani_object = ptr::null_mut();
+        let (resolver, promise) = ani_call_2ret!(
+            env,
+            Promise_New,
+            sys::ani_resolver,
+            sys::ani_object,
+            ptr::null_mut(),
+            ptr::null_mut()
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to create promise"))?;
 
-        unsafe {
-            let api = &*(*env.as_raw());
-            let status = (api.Promise_New.unwrap())(env.as_raw(), &mut resolver, &mut promise);
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to create promise",
-                ));
-            }
-
-            // Create error string
-            let error_str = env.create_string(error.as_ref())?;
-
-            // Reject the promise (using string as error)
-            let status = (api.PromiseResolver_Reject.unwrap())(
-                env.as_raw(),
-                resolver,
-                error_str.as_raw() as sys::ani_error,
-            );
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to reject promise",
-                ));
-            }
-        }
+        let error_str = env.create_string(error.as_ref())?;
+        ani_call!(
+            env,
+            PromiseResolver_Reject,
+            resolver,
+            error_str.as_raw() as sys::ani_error
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))?;
 
         Ok(Self {
             inner: promise,
@@ -235,19 +214,15 @@ impl<'env> PromiseRaw<'env> {
     /// deferred.resolve(&env, &result.into())?;
     /// ```
     pub fn deferred(env: &Env<'env>) -> Result<(Deferred, Self)> {
-        let mut resolver: sys::ani_resolver = ptr::null_mut();
-        let mut promise: sys::ani_object = ptr::null_mut();
-
-        unsafe {
-            let api = &*(*env.as_raw());
-            let status = (api.Promise_New.unwrap())(env.as_raw(), &mut resolver, &mut promise);
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to create promise",
-                ));
-            }
-        }
+        let (resolver, promise) = ani_call_2ret!(
+            env,
+            Promise_New,
+            sys::ani_resolver,
+            sys::ani_object,
+            ptr::null_mut(),
+            ptr::null_mut()
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to create promise"))?;
 
         let deferred = Deferred {
             resolver: unsafe { AniResolver::from_raw(resolver) },
@@ -309,21 +284,8 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `value` - The value to resolve with (as AniRef)
     pub fn resolve(self, env: &Env<'_>, value: &AniRef<'_>) -> Result<()> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let status = (api.PromiseResolver_Resolve.unwrap())(
-                env.as_raw(),
-                self.resolver.as_raw(),
-                value.as_raw(),
-            );
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to resolve promise",
-                ));
-            }
-        }
-        Ok(())
+        ani_call!(env, PromiseResolver_Resolve, self.resolver.as_raw(), value.as_raw())
+            .map_err(|_| Error::new(Status::GenericFailure, "Failed to resolve promise"))
     }
 
     /// Resolve the Promise with an int value
@@ -358,22 +320,14 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `error` - The error message
     pub fn reject(self, env: &Env<'_>, error: impl AsRef<str>) -> Result<()> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let error_str = env.create_string(error.as_ref())?;
-            let status = (api.PromiseResolver_Reject.unwrap())(
-                env.as_raw(),
-                self.resolver.as_raw(),
-                error_str.as_raw() as sys::ani_error,
-            );
-            if status != 0 {
-                return Err(Error::new(
-                    Status::GenericFailure,
-                    "Failed to reject promise",
-                ));
-            }
-        }
-        Ok(())
+        let error_str = env.create_string(error.as_ref())?;
+        ani_call!(
+            env,
+            PromiseResolver_Reject,
+            self.resolver.as_raw(),
+            error_str.as_raw() as sys::ani_error
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))
     }
 
     /// Reject the Promise with an Error

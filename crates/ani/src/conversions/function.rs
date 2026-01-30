@@ -81,6 +81,7 @@
 
 use std::marker::PhantomData;
 
+use crate::ani_call_ret;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
@@ -465,25 +466,17 @@ where
     Return: for<'a> FromAni<'a>,
 {
     let args_vec = args.to_ani_args(env)?;
-    let mut result: sys::ani_ref = std::ptr::null_mut();
+    let result = ani_call_ret!(
+        env,
+        FunctionalObject_Call,
+        sys::ani_ref,
+        std::ptr::null_mut(),
+        fn_object,
+        args_vec.len() as sys::ani_size,
+        args_vec.as_ptr() as *mut sys::ani_ref
+    )
+    .map_err(|_| Error::new(Status::GenericFailure, "Function call failed"))?;
 
-    unsafe {
-        let raw_env = env.as_raw();
-        let api = &*(*raw_env);
-        let status = (api.FunctionalObject_Call.unwrap())(
-            raw_env,
-            fn_object,
-            args_vec.len() as sys::ani_size,
-            args_vec.as_ptr() as *mut sys::ani_ref,
-            &mut result,
-        );
-
-        if status != 0 {
-            return Err(Error::new(Status::GenericFailure, "Function call failed"));
-        }
-    }
-
-    // Convert result to Return type
     Return::from_ani(env, unsafe { std::mem::transmute_copy(&result) })
 }
 

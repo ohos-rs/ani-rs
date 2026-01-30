@@ -6,8 +6,9 @@
 //! - &[T] -> ani_array
 
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::sys;
+use crate::{ani_call, ani_call_ret};
 
 use super::traits::{FromAni, ToAni, TypeInfo};
 
@@ -30,33 +31,17 @@ impl<'env> ToAni<'env> for Vec<i32> {
     type Output = sys::ani_array_int;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_int = std::ptr::null_mut();
-
-            let status = (api.Array_New_Int.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            // Set elements
-            if !self.is_empty() {
-                let status = (api.Array_SetRegion_Int.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    self.as_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Int,
+            sys::ani_array_int,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            ani_call!(env, Array_SetRegion_Int, array, 0, self.len(), self.as_ptr())?;
         }
+        Ok(array)
     }
 }
 
@@ -64,37 +49,12 @@ impl<'env> FromAni<'env> for Vec<i32> {
     type Input = sys::ani_array_int;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            // Get length
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            // Allocate buffer
-            let mut buffer = vec![0i32; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Int.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer)
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer = vec![0i32; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Int, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer)
     }
 }
 
@@ -103,32 +63,17 @@ impl<'env> ToAni<'env> for Vec<i64> {
     type Output = sys::ani_array_long;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_long = std::ptr::null_mut();
-
-            let status = (api.Array_New_Long.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            if !self.is_empty() {
-                let status = (api.Array_SetRegion_Long.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    self.as_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Long,
+            sys::ani_array_long,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            ani_call!(env, Array_SetRegion_Long, array, 0, self.len(), self.as_ptr())?;
         }
+        Ok(array)
     }
 }
 
@@ -136,35 +81,12 @@ impl<'env> FromAni<'env> for Vec<i64> {
     type Input = sys::ani_array_long;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            let mut buffer = vec![0i64; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Long.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer)
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer = vec![0i64; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Long, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer)
     }
 }
 
@@ -173,32 +95,17 @@ impl<'env> ToAni<'env> for Vec<f64> {
     type Output = sys::ani_array_double;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_double = std::ptr::null_mut();
-
-            let status = (api.Array_New_Double.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            if !self.is_empty() {
-                let status = (api.Array_SetRegion_Double.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    self.as_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Double,
+            sys::ani_array_double,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            ani_call!(env, Array_SetRegion_Double, array, 0, self.len(), self.as_ptr())?;
         }
+        Ok(array)
     }
 }
 
@@ -206,35 +113,12 @@ impl<'env> FromAni<'env> for Vec<f64> {
     type Input = sys::ani_array_double;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            let mut buffer = vec![0f64; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Double.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer)
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer = vec![0f64; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Double, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer)
     }
 }
 
@@ -243,32 +127,17 @@ impl<'env> ToAni<'env> for Vec<f32> {
     type Output = sys::ani_array_float;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_float = std::ptr::null_mut();
-
-            let status = (api.Array_New_Float.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            if !self.is_empty() {
-                let status = (api.Array_SetRegion_Float.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    self.as_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Float,
+            sys::ani_array_float,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            ani_call!(env, Array_SetRegion_Float, array, 0, self.len(), self.as_ptr())?;
         }
+        Ok(array)
     }
 }
 
@@ -276,35 +145,12 @@ impl<'env> FromAni<'env> for Vec<f32> {
     type Input = sys::ani_array_float;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            let mut buffer = vec![0f32; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Float.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer)
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer = vec![0f32; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Float, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer)
     }
 }
 
@@ -313,36 +159,26 @@ impl<'env> ToAni<'env> for Vec<bool> {
     type Output = sys::ani_array_boolean;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_boolean = std::ptr::null_mut();
-
-            let status = (api.Array_New_Boolean.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            if !self.is_empty() {
-                // Convert bool to ani_boolean
-                let ani_bools: Vec<sys::ani_boolean> =
-                    self.iter().map(|&b| if b { 1 } else { 0 }).collect();
-
-                let status = (api.Array_SetRegion_Boolean.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    ani_bools.as_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Boolean,
+            sys::ani_array_boolean,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            let ani_bools: Vec<sys::ani_boolean> =
+                self.iter().map(|&b| if b { 1 } else { 0 }).collect();
+            ani_call!(
+                env,
+                Array_SetRegion_Boolean,
+                array,
+                0,
+                self.len(),
+                ani_bools.as_ptr()
+            )?;
         }
+        Ok(array)
     }
 }
 
@@ -350,69 +186,38 @@ impl<'env> FromAni<'env> for Vec<bool> {
     type Input = sys::ani_array_boolean;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            let mut buffer: Vec<sys::ani_boolean> = vec![0; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Boolean.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer.into_iter().map(|b| b != 0).collect())
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer: Vec<sys::ani_boolean> = vec![0; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Boolean, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer.into_iter().map(|b| b != 0).collect())
     }
 }
 
-// Vec<u8> / bytes -> ani_array_byte
+// Vec<u8> / bytes -> ani_array_byte (align with napi-rs: Buffer is explicit type; Vec<u8> = byte array)
 impl<'env> ToAni<'env> for Vec<u8> {
     type Output = sys::ani_array_byte;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        unsafe {
-            let api = &*(*env.as_raw());
-            let mut array: sys::ani_array_byte = std::ptr::null_mut();
-
-            let status = (api.Array_New_Byte.unwrap())(env.as_raw(), self.len(), &mut array);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            if !self.is_empty() {
-                let status = (api.Array_SetRegion_Byte.unwrap())(
-                    env.as_raw(),
-                    array,
-                    0,
-                    self.len(),
-                    self.as_ptr() as *const i8,
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(array)
+        let array = ani_call_ret!(
+            env,
+            Array_New_Byte,
+            sys::ani_array_byte,
+            std::ptr::null_mut(),
+            self.len()
+        )?;
+        if !self.is_empty() {
+            ani_call!(
+                env,
+                Array_SetRegion_Byte,
+                array,
+                0,
+                self.len(),
+                self.as_ptr() as *const i8
+            )?;
         }
+        Ok(array)
     }
 }
 
@@ -420,35 +225,12 @@ impl<'env> FromAni<'env> for Vec<u8> {
     type Input = sys::ani_array_byte;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        unsafe {
-            let api = &*(*env.as_raw());
-
-            let mut len: usize = 0;
-            let status =
-                (api.Array_GetLength.unwrap())(env.as_raw(), value as sys::ani_array, &mut len);
-
-            if status != sys::ani_status_ANI_OK {
-                return Err(Error::from_status(crate::error::Status::from(status)));
-            }
-
-            let mut buffer: Vec<i8> = vec![0; len];
-
-            if len > 0 {
-                let status = (api.Array_GetRegion_Byte.unwrap())(
-                    env.as_raw(),
-                    value,
-                    0,
-                    len,
-                    buffer.as_mut_ptr(),
-                );
-
-                if status != sys::ani_status_ANI_OK {
-                    return Err(Error::from_status(crate::error::Status::from(status)));
-                }
-            }
-
-            Ok(buffer.into_iter().map(|b| b as u8).collect())
+        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let mut buffer: Vec<i8> = vec![0; len];
+        if len > 0 {
+            ani_call!(env, Array_GetRegion_Byte, value, 0, len, buffer.as_mut_ptr())?;
         }
+        Ok(buffer.into_iter().map(|b| b as u8).collect())
     }
 }
 

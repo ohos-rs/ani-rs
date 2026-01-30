@@ -5,100 +5,213 @@
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr;
+use std::slice;
 
-use crate::error::{BusinessError, Error, Result, Status, check_status};
+use crate::error::{BusinessError, Error, Result, Status};
 use crate::sys;
 use crate::types::*;
 
 // ============================================================================
-// ANI API Call Macros
+// ANI API Call Macros (__ani_interaction_api)
 // ============================================================================
+//
+// All ANI env API calls go through these macros. Usage: pass env (or self) as first arg.
+// Example: ani_call!(env, ThrowError, error.as_raw()), ani_call_ret!(self, GetVersion, u32, 0)
 
-/// Call ANI API function without return value
-///
-/// Usage: `ani_call!(self, FunctionName, arg1, arg2, ...)`
+/// Call ANI API function without return value.
+/// Usage: `ani_call!($env, FunctionName, arg1, arg2, ...)`
+#[macro_export]
 macro_rules! ani_call {
-    ($self:ident, $func:ident $(, $arg:expr)*) => {{
+    ($env:expr, $func:ident $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw $(, $arg)*);
-            check_status(status)
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw $(, $arg)*);
+            $crate::error::check_status(status)
         }
     }};
 }
 
-/// Call ANI API function with primitive return value (result at end)
-///
-/// Usage: `ani_call_ret!(self, FunctionName, result_type, default_value, arg1, arg2, ...)`
+/// Call ANI API function with primitive return value (result at end).
+/// Usage: `ani_call_ret!($env, FunctionName, result_type, default_value, arg1, arg2, ...)`
+#[macro_export]
 macro_rules! ani_call_ret {
-    ($self:ident, $func:ident, $ret_ty:ty, $default:expr $(, $arg:expr)*) => {{
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw $(, $arg)*, &mut result);
-            check_status(status)?;
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result);
+            $crate::error::check_status(status)?;
         }
         Result::<$ret_ty>::Ok(result)
     }};
 }
 
-/// Call ANI API function with primitive return value (result before last arg)
-///
-/// For APIs like Object_CallMethod_Int_A where signature is (env, obj, method, &result, args)
+/// Call ANI API function with two return values (two out params at end).
+/// Usage: `ani_call_2ret!($env, FunctionName, ret1_ty, ret2_ty, default1, default2, arg1, ...)`
+#[macro_export]
+macro_rules! ani_call_2ret {
+    ($env:expr, $func:ident, $ret1_ty:ty, $ret2_ty:ty, $default1:expr, $default2:expr $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
+        let mut result1: $ret1_ty = $default1;
+        let mut result2: $ret2_ty = $default2;
+        unsafe {
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result1, &mut result2);
+            $crate::error::check_status(status)?;
+        }
+        Result::<($ret1_ty, $ret2_ty)>::Ok((result1, result2))
+    }};
+}
+
+/// Call ANI API that returns status only (no out param). Use when you need to do work after the call (e.g. copy into buffer).
+/// Usage: `ani_call_status!($env, FunctionName, arg1, ...)` returns `Result<()>`.
+#[macro_export]
+macro_rules! ani_call_status {
+    ($env:expr, $func:ident $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
+        unsafe {
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw $(, $arg)*);
+            $crate::error::check_status(status)
+        }
+    }};
+}
+
+/// Call ANI API function with primitive return value (result before last arg).
+/// For APIs like Object_CallMethod_Int_A where signature is (env, obj, method, &result, args).
+#[macro_export]
 macro_rules! ani_call_method_ret {
-    ($self:ident, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $method:expr, $args:expr) => {{
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $method:expr, $args:expr) => {{
+        let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw, $obj, $method, &mut result, $args);
-            check_status(status)?;
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw, $obj, $method, &mut result, $args);
+            $crate::error::check_status(status)?;
         }
         Result::<$ret_ty>::Ok(result)
     }};
 }
 
-/// Call ANI API function with wrapped return value (result at end)
-///
-/// Usage: `ani_call_wrap!(self, FunctionName, sys_type, WrapperType, arg1, arg2, ...)`
+/// Call ANI API function with wrapped return value (result at end).
+/// Usage: `ani_call_wrap!($env, FunctionName, sys_type, WrapperType, arg1, arg2, ...)`
+#[macro_export]
 macro_rules! ani_call_wrap {
-    ($self:ident, $func:ident, $sys_ty:ty, $wrap_ty:ident $(, $arg:expr)*) => {{
-        let mut result: $sys_ty = ptr::null_mut();
+    ($env:expr, $func:ident, $sys_ty:ty, $wrap_ty:ident $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
+        let mut result: $sys_ty = ::std::ptr::null_mut();
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw $(, $arg)*, &mut result);
-            check_status(status)?;
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result);
+            $crate::error::check_status(status)?;
             Ok($wrap_ty::from_raw(result))
         }
     }};
 }
 
-/// Call ANI API function with wrapped return value (result before last arg)
-///
-/// For APIs like Object_CallMethod_Ref_A where signature is (env, obj, method, &result, args)
+/// Call ANI API function with wrapped return value (result before last arg).
+/// For APIs like Object_CallMethod_Ref_A where signature is (env, obj, method, &result, args).
+#[macro_export]
 macro_rules! ani_call_method_wrap {
-    ($self:ident, $func:ident, $sys_ty:ty, $wrap_ty:ident, $obj:expr, $method:expr, $args:expr) => {{
-        let mut result: $sys_ty = ptr::null_mut();
+    ($env:expr, $func:ident, $sys_ty:ty, $wrap_ty:ident, $obj:expr, $method:expr, $args:expr) => {{
+        let raw = $env.as_raw();
+        let mut result: $sys_ty = ::std::ptr::null_mut();
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw, $obj, $method, &mut result, $args);
-            check_status(status)?;
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw, $obj, $method, &mut result, $args);
+            $crate::error::check_status(status)?;
             Ok($wrap_ty::from_raw(result))
         }
     }};
 }
 
-/// Call ANI API "by name" function with primitive return value
-///
-/// For APIs like Object_CallMethodByName_Int_A where signature is (env, obj, name, sig, &result, args)
+/// Call ANI API "by name" function with primitive return value.
+/// For APIs like Object_CallMethodByName_Int_A where signature is (env, obj, name, sig, &result, args).
+#[macro_export]
 macro_rules! ani_call_by_name_ret {
-    ($self:ident, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $name:expr, $sig:expr, $args:expr) => {{
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $name:expr, $sig:expr, $args:expr) => {{
+        let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         unsafe {
-            let api = &*(*$self.raw);
-            let status = (api.$func.unwrap())($self.raw, $obj, $name, $sig, &mut result, $args);
-            check_status(status)?;
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw, $obj, $name, $sig, &mut result, $args);
+            $crate::error::check_status(status)?;
         }
         Result::<$ret_ty>::Ok(result)
+    }};
+}
+
+/// Call ANI API with single return value; returns Result<T> without propagating (?). Use in fn that returns bool/Option.
+/// Usage: `ani_call_ret_result!($env, Func, ret_ty, default, arg1, ...)` then e.g. `.map(|r| r != 0).unwrap_or(false)`.
+#[macro_export]
+macro_rules! ani_call_ret_result {
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr $(, $arg:expr)*) => {{
+        let raw = $env.as_raw();
+        let mut result: $ret_ty = $default;
+        let status = unsafe {
+            let api = &*(*raw);
+            (api.$func.unwrap())(raw $(, $arg)*, &mut result)
+        };
+        match $crate::error::check_status(status) {
+            Ok(()) => Ok(result),
+            Err(e) => Err(e),
+        }
+    }};
+}
+
+/// Call ANI API with result in the middle: (env, a, b, c, &mut result, d). For Object_CallMethodByName_Ref.
+/// Usage: `ani_call_ret_mid!($env, Func, ret_ty, default, a, b, c, d)`.
+#[macro_export]
+macro_rules! ani_call_ret_mid {
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $a:expr, $b:expr, $c:expr, $d:expr) => {{
+        let raw = $env.as_raw();
+        let mut result: $ret_ty = $default;
+        unsafe {
+            let api = &*(*raw);
+            let status = (api.$func.unwrap())(raw, $a, $b, $c, &mut result, $d);
+            $crate::error::check_status(status)?;
+        }
+        Result::<$ret_ty>::Ok(result)
+    }};
+}
+
+/// Call ANI API with result before last arg: (env, a, b, &mut result, c). For Object_New variadic.
+/// Usage: `ani_call_ret_before_last!($env, Func, ret_ty, default, a, b, c)`.
+#[macro_export]
+macro_rules! ani_call_ret_before_last {
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $a:expr, $b:expr, $c:expr) => {{
+        let raw = $env.as_raw();
+        let mut result: $ret_ty = $default;
+        let status = unsafe {
+            let api = &*(*raw);
+            (api.$func.unwrap())(raw, $a, $b, &mut result, $c)
+        };
+        match $crate::error::check_status(status) {
+            Ok(()) => Ok(result),
+            Err(e) => Err(e),
+        }
+    }};
+}
+
+/// Get __ani_interaction_api from env (expression with .as_raw(), e.g. &Env).
+/// Usage: `let api = ani_api!(env);` then e.g. `api.GlobalReference_Delete`
+#[macro_export]
+macro_rules! ani_api {
+    ($env:expr) => {{
+        let raw = $env.as_raw();
+        unsafe { &*(*raw) }
+    }};
+}
+
+/// Get __ani_interaction_api from raw env pointer (*mut ani_env). Use in Drop or unsafe blocks.
+/// Usage: `let api = ani_api_raw!(env);`
+/// Get __ani_interaction_api from raw env pointer (*mut ani_env). Use in Drop or unsafe blocks.
+#[macro_export]
+macro_rules! ani_api_raw {
+    ($env:expr) => {{
+        unsafe { &*(*$env) }
     }};
 }
 
@@ -334,18 +447,15 @@ impl<'local> Env<'local> {
 
         // Allocate buffer and get string content
         let mut buffer = vec![0u8; size + 1];
-        let mut written: sys::ani_size = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.String_GetUTF8.unwrap())(
-                self.raw,
-                string.as_raw(),
-                buffer.as_mut_ptr() as *mut i8,
-                size + 1,
-                &mut written,
-            );
-            check_status(status)?;
-        }
+        let written = ani_call_ret!(
+            self,
+            String_GetUTF8,
+            sys::ani_size,
+            0,
+            string.as_raw(),
+            buffer.as_mut_ptr() as *mut i8,
+            size + 1
+        )?;
 
         buffer.truncate(written);
         String::from_utf8(buffer)
@@ -735,62 +845,33 @@ impl<'local> Env<'local> {
 
     /// Get int type field value
     pub fn get_field_int(&self, obj: &AniObject<'_>, field: &AniField) -> Result<i32> {
-        let mut result: sys::ani_int = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_GetField_Int.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                field.as_raw(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_ret!(self, Object_GetField_Int, sys::ani_int, 0, obj.as_raw(), field.as_raw())
     }
 
     /// Set int type field value
     pub fn set_field_int(&self, obj: &AniObject<'_>, field: &AniField, value: i32) -> Result<()> {
-        unsafe {
-            let api = &*(*self.raw);
-            let status =
-                (api.Object_SetField_Int.unwrap())(self.raw, obj.as_raw(), field.as_raw(), value);
-            check_status(status)
-        }
+        ani_call!(self, Object_SetField_Int, obj.as_raw(), field.as_raw(), value)
     }
 
     /// Get int type field value by name
     pub fn get_field_by_name_int(&self, obj: &AniObject<'_>, name: &str) -> Result<i32> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
-        let mut result: sys::ani_int = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_GetFieldByName_Int.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                &mut result,
-            );
-            check_status(status)?;
-            Ok(result)
-        }
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Int,
+            sys::ani_int,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
     }
 
     /// Set int type field value by name
     pub fn set_field_by_name_int(&self, obj: &AniObject<'_>, name: &str, value: i32) -> Result<()> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_SetFieldByName_Int.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                value,
-            );
-            check_status(status)
-        }
+        ani_call!(self, Object_SetFieldByName_Int, obj.as_raw(), c_name.as_ptr(), value)
     }
 
     // ========================================================================
@@ -884,12 +965,9 @@ impl<'local> Env<'local> {
 
     /// Check if there is an unhandled exception
     pub fn has_exception(&self) -> bool {
-        let mut result: sys::ani_boolean = 0;
-        unsafe {
-            let api = &*(*self.raw);
-            let _ = (api.ExistUnhandledError.unwrap())(self.raw, &mut result);
-            result != 0
-        }
+        ani_call_ret_result!(self, ExistUnhandledError, sys::ani_boolean, 0)
+            .map(|r| r != 0)
+            .unwrap_or(false)
     }
 
     /// Clear current exception
@@ -949,24 +1027,14 @@ impl<'local> Env<'local> {
 
     /// Get the null object reference
     pub fn get_null_object(&self) -> Result<sys::ani_object> {
-        let mut result: sys::ani_ref = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GetNull.unwrap())(self.raw, &mut result);
-            check_status(status)?;
-            Ok(result as sys::ani_object)
-        }
+        let r = ani_call_ret!(self, GetNull, sys::ani_ref, ptr::null_mut())?;
+        Ok(r as sys::ani_object)
     }
 
     /// Get the undefined object reference
     pub fn get_undefined_object(&self) -> Result<sys::ani_object> {
-        let mut result: sys::ani_ref = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GetUndefined.unwrap())(self.raw, &mut result);
-            check_status(status)?;
-            Ok(result as sys::ani_object)
-        }
+        let r = ani_call_ret!(self, GetUndefined, sys::ani_ref, ptr::null_mut())?;
+        Ok(r as sys::ani_object)
     }
 
     // ========================================================================
@@ -975,23 +1043,141 @@ impl<'local> Env<'local> {
 
     /// Create an int array
     pub fn create_int_array(&self, length: usize) -> Result<AniArrayInt<'local>> {
-        let mut result: sys::ani_array_int = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Array_New_Int.unwrap())(self.raw, length, &mut result);
-            check_status(status)?;
-            Ok(AniArrayInt::from_raw(result))
-        }
+        ani_call_wrap!(self, Array_New_Int, sys::ani_array_int, AniArrayInt, length)
     }
 
     /// Get array length
     pub fn get_array_length(&self, array: &AniArray<'_>) -> Result<usize> {
-        let mut result: sys::ani_size = 0;
+        ani_call_ret!(self, Array_GetLength, sys::ani_size, 0, array.as_raw())
+    }
+
+    // ========================================================================
+    // ArrayBuffer Operations
+    // ========================================================================
+
+    /// Create a new ArrayBuffer with the specified size.
+    ///
+    /// The buffer is initialized with unspecified values. Use `create_arraybuffer_zeroed`
+    /// if you need zero-initialized data.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The size of the buffer in bytes
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (data_ptr, arraybuffer) where:
+    /// - `data_ptr` is a pointer to the buffer's data that can be used to write data
+    /// - `arraybuffer` is the ANI ArrayBuffer wrapper
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (data_ptr, buffer) = env.create_arraybuffer(1024)?;
+    /// unsafe {
+    ///     // Write data directly to the buffer
+    ///     std::ptr::write(data_ptr as *mut u32, 42);
+    /// }
+    /// ```
+    pub fn create_arraybuffer(
+        &self,
+        size: usize,
+    ) -> Result<(*mut std::ffi::c_void, AniArrayBuffer<'local>)> {
+        let (data_ptr, arraybuffer): (*mut std::ffi::c_void, sys::ani_arraybuffer) = ani_call_2ret!(
+            self,
+            CreateArrayBuffer,
+            *mut std::ffi::c_void,
+            sys::ani_arraybuffer,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            size
+        )?;
+        Ok((data_ptr, unsafe { AniArrayBuffer::from_raw(arraybuffer) }))
+    }
+
+    /// Create a new ArrayBuffer initialized with the provided data.
+    ///
+    /// This creates a new ANI ArrayBuffer and copies the provided data into it.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to copy into the ArrayBuffer
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let buffer = env.create_arraybuffer_with_data(&[1, 2, 3, 4, 5])?;
+    /// ```
+    pub fn create_arraybuffer_with_data(&self, data: &[u8]) -> Result<AniArrayBuffer<'local>> {
+        let (data_ptr, buffer) = self.create_arraybuffer(data.len())?;
+
+        if !data.is_empty() && !data_ptr.is_null() {
+            unsafe {
+                ptr::copy_nonoverlapping(data.as_ptr(), data_ptr as *mut u8, data.len());
+            }
+        }
+
+        Ok(buffer)
+    }
+
+    /// Get information about an ArrayBuffer.
+    ///
+    /// Returns the data pointer and length of the ArrayBuffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The ArrayBuffer to get information about
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (data_ptr, length) where:
+    /// - `data_ptr` is a pointer to the buffer's data
+    /// - `length` is the size of the buffer in bytes
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (data_ptr, len) = env.get_arraybuffer_info(&buffer)?;
+    /// let data = unsafe { std::slice::from_raw_parts(data_ptr as *const u8, len) };
+    /// ```
+    pub fn get_arraybuffer_info(
+        &self,
+        buffer: &AniArrayBuffer<'_>,
+    ) -> Result<(*mut std::ffi::c_void, usize)> {
+        ani_call_2ret!(
+            self,
+            ArrayBuffer_GetInfo,
+            *mut std::ffi::c_void,
+            usize,
+            ptr::null_mut(),
+            0,
+            buffer.as_raw()
+        )
+    }
+
+    /// Read the contents of an ArrayBuffer into a Vec<u8>.
+    ///
+    /// This creates a copy of the ArrayBuffer data.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The ArrayBuffer to read from
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let data: Vec<u8> = env.read_arraybuffer(&buffer)?;
+    /// ```
+    pub fn read_arraybuffer(&self, buffer: &AniArrayBuffer<'_>) -> Result<Vec<u8>> {
+        let (data_ptr, length) = self.get_arraybuffer_info(buffer)?;
+
+        if data_ptr.is_null() || length == 0 {
+            return Ok(Vec::new());
+        }
+
         unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Array_GetLength.unwrap())(self.raw, array.as_raw(), &mut result);
-            check_status(status)?;
-            Ok(result)
+            let data = slice::from_raw_parts(data_ptr as *const u8, length).to_vec();
+            Ok(data)
         }
     }
 
@@ -1029,20 +1215,17 @@ impl<'local> Env<'local> {
         let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
         let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
 
-        let mut result: sys::ani_ref = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Object_CallMethodByName_Ref.unwrap())(
-                self.raw,
-                obj.as_raw(),
-                c_name.as_ptr(),
-                sig_ptr,
-                &mut result,
-                arg,
-            );
-            check_status(status)?;
-            Ok(AniRef::from_raw(result))
-        }
+        let result = ani_call_ret_mid!(
+            self,
+            Object_CallMethodByName_Ref,
+            sys::ani_ref,
+            ptr::null_mut(),
+            obj.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            arg
+        )?;
+        Ok(unsafe { AniRef::from_raw(result) })
     }
 
     // ========================================================================
@@ -1168,17 +1351,11 @@ impl<'local> Env<'local> {
         if !self.exist_unhandled_error()? {
             return Ok(None);
         }
-
-        let mut result: sys::ani_error = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.GetUnhandledError.unwrap())(self.raw, &mut result);
-            check_status(status)?;
-            if result.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(AniError::from_raw(result)))
-            }
+        let result = ani_call_ret!(self, GetUnhandledError, sys::ani_error, ptr::null_mut())?;
+        if result.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(unsafe { AniError::from_raw(result) }))
         }
     }
 
@@ -1247,17 +1424,18 @@ impl<'local> Env<'local> {
     /// }
     /// ```
     pub fn promise_new(&self) -> Result<(AniResolver, AniObject<'local>)> {
-        let mut resolver: sys::ani_resolver = ptr::null_mut();
-        let mut promise: sys::ani_object = ptr::null_mut();
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.Promise_New.unwrap())(self.raw, &mut resolver, &mut promise);
-            check_status(status)?;
-            Ok((
-                AniResolver::from_raw(resolver),
-                AniObject::from_raw(promise),
-            ))
-        }
+        let (resolver, promise) = ani_call_2ret!(
+            self,
+            Promise_New,
+            sys::ani_resolver,
+            sys::ani_object,
+            ptr::null_mut(),
+            ptr::null_mut()
+        )?;
+        Ok((
+            unsafe { AniResolver::from_raw(resolver) },
+            unsafe { AniObject::from_raw(promise) },
+        ))
     }
 
     /// Resolve a Promise with a value
@@ -1321,17 +1499,12 @@ impl<'local> Env<'local> {
     /// * `resolver` - The resolver for the promise to reject
     /// * `message` - The error message
     pub fn promise_reject_with_message(&self, resolver: &AniResolver, message: &str) -> Result<()> {
-        // Create an error string and use it to reject
-        // Note: In ANI, we can cast a string to ani_error for rejection
         let error_string = self.create_string(message)?;
-        unsafe {
-            let api = &*(*self.raw);
-            let status = (api.PromiseResolver_Reject.unwrap())(
-                self.raw,
-                resolver.as_raw(),
-                error_string.as_raw() as sys::ani_error,
-            );
-            check_status(status)
-        }
+        ani_call!(
+            self,
+            PromiseResolver_Reject,
+            resolver.as_raw(),
+            error_string.as_raw() as sys::ani_error
+        )
     }
 }
