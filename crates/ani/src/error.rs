@@ -511,8 +511,14 @@ impl<S: AsRef<str>> BusinessError<S> {
         let env_ref = unsafe { Env::from_raw_unchecked(env) };
 
         let class_descriptor = CString::new("Lescompat/BusinessError;").ok()?;
-        let err_cls: sys::ani_class =
-            ani_call_ret_result!(env_ref, FindClass, sys::ani_class, ptr::null_mut(), class_descriptor.as_ptr()).ok()?;
+        let err_cls: sys::ani_class = ani_call_ret_result!(
+            env_ref,
+            FindClass,
+            sys::ani_class,
+            ptr::null_mut(),
+            class_descriptor.as_ptr()
+        )
+        .ok()?;
         if err_cls.is_null() {
             return None;
         }
@@ -546,8 +552,16 @@ impl<S: AsRef<str>> BusinessError<S> {
             return None;
         }
 
-        let err_obj: sys::ani_object =
-            ani_call_ret_before_last!(env_ref, Object_New, sys::ani_object, ptr::null_mut(), err_cls, err_ctor, msg_string).ok()?;
+        let err_obj: sys::ani_object = ani_call_ret_before_last!(
+            env_ref,
+            Object_New,
+            sys::ani_object,
+            ptr::null_mut(),
+            err_cls,
+            err_ctor,
+            msg_string
+        )
+        .ok()?;
         if err_obj.is_null() {
             return None;
         }

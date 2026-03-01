@@ -174,8 +174,68 @@ define_ref_type!(
 );
 
 define_ref_type!(
+    /// ANI fixed array type (base)
+    AniFixedArray, sys::ani_fixedarray
+);
+
+define_ref_type!(
+    /// ANI fixed boolean array type
+    AniFixedArrayBoolean, sys::ani_fixedarray_boolean
+);
+
+define_ref_type!(
+    /// ANI fixed char array type
+    AniFixedArrayChar, sys::ani_fixedarray_char
+);
+
+define_ref_type!(
+    /// ANI fixed byte array type
+    AniFixedArrayByte, sys::ani_fixedarray_byte
+);
+
+define_ref_type!(
+    /// ANI fixed short array type
+    AniFixedArrayShort, sys::ani_fixedarray_short
+);
+
+define_ref_type!(
+    /// ANI fixed int array type
+    AniFixedArrayInt, sys::ani_fixedarray_int
+);
+
+define_ref_type!(
+    /// ANI fixed long array type
+    AniFixedArrayLong, sys::ani_fixedarray_long
+);
+
+define_ref_type!(
+    /// ANI fixed float array type
+    AniFixedArrayFloat, sys::ani_fixedarray_float
+);
+
+define_ref_type!(
+    /// ANI fixed double array type
+    AniFixedArrayDouble, sys::ani_fixedarray_double
+);
+
+define_ref_type!(
+    /// ANI fixed reference array type
+    AniFixedArrayRef, sys::ani_fixedarray_ref
+);
+
+define_ref_type!(
     /// ANI ArrayBuffer type
     AniArrayBuffer, sys::ani_arraybuffer
+);
+
+define_ref_type!(
+    /// ANI enum item type
+    AniEnumItem, sys::ani_enum_item
+);
+
+define_ref_type!(
+    /// ANI tuple value type
+    AniTupleValue, sys::ani_tuple_value
 );
 
 // ============================================================================

@@ -79,7 +79,7 @@ impl std::fmt::Display for AuthError {
 
 /// Simulates a login function that uses custom AuthError.
 /// The error will be converted to a JavaScript exception when thrown.
-pub fn authenticate(
+fn authenticate(
     username: &str,
     password: &str,
 ) -> std::result::Result<String, Error<AuthError>> {
@@ -196,7 +196,7 @@ fn expect_string_type(value: String) -> Result<String> {
 pub type AuthResult<T> = std::result::Result<T, Error<AuthError>>;
 
 /// Using the type alias for cleaner function signatures
-pub fn verify_token(token: &str) -> AuthResult<bool> {
+fn verify_token(token: &str) -> AuthResult<bool> {
     if token.is_empty() {
         return Err(Error::new(AuthError::InvalidCredentials, "Token is empty"));
     }

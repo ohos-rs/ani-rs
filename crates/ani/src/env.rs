@@ -7,9 +7,10 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::slice;
 
-use crate::error::{BusinessError, Error, Result, Status};
+use crate::error::{BusinessError, Error, Result, Status, check_status};
 use crate::sys;
 use crate::types::*;
+use crate::vm::AniVm;
 
 // ============================================================================
 // ANI API Call Macros (__ani_interaction_api)
@@ -210,9 +211,7 @@ macro_rules! ani_api {
 /// Get __ani_interaction_api from raw env pointer (*mut ani_env). Use in Drop or unsafe blocks.
 #[macro_export]
 macro_rules! ani_api_raw {
-    ($env:expr) => {{
-        unsafe { &*(*$env) }
-    }};
+    ($env:expr) => {{ unsafe { &*(*$env) } }};
 }
 
 /// ANI Environment Wrapper
@@ -232,6 +231,55 @@ pub struct Env<'local> {
     raw: *mut sys::ani_env,
     // Use *const () to make Env non-Send/Sync
     _marker: PhantomData<(&'local (), *const ())>,
+}
+
+/// RAII guard for a local reference scope created by
+/// [`Env::create_local_scope`].
+///
+/// When dropped, this guard automatically calls `DestroyLocalScope`.
+pub struct LocalScopeGuard<'local> {
+    raw_env: *mut sys::ani_env,
+    active: bool,
+    _marker: PhantomData<(&'local (), *const ())>,
+}
+
+impl<'local> LocalScopeGuard<'local> {
+    #[inline]
+    fn new(raw_env: *mut sys::ani_env) -> Self {
+        Self {
+            raw_env,
+            active: true,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Closes the local scope immediately.
+    pub fn close(mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        let status = unsafe {
+            let api = &*(*self.raw_env);
+            (api.DestroyLocalScope.unwrap())(self.raw_env)
+        };
+        self.active = false;
+        check_status(status)
+    }
+}
+
+impl Drop for LocalScopeGuard<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        let _ = unsafe {
+            let api = &*(*self.raw_env);
+            check_status((api.DestroyLocalScope.unwrap())(self.raw_env))
+        };
+        self.active = false;
+    }
 }
 
 impl<'local> Env<'local> {
@@ -276,6 +324,26 @@ impl<'local> Env<'local> {
     /// Get ANI version
     pub fn get_version(&self) -> Result<u32> {
         ani_call_ret!(self, GetVersion, u32, 0)
+    }
+
+    /// Get VM handle associated with this environment
+    pub fn get_vm(&self) -> Result<AniVm> {
+        let raw_vm = ani_call_ret!(self, GetVM, *mut sys::ani_vm, ptr::null_mut())?;
+        unsafe { AniVm::from_raw(raw_vm) }
+    }
+
+    #[inline]
+    fn value_args_ptr(args: &[sys::ani_value]) -> *const sys::ani_value {
+        if args.is_empty() {
+            ptr::null()
+        } else {
+            args.as_ptr()
+        }
+    }
+
+    #[inline]
+    fn ref_args_to_raw(args: &[AniRef<'_>]) -> Vec<sys::ani_ref> {
+        args.iter().map(|arg| arg.as_raw()).collect()
     }
 
     // ========================================================================
@@ -343,6 +411,159 @@ impl<'local> Env<'local> {
             sys::ani_enum,
             AniEnum,
             c_descriptor.as_ptr()
+        )
+    }
+
+    /// Find enum item by name.
+    pub fn get_enum_item_by_name(
+        &self,
+        enm: &AniEnum<'_>,
+        name: &str,
+    ) -> Result<AniEnumItem<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid enum item name"))?;
+        ani_call_wrap!(
+            self,
+            Enum_GetEnumItemByName,
+            sys::ani_enum_item,
+            AniEnumItem,
+            enm.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Find enum item by index.
+    pub fn get_enum_item_by_index(
+        &self,
+        enm: &AniEnum<'_>,
+        index: usize,
+    ) -> Result<AniEnumItem<'local>> {
+        ani_call_wrap!(
+            self,
+            Enum_GetEnumItemByIndex,
+            sys::ani_enum_item,
+            AniEnumItem,
+            enm.as_raw(),
+            index
+        )
+    }
+
+    /// Get enum object of enum item.
+    pub fn get_enum_of_item(&self, item: &AniEnumItem<'_>) -> Result<AniEnum<'local>> {
+        ani_call_wrap!(
+            self,
+            EnumItem_GetEnum,
+            sys::ani_enum,
+            AniEnum,
+            item.as_raw()
+        )
+    }
+
+    /// Get integer value of enum item.
+    pub fn get_enum_item_value_int(&self, item: &AniEnumItem<'_>) -> Result<i32> {
+        ani_call_ret!(self, EnumItem_GetValue_Int, sys::ani_int, 0, item.as_raw())
+    }
+
+    /// Get string value of enum item.
+    pub fn get_enum_item_value_string(&self, item: &AniEnumItem<'_>) -> Result<AniString<'local>> {
+        ani_call_wrap!(
+            self,
+            EnumItem_GetValue_String,
+            sys::ani_string,
+            AniString,
+            item.as_raw()
+        )
+    }
+
+    /// Get name of enum item.
+    pub fn get_enum_item_name(&self, item: &AniEnumItem<'_>) -> Result<AniString<'local>> {
+        ani_call_wrap!(
+            self,
+            EnumItem_GetName,
+            sys::ani_string,
+            AniString,
+            item.as_raw()
+        )
+    }
+
+    /// Get index of enum item.
+    pub fn get_enum_item_index(&self, item: &AniEnumItem<'_>) -> Result<usize> {
+        ani_call_ret!(self, EnumItem_GetIndex, sys::ani_size, 0, item.as_raw())
+    }
+
+    /// Find a function in a module by name and signature.
+    pub fn find_module_function(
+        &self,
+        module: &AniModule<'_>,
+        name: &str,
+        signature: &str,
+    ) -> Result<AniFunction> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid function name"))?;
+        let c_sig = CString::new(signature)
+            .map_err(|_| Error::new(Status::Error, "Invalid function signature"))?;
+        ani_call_wrap!(
+            self,
+            Module_FindFunction,
+            sys::ani_function,
+            AniFunction,
+            module.as_raw(),
+            c_name.as_ptr(),
+            c_sig.as_ptr()
+        )
+    }
+
+    /// Find a variable in a module by name.
+    pub fn find_module_variable(&self, module: &AniModule<'_>, name: &str) -> Result<AniVariable> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid variable name"))?;
+        ani_call_wrap!(
+            self,
+            Module_FindVariable,
+            sys::ani_variable,
+            AniVariable,
+            module.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Find a function in a namespace by name and signature.
+    pub fn find_namespace_function(
+        &self,
+        namespace: &AniNamespace<'_>,
+        name: &str,
+        signature: &str,
+    ) -> Result<AniFunction> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid function name"))?;
+        let c_sig = CString::new(signature)
+            .map_err(|_| Error::new(Status::Error, "Invalid function signature"))?;
+        ani_call_wrap!(
+            self,
+            Namespace_FindFunction,
+            sys::ani_function,
+            AniFunction,
+            namespace.as_raw(),
+            c_name.as_ptr(),
+            c_sig.as_ptr()
+        )
+    }
+
+    /// Find a variable in a namespace by name.
+    pub fn find_namespace_variable(
+        &self,
+        namespace: &AniNamespace<'_>,
+        name: &str,
+    ) -> Result<AniVariable> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid variable name"))?;
+        ani_call_wrap!(
+            self,
+            Namespace_FindVariable,
+            sys::ani_variable,
+            AniVariable,
+            namespace.as_raw(),
+            c_name.as_ptr()
         )
     }
 
@@ -423,6 +644,686 @@ impl<'local> Env<'local> {
         )
     }
 
+    /// Find class static field.
+    pub fn find_static_field(&self, class: &AniClass<'_>, name: &str) -> Result<AniStaticField> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_wrap!(
+            self,
+            Class_FindStaticField,
+            sys::ani_static_field,
+            AniStaticField,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Find getter method by property name.
+    pub fn find_getter(&self, class: &AniClass<'_>, name: &str) -> Result<AniMethod> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid getter name"))?;
+        ani_call_wrap!(
+            self,
+            Class_FindGetter,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Find setter method by property name.
+    pub fn find_setter(&self, class: &AniClass<'_>, name: &str) -> Result<AniMethod> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid setter name"))?;
+        ani_call_wrap!(
+            self,
+            Class_FindSetter,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Find indexable getter method by signature.
+    pub fn find_indexable_getter(
+        &self,
+        class: &AniClass<'_>,
+        signature: &str,
+    ) -> Result<AniMethod> {
+        let c_sig = CString::new(signature)
+            .map_err(|_| Error::new(Status::Error, "Invalid indexable getter signature"))?;
+        ani_call_wrap!(
+            self,
+            Class_FindIndexableGetter,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw(),
+            c_sig.as_ptr()
+        )
+    }
+
+    /// Find indexable setter method by signature.
+    pub fn find_indexable_setter(
+        &self,
+        class: &AniClass<'_>,
+        signature: &str,
+    ) -> Result<AniMethod> {
+        let c_sig = CString::new(signature)
+            .map_err(|_| Error::new(Status::Error, "Invalid indexable setter signature"))?;
+        ani_call_wrap!(
+            self,
+            Class_FindIndexableSetter,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw(),
+            c_sig.as_ptr()
+        )
+    }
+
+    /// Find class iterator method.
+    pub fn find_iterator(&self, class: &AniClass<'_>) -> Result<AniMethod> {
+        ani_call_wrap!(
+            self,
+            Class_FindIterator,
+            sys::ani_method,
+            AniMethod,
+            class.as_raw()
+        )
+    }
+
+    /// Get static `bool` field value.
+    pub fn get_static_field_boolean(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Class_GetStaticField_Boolean,
+            sys::ani_boolean,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Get static `char` field value.
+    pub fn get_static_field_char(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<sys::ani_char> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Char,
+            sys::ani_char,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `i8` field value.
+    pub fn get_static_field_byte(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<i8> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Byte,
+            sys::ani_byte,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `i16` field value.
+    pub fn get_static_field_short(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<i16> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Short,
+            sys::ani_short,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `i32` field value.
+    pub fn get_static_field_int(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<i32> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Int,
+            sys::ani_int,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `i64` field value.
+    pub fn get_static_field_long(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<i64> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Long,
+            sys::ani_long,
+            0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `f32` field value.
+    pub fn get_static_field_float(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<f32> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Float,
+            sys::ani_float,
+            0.0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static `f64` field value.
+    pub fn get_static_field_double(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<f64> {
+        ani_call_ret!(
+            self,
+            Class_GetStaticField_Double,
+            sys::ani_double,
+            0.0,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Get static reference field value.
+    pub fn get_static_field_ref(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+    ) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            Class_GetStaticField_Ref,
+            sys::ani_ref,
+            AniRef,
+            class.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set static `bool` field value.
+    pub fn set_static_field_boolean(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: bool,
+    ) -> Result<()> {
+        let value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            Class_SetStaticField_Boolean,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `char` field value.
+    pub fn set_static_field_char(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Char,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `i8` field value.
+    pub fn set_static_field_byte(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: i8,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Byte,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `i16` field value.
+    pub fn set_static_field_short(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: i16,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Short,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `i32` field value.
+    pub fn set_static_field_int(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: i32,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Int,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `i64` field value.
+    pub fn set_static_field_long(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: i64,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Long,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `f32` field value.
+    pub fn set_static_field_float(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: f32,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Float,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static `f64` field value.
+    pub fn set_static_field_double(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: f64,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Double,
+            class.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Set static reference field value.
+    pub fn set_static_field_ref(
+        &self,
+        class: &AniClass<'_>,
+        field: &AniStaticField,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_SetStaticField_Ref,
+            class.as_raw(),
+            field.as_raw(),
+            value.as_raw()
+        )
+    }
+
+    /// Get static `bool` field value by field name.
+    pub fn get_static_field_by_name_boolean(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+    ) -> Result<bool> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        let value = ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Boolean,
+            sys::ani_boolean,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )?;
+        Ok(value != 0)
+    }
+
+    /// Get static `char` field value by field name.
+    pub fn get_static_field_by_name_char(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+    ) -> Result<sys::ani_char> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Char,
+            sys::ani_char,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `i8` field value by field name.
+    pub fn get_static_field_by_name_byte(&self, class: &AniClass<'_>, name: &str) -> Result<i8> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Byte,
+            sys::ani_byte,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `i16` field value by field name.
+    pub fn get_static_field_by_name_short(&self, class: &AniClass<'_>, name: &str) -> Result<i16> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Short,
+            sys::ani_short,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `i32` field value by field name.
+    pub fn get_static_field_by_name_int(&self, class: &AniClass<'_>, name: &str) -> Result<i32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Int,
+            sys::ani_int,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `i64` field value by field name.
+    pub fn get_static_field_by_name_long(&self, class: &AniClass<'_>, name: &str) -> Result<i64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Long,
+            sys::ani_long,
+            0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `f32` field value by field name.
+    pub fn get_static_field_by_name_float(&self, class: &AniClass<'_>, name: &str) -> Result<f32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Float,
+            sys::ani_float,
+            0.0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static `f64` field value by field name.
+    pub fn get_static_field_by_name_double(&self, class: &AniClass<'_>, name: &str) -> Result<f64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Class_GetStaticFieldByName_Double,
+            sys::ani_double,
+            0.0,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Get static reference field value by field name.
+    pub fn get_static_field_by_name_ref(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+    ) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_wrap!(
+            self,
+            Class_GetStaticFieldByName_Ref,
+            sys::ani_ref,
+            AniRef,
+            class.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set static `bool` field value by field name.
+    pub fn set_static_field_by_name_boolean(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: bool,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Boolean,
+            class.as_raw(),
+            c_name.as_ptr(),
+            if value { 1 } else { 0 }
+        )
+    }
+
+    /// Set static `char` field value by field name.
+    pub fn set_static_field_by_name_char(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Char,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `i8` field value by field name.
+    pub fn set_static_field_by_name_byte(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: i8,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Byte,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `i16` field value by field name.
+    pub fn set_static_field_by_name_short(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: i16,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Short,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `i32` field value by field name.
+    pub fn set_static_field_by_name_int(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: i32,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Int,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `i64` field value by field name.
+    pub fn set_static_field_by_name_long(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: i64,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Long,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `f32` field value by field name.
+    pub fn set_static_field_by_name_float(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: f32,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Float,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static `f64` field value by field name.
+    pub fn set_static_field_by_name_double(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: f64,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Double,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Set static reference field value by field name.
+    pub fn set_static_field_by_name_ref(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Class_SetStaticFieldByName_Ref,
+            class.as_raw(),
+            c_name.as_ptr(),
+            value.as_raw()
+        )
+    }
+
     // ========================================================================
     // String Operations
     // ========================================================================
@@ -460,6 +1361,82 @@ impl<'local> Env<'local> {
         buffer.truncate(written);
         String::from_utf8(buffer)
             .map_err(|e| Error::new(Status::Error, format!("Invalid UTF-8: {}", e)))
+    }
+
+    /// Create ANI string from UTF-16 code units.
+    pub fn create_string_utf16(&self, utf16: &[u16]) -> Result<AniString<'local>> {
+        ani_call_wrap!(
+            self,
+            String_NewUTF16,
+            sys::ani_string,
+            AniString,
+            utf16.as_ptr(),
+            utf16.len()
+        )
+    }
+
+    /// Get ANI string UTF-16 content.
+    pub fn get_string_utf16(&self, string: &AniString<'_>) -> Result<Vec<u16>> {
+        let size = ani_call_ret!(self, String_GetUTF16Size, sys::ani_size, 0, string.as_raw())?;
+        let mut buffer = vec![0u16; size + 1];
+        let written = ani_call_ret!(
+            self,
+            String_GetUTF16,
+            sys::ani_size,
+            0,
+            string.as_raw(),
+            buffer.as_mut_ptr(),
+            buffer.len()
+        )?;
+        buffer.truncate(written);
+        Ok(buffer)
+    }
+
+    /// Get UTF-16 substring by offset and size.
+    pub fn get_string_utf16_substring(
+        &self,
+        string: &AniString<'_>,
+        offset: usize,
+        size: usize,
+    ) -> Result<Vec<u16>> {
+        let mut buffer = vec![0u16; size + 1];
+        let written = ani_call_ret!(
+            self,
+            String_GetUTF16SubString,
+            sys::ani_size,
+            0,
+            string.as_raw(),
+            offset,
+            size,
+            buffer.as_mut_ptr(),
+            buffer.len()
+        )?;
+        buffer.truncate(written);
+        Ok(buffer)
+    }
+
+    /// Get UTF-8 substring by offset and size.
+    pub fn get_string_utf8_substring(
+        &self,
+        string: &AniString<'_>,
+        offset: usize,
+        size: usize,
+    ) -> Result<String> {
+        let mut buffer = vec![0u8; size.saturating_mul(4).saturating_add(1)];
+        let written = ani_call_ret!(
+            self,
+            String_GetUTF8SubString,
+            sys::ani_size,
+            0,
+            string.as_raw(),
+            offset,
+            size,
+            buffer.as_mut_ptr() as *mut i8,
+            buffer.len()
+        )?;
+        buffer.truncate(written);
+        String::from_utf8(buffer)
+            .map_err(|e| Error::new(Status::Error, format!("Invalid UTF-8 substring: {}", e)))
     }
 
     // ========================================================================
@@ -595,6 +1572,78 @@ impl<'local> Env<'local> {
         Ok(result != 0)
     }
 
+    /// Call a method returning `char`.
+    pub fn call_char_method(
+        &self,
+        obj: &AniObject<'_>,
+        method: &AniMethod,
+        args: &[sys::ani_value],
+    ) -> Result<sys::ani_char> {
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Char_A,
+            sys::ani_char,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a method returning `i8`.
+    pub fn call_byte_method(
+        &self,
+        obj: &AniObject<'_>,
+        method: &AniMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i8> {
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Byte_A,
+            sys::ani_byte,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a method returning `i16`.
+    pub fn call_short_method(
+        &self,
+        obj: &AniObject<'_>,
+        method: &AniMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i16> {
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Short_A,
+            sys::ani_short,
+            0,
+            obj.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a method returning `f32`.
+    pub fn call_float_method(
+        &self,
+        obj: &AniObject<'_>,
+        method: &AniMethod,
+        args: &[sys::ani_value],
+    ) -> Result<f32> {
+        ani_call_method_ret!(
+            self,
+            Object_CallMethod_Float_A,
+            sys::ani_float,
+            0.0,
+            obj.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
     /// Call a method returning object reference
     pub fn call_ref_method(
         &self,
@@ -610,6 +1659,185 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             method.as_raw(),
             args.as_ptr()
+        )
+    }
+
+    /// Call a static method returning `bool`.
+    pub fn call_static_method_boolean(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<bool> {
+        let result = ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Boolean_A,
+            sys::ani_boolean,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Call a static method returning `char`.
+    pub fn call_static_method_char(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<sys::ani_char> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Char_A,
+            sys::ani_char,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `i8`.
+    pub fn call_static_method_byte(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i8> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Byte_A,
+            sys::ani_byte,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `i16`.
+    pub fn call_static_method_short(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i16> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Short_A,
+            sys::ani_short,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `i32`.
+    pub fn call_static_method_int(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i32> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Int_A,
+            sys::ani_int,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `i64`.
+    pub fn call_static_method_long(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<i64> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Long_A,
+            sys::ani_long,
+            0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `f32`.
+    pub fn call_static_method_float(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<f32> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Float_A,
+            sys::ani_float,
+            0.0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning `f64`.
+    pub fn call_static_method_double(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<f64> {
+        ani_call_method_ret!(
+            self,
+            Class_CallStaticMethod_Double_A,
+            sys::ani_double,
+            0.0,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning reference value.
+    pub fn call_static_method_ref(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<AniRef<'local>> {
+        ani_call_method_wrap!(
+            self,
+            Class_CallStaticMethod_Ref_A,
+            sys::ani_ref,
+            AniRef,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method with `void` return type.
+    pub fn call_static_method_void(
+        &self,
+        class: &AniClass<'_>,
+        method: &AniStaticMethod,
+        args: &[sys::ani_value],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_CallStaticMethod_Void_A,
+            class.as_raw(),
+            method.as_raw(),
+            Self::value_args_ptr(args)
         )
     }
 
@@ -845,12 +2073,231 @@ impl<'local> Env<'local> {
 
     /// Get int type field value
     pub fn get_field_int(&self, obj: &AniObject<'_>, field: &AniField) -> Result<i32> {
-        ani_call_ret!(self, Object_GetField_Int, sys::ani_int, 0, obj.as_raw(), field.as_raw())
+        ani_call_ret!(
+            self,
+            Object_GetField_Int,
+            sys::ani_int,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )
     }
 
     /// Set int type field value
     pub fn set_field_int(&self, obj: &AniObject<'_>, field: &AniField, value: i32) -> Result<()> {
-        ani_call!(self, Object_SetField_Int, obj.as_raw(), field.as_raw(), value)
+        ani_call!(
+            self,
+            Object_SetField_Int,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get boolean type field value.
+    pub fn get_field_boolean(&self, obj: &AniObject<'_>, field: &AniField) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Object_GetField_Boolean,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Set boolean type field value.
+    pub fn set_field_boolean(
+        &self,
+        obj: &AniObject<'_>,
+        field: &AniField,
+        value: bool,
+    ) -> Result<()> {
+        let value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            Object_SetField_Boolean,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get char type field value.
+    pub fn get_field_char(&self, obj: &AniObject<'_>, field: &AniField) -> Result<sys::ani_char> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Char,
+            sys::ani_char,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set char type field value.
+    pub fn set_field_char(
+        &self,
+        obj: &AniObject<'_>,
+        field: &AniField,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Char,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get byte type field value.
+    pub fn get_field_byte(&self, obj: &AniObject<'_>, field: &AniField) -> Result<i8> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Byte,
+            sys::ani_byte,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set byte type field value.
+    pub fn set_field_byte(&self, obj: &AniObject<'_>, field: &AniField, value: i8) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Byte,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get short type field value.
+    pub fn get_field_short(&self, obj: &AniObject<'_>, field: &AniField) -> Result<i16> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Short,
+            sys::ani_short,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set short type field value.
+    pub fn set_field_short(&self, obj: &AniObject<'_>, field: &AniField, value: i16) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Short,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get long type field value.
+    pub fn get_field_long(&self, obj: &AniObject<'_>, field: &AniField) -> Result<i64> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Long,
+            sys::ani_long,
+            0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set long type field value.
+    pub fn set_field_long(&self, obj: &AniObject<'_>, field: &AniField, value: i64) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Long,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get float type field value.
+    pub fn get_field_float(&self, obj: &AniObject<'_>, field: &AniField) -> Result<f32> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Float,
+            sys::ani_float,
+            0.0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set float type field value.
+    pub fn set_field_float(&self, obj: &AniObject<'_>, field: &AniField, value: f32) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Float,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get double type field value.
+    pub fn get_field_double(&self, obj: &AniObject<'_>, field: &AniField) -> Result<f64> {
+        ani_call_ret!(
+            self,
+            Object_GetField_Double,
+            sys::ani_double,
+            0.0,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set double type field value.
+    pub fn set_field_double(
+        &self,
+        obj: &AniObject<'_>,
+        field: &AniField,
+        value: f64,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Double,
+            obj.as_raw(),
+            field.as_raw(),
+            value
+        )
+    }
+
+    /// Get reference type field value.
+    pub fn get_field_ref(&self, obj: &AniObject<'_>, field: &AniField) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            Object_GetField_Ref,
+            sys::ani_ref,
+            AniRef,
+            obj.as_raw(),
+            field.as_raw()
+        )
+    }
+
+    /// Set reference type field value.
+    pub fn set_field_ref(
+        &self,
+        obj: &AniObject<'_>,
+        field: &AniField,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Object_SetField_Ref,
+            obj.as_raw(),
+            field.as_raw(),
+            value.as_raw()
+        )
     }
 
     /// Get int type field value by name
@@ -871,7 +2318,266 @@ impl<'local> Env<'local> {
     pub fn set_field_by_name_int(&self, obj: &AniObject<'_>, name: &str, value: i32) -> Result<()> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
-        ani_call!(self, Object_SetFieldByName_Int, obj.as_raw(), c_name.as_ptr(), value)
+        ani_call!(
+            self,
+            Object_SetFieldByName_Int,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get boolean type field value by name.
+    pub fn get_field_by_name_boolean(&self, obj: &AniObject<'_>, name: &str) -> Result<bool> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        let result = ani_call_ret!(
+            self,
+            Object_GetFieldByName_Boolean,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Set boolean type field value by name.
+    pub fn set_field_by_name_boolean(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: bool,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        let value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            Object_SetFieldByName_Boolean,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get char type field value by name.
+    pub fn get_field_by_name_char(&self, obj: &AniObject<'_>, name: &str) -> Result<sys::ani_char> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Char,
+            sys::ani_char,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set char type field value by name.
+    pub fn set_field_by_name_char(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Char,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get byte type field value by name.
+    pub fn get_field_by_name_byte(&self, obj: &AniObject<'_>, name: &str) -> Result<i8> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Byte,
+            sys::ani_byte,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set byte type field value by name.
+    pub fn set_field_by_name_byte(&self, obj: &AniObject<'_>, name: &str, value: i8) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Byte,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get short type field value by name.
+    pub fn get_field_by_name_short(&self, obj: &AniObject<'_>, name: &str) -> Result<i16> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Short,
+            sys::ani_short,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set short type field value by name.
+    pub fn set_field_by_name_short(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: i16,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Short,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get long type field value by name.
+    pub fn get_field_by_name_long(&self, obj: &AniObject<'_>, name: &str) -> Result<i64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Long,
+            sys::ani_long,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set long type field value by name.
+    pub fn set_field_by_name_long(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: i64,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Long,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get float type field value by name.
+    pub fn get_field_by_name_float(&self, obj: &AniObject<'_>, name: &str) -> Result<f32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Float,
+            sys::ani_float,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set float type field value by name.
+    pub fn set_field_by_name_float(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: f32,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Float,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get double type field value by name.
+    pub fn get_field_by_name_double(&self, obj: &AniObject<'_>, name: &str) -> Result<f64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetFieldByName_Double,
+            sys::ani_double,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set double type field value by name.
+    pub fn set_field_by_name_double(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: f64,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Double,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get reference type field value by name.
+    pub fn get_field_by_name_ref(&self, obj: &AniObject<'_>, name: &str) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call_wrap!(
+            self,
+            Object_GetFieldByName_Ref,
+            sys::ani_ref,
+            AniRef,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set reference type field value by name.
+    pub fn set_field_by_name_ref(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid field name"))?;
+        ani_call!(
+            self,
+            Object_SetFieldByName_Ref,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value.as_raw()
+        )
     }
 
     // ========================================================================
@@ -910,6 +2616,240 @@ impl<'local> Env<'local> {
         )
     }
 
+    /// Get boolean type property value by name.
+    pub fn get_property_by_name_boolean(&self, obj: &AniObject<'_>, name: &str) -> Result<bool> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        let result = ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Boolean,
+            sys::ani_boolean,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Set boolean type property value by name.
+    pub fn set_property_by_name_boolean(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: bool,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        let value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Boolean,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get char type property value by name.
+    pub fn get_property_by_name_char(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+    ) -> Result<sys::ani_char> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Char,
+            sys::ani_char,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set char type property value by name.
+    pub fn set_property_by_name_char(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Char,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get byte type property value by name.
+    pub fn get_property_by_name_byte(&self, obj: &AniObject<'_>, name: &str) -> Result<i8> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Byte,
+            sys::ani_byte,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set byte type property value by name.
+    pub fn set_property_by_name_byte(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: i8,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Byte,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get short type property value by name.
+    pub fn get_property_by_name_short(&self, obj: &AniObject<'_>, name: &str) -> Result<i16> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Short,
+            sys::ani_short,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set short type property value by name.
+    pub fn set_property_by_name_short(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: i16,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Short,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get long type property value by name.
+    pub fn get_property_by_name_long(&self, obj: &AniObject<'_>, name: &str) -> Result<i64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Long,
+            sys::ani_long,
+            0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set long type property value by name.
+    pub fn set_property_by_name_long(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: i64,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Long,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get float type property value by name.
+    pub fn get_property_by_name_float(&self, obj: &AniObject<'_>, name: &str) -> Result<f32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_ret!(
+            self,
+            Object_GetPropertyByName_Float,
+            sys::ani_float,
+            0.0,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set float type property value by name.
+    pub fn set_property_by_name_float(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: f32,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Float,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value
+        )
+    }
+
+    /// Get reference type property value by name.
+    pub fn get_property_by_name_ref(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+    ) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_wrap!(
+            self,
+            Object_GetPropertyByName_Ref,
+            sys::ani_ref,
+            AniRef,
+            obj.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set reference type property value by name.
+    pub fn set_property_by_name_ref(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Object_SetPropertyByName_Ref,
+            obj.as_raw(),
+            c_name.as_ptr(),
+            value.as_raw()
+        )
+    }
+
     // ========================================================================
     // Native Method Binding
     // ========================================================================
@@ -923,6 +2863,21 @@ impl<'local> Env<'local> {
         ani_call!(
             self,
             Class_BindNativeMethods,
+            class.as_raw(),
+            methods.as_ptr(),
+            methods.len()
+        )
+    }
+
+    /// Bind static native methods to a class.
+    pub fn bind_class_static_native_methods(
+        &self,
+        class: &AniClass<'_>,
+        methods: &[sys::ani_native_function],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Class_BindStaticNativeMethods,
             class.as_raw(),
             methods.as_ptr(),
             methods.len()
@@ -960,6 +2915,335 @@ impl<'local> Env<'local> {
     }
 
     // ========================================================================
+    // Function and Variable Operations
+    // ========================================================================
+
+    /// Call a module/namespace function and return `bool`.
+    pub fn call_function_boolean(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<bool> {
+        let mut result: sys::ani_boolean = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Boolean_A.unwrap())(
+                self.raw,
+                function.as_raw(),
+                &mut result,
+                args_ptr,
+            )
+        };
+        check_status(status)?;
+        Ok(result != 0)
+    }
+
+    /// Call a module/namespace function and return `ani_char`.
+    pub fn call_function_char(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<sys::ani_char> {
+        let mut result: sys::ani_char = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Char_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `i8`.
+    pub fn call_function_byte(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<i8> {
+        let mut result: sys::ani_byte = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Byte_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `i16`.
+    pub fn call_function_short(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<i16> {
+        let mut result: sys::ani_short = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Short_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `i32`.
+    pub fn call_function_int(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<i32> {
+        let mut result: sys::ani_int = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Int_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `i64`.
+    pub fn call_function_long(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<i64> {
+        let mut result: sys::ani_long = 0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Long_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `f32`.
+    pub fn call_function_float(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<f32> {
+        let mut result: sys::ani_float = 0.0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Float_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return `f64`.
+    pub fn call_function_double(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<f64> {
+        let mut result: sys::ani_double = 0.0;
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Double_A.unwrap())(
+                self.raw,
+                function.as_raw(),
+                &mut result,
+                args_ptr,
+            )
+        };
+        check_status(status)?;
+        Ok(result)
+    }
+
+    /// Call a module/namespace function and return reference value.
+    pub fn call_function_ref(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<AniRef<'local>> {
+        let mut result: sys::ani_ref = ptr::null_mut();
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Ref_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
+        };
+        check_status(status)?;
+        Ok(unsafe { AniRef::from_raw(result) })
+    }
+
+    /// Call a module/namespace function with `void` return.
+    pub fn call_function_void(
+        &self,
+        function: &AniFunction,
+        args: &[sys::ani_value],
+    ) -> Result<()> {
+        let args_ptr = Self::value_args_ptr(args);
+        let status = unsafe {
+            let api = &*(*self.raw);
+            (api.Function_Call_Void_A.unwrap())(self.raw, function.as_raw(), args_ptr)
+        };
+        check_status(status)
+    }
+
+    /// Set `bool` value to a variable.
+    pub fn set_variable_boolean(&self, variable: &AniVariable, value: bool) -> Result<()> {
+        let raw_value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            Variable_SetValue_Boolean,
+            variable.as_raw(),
+            raw_value
+        )
+    }
+
+    /// Set `ani_char` value to a variable.
+    pub fn set_variable_char(&self, variable: &AniVariable, value: sys::ani_char) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Char, variable.as_raw(), value)
+    }
+
+    /// Set `i8` value to a variable.
+    pub fn set_variable_byte(&self, variable: &AniVariable, value: i8) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Byte, variable.as_raw(), value)
+    }
+
+    /// Set `i16` value to a variable.
+    pub fn set_variable_short(&self, variable: &AniVariable, value: i16) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Short, variable.as_raw(), value)
+    }
+
+    /// Set `i32` value to a variable.
+    pub fn set_variable_int(&self, variable: &AniVariable, value: i32) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Int, variable.as_raw(), value)
+    }
+
+    /// Set `i64` value to a variable.
+    pub fn set_variable_long(&self, variable: &AniVariable, value: i64) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Long, variable.as_raw(), value)
+    }
+
+    /// Set `f32` value to a variable.
+    pub fn set_variable_float(&self, variable: &AniVariable, value: f32) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Float, variable.as_raw(), value)
+    }
+
+    /// Set `f64` value to a variable.
+    pub fn set_variable_double(&self, variable: &AniVariable, value: f64) -> Result<()> {
+        ani_call!(self, Variable_SetValue_Double, variable.as_raw(), value)
+    }
+
+    /// Set reference value to a variable.
+    pub fn set_variable_ref(&self, variable: &AniVariable, value: &AniRef<'_>) -> Result<()> {
+        ani_call!(
+            self,
+            Variable_SetValue_Ref,
+            variable.as_raw(),
+            value.as_raw()
+        )
+    }
+
+    /// Get `bool` value from a variable.
+    pub fn get_variable_boolean(&self, variable: &AniVariable) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Variable_GetValue_Boolean,
+            sys::ani_boolean,
+            0,
+            variable.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Get `ani_char` value from a variable.
+    pub fn get_variable_char(&self, variable: &AniVariable) -> Result<sys::ani_char> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Char,
+            sys::ani_char,
+            0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `i8` value from a variable.
+    pub fn get_variable_byte(&self, variable: &AniVariable) -> Result<i8> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Byte,
+            sys::ani_byte,
+            0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `i16` value from a variable.
+    pub fn get_variable_short(&self, variable: &AniVariable) -> Result<i16> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Short,
+            sys::ani_short,
+            0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `i32` value from a variable.
+    pub fn get_variable_int(&self, variable: &AniVariable) -> Result<i32> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Int,
+            sys::ani_int,
+            0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `i64` value from a variable.
+    pub fn get_variable_long(&self, variable: &AniVariable) -> Result<i64> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Long,
+            sys::ani_long,
+            0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `f32` value from a variable.
+    pub fn get_variable_float(&self, variable: &AniVariable) -> Result<f32> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Float,
+            sys::ani_float,
+            0.0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get `f64` value from a variable.
+    pub fn get_variable_double(&self, variable: &AniVariable) -> Result<f64> {
+        ani_call_ret!(
+            self,
+            Variable_GetValue_Double,
+            sys::ani_double,
+            0.0,
+            variable.as_raw()
+        )
+    }
+
+    /// Get reference value from a variable.
+    pub fn get_variable_ref(&self, variable: &AniVariable) -> Result<AniRef<'local>> {
+        let result = ani_call_ret!(
+            self,
+            Variable_GetValue_Ref,
+            sys::ani_ref,
+            ptr::null_mut(),
+            variable.as_raw()
+        )?;
+        Ok(unsafe { AniRef::from_raw(result) })
+    }
+
+    // ========================================================================
     // Exception Handling
     // ========================================================================
 
@@ -991,6 +3275,39 @@ impl<'local> Env<'local> {
     // Reference Management
     // ========================================================================
 
+    /// Delete a local reference explicitly.
+    pub fn delete_local_ref(&self, local_ref: &AniRef<'_>) -> Result<()> {
+        ani_call!(self, Reference_Delete, local_ref.as_raw())
+    }
+
+    /// Ensure enough local reference slots are available.
+    pub fn ensure_enough_references(&self, nr_refs: usize) -> Result<()> {
+        ani_call!(self, EnsureEnoughReferences, nr_refs)
+    }
+
+    /// Create a local reference scope and return a RAII guard.
+    pub fn create_local_scope(&self, nr_refs: usize) -> Result<LocalScopeGuard<'local>> {
+        ani_call!(self, CreateLocalScope, nr_refs)?;
+        Ok(LocalScopeGuard::new(self.raw))
+    }
+
+    /// Create an escape local scope.
+    pub fn create_escape_local_scope(&self, nr_refs: usize) -> Result<()> {
+        ani_call!(self, CreateEscapeLocalScope, nr_refs)
+    }
+
+    /// Destroy an escape local scope and return the escaped reference.
+    pub fn destroy_escape_local_scope(&self, reference: &AniRef<'_>) -> Result<AniRef<'local>> {
+        let escaped = ani_call_ret!(
+            self,
+            DestroyEscapeLocalScope,
+            sys::ani_ref,
+            ptr::null_mut(),
+            reference.as_raw()
+        )?;
+        Ok(unsafe { AniRef::from_raw(escaped) })
+    }
+
     /// Create a global reference
     pub fn create_global_ref<'a>(&self, obj: &AniRef<'a>) -> Result<GlobalRef> {
         ani_call_wrap!(
@@ -1005,6 +3322,43 @@ impl<'local> Env<'local> {
     /// Delete a global reference
     pub fn delete_global_ref(&self, gref: GlobalRef) -> Result<()> {
         ani_call!(self, GlobalReference_Delete, gref.as_raw())
+    }
+
+    /// Create a weak reference from a local/global reference.
+    pub fn create_weak_ref<'a>(&self, obj: &AniRef<'a>) -> Result<WeakRef> {
+        ani_call_wrap!(
+            self,
+            WeakReference_Create,
+            sys::ani_wref,
+            WeakRef,
+            obj.as_raw()
+        )
+    }
+
+    /// Delete a weak reference.
+    pub fn delete_weak_ref(&self, wref: WeakRef) -> Result<()> {
+        ani_call!(self, WeakReference_Delete, wref.as_raw())
+    }
+
+    /// Upgrade a weak reference.
+    ///
+    /// Returns `Ok(None)` when the referenced object has been released.
+    pub fn upgrade_weak_ref(&self, wref: &WeakRef) -> Result<Option<AniRef<'local>>> {
+        let (released, value) = ani_call_2ret!(
+            self,
+            WeakReference_GetReference,
+            sys::ani_boolean,
+            sys::ani_ref,
+            0,
+            ptr::null_mut(),
+            wref.as_raw()
+        )?;
+
+        if released != 0 || value.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(unsafe { AniRef::from_raw(value) }))
+        }
     }
 
     /// Check if the reference is null
@@ -1025,6 +3379,44 @@ impl<'local> Env<'local> {
         Ok(result != 0)
     }
 
+    /// Check if the reference is nullish (`null` or `undefined`).
+    pub fn is_nullish(&self, obj: &AniRef<'_>) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Reference_IsNullishValue,
+            sys::ani_boolean,
+            0,
+            obj.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Compare two references using ANI equality semantics.
+    pub fn reference_equals(&self, lhs: &AniRef<'_>, rhs: &AniRef<'_>) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Reference_Equals,
+            sys::ani_boolean,
+            0,
+            lhs.as_raw(),
+            rhs.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Compare two references using strict equality semantics.
+    pub fn reference_strict_equals(&self, lhs: &AniRef<'_>, rhs: &AniRef<'_>) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Reference_StrictEquals,
+            sys::ani_boolean,
+            0,
+            lhs.as_raw(),
+            rhs.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
     /// Get the null object reference
     pub fn get_null_object(&self) -> Result<sys::ani_object> {
         let r = ani_call_ret!(self, GetNull, sys::ani_ref, ptr::null_mut())?;
@@ -1040,6 +3432,893 @@ impl<'local> Env<'local> {
     // ========================================================================
     // Array Operations
     // ========================================================================
+
+    /// Create a generic reference array with an optional initial element.
+    pub fn create_array(
+        &self,
+        length: usize,
+        initial_element: Option<&AniRef<'_>>,
+    ) -> Result<AniArray<'local>> {
+        let initial = initial_element
+            .map(|r| r.as_raw())
+            .unwrap_or(ptr::null_mut());
+        ani_call_wrap!(self, Array_New, sys::ani_array, AniArray, length, initial)
+    }
+
+    /// Set array element at `index`.
+    pub fn set_array_element(
+        &self,
+        array: &AniArray<'_>,
+        index: usize,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(self, Array_Set, array.as_raw(), index, value.as_raw())
+    }
+
+    /// Get array element at `index`.
+    pub fn get_array_element(&self, array: &AniArray<'_>, index: usize) -> Result<AniRef<'local>> {
+        let element = ani_call_ret!(
+            self,
+            Array_Get,
+            sys::ani_ref,
+            ptr::null_mut(),
+            array.as_raw(),
+            index
+        )?;
+        Ok(unsafe { AniRef::from_raw(element) })
+    }
+
+    /// Push an element to the end of the array.
+    pub fn push_array_element(&self, array: &AniArray<'_>, value: &AniRef<'_>) -> Result<()> {
+        ani_call!(self, Array_Push, array.as_raw(), value.as_raw())
+    }
+
+    /// Pop an element from the end of the array.
+    pub fn pop_array_element(&self, array: &AniArray<'_>) -> Result<AniRef<'local>> {
+        let element = ani_call_ret!(
+            self,
+            Array_Pop,
+            sys::ani_ref,
+            ptr::null_mut(),
+            array.as_raw()
+        )?;
+        Ok(unsafe { AniRef::from_raw(element) })
+    }
+
+    /// Get fixed array length.
+    pub fn get_fixed_array_length(&self, array: &AniFixedArray<'_>) -> Result<usize> {
+        ani_call_ret!(self, FixedArray_GetLength, sys::ani_size, 0, array.as_raw())
+    }
+
+    /// Create fixed boolean array.
+    pub fn create_fixed_array_boolean(
+        &self,
+        length: usize,
+    ) -> Result<AniFixedArrayBoolean<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Boolean,
+            sys::ani_fixedarray_boolean,
+            AniFixedArrayBoolean,
+            length
+        )
+    }
+
+    /// Create fixed char array.
+    pub fn create_fixed_array_char(&self, length: usize) -> Result<AniFixedArrayChar<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Char,
+            sys::ani_fixedarray_char,
+            AniFixedArrayChar,
+            length
+        )
+    }
+
+    /// Create fixed byte array.
+    pub fn create_fixed_array_byte(&self, length: usize) -> Result<AniFixedArrayByte<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Byte,
+            sys::ani_fixedarray_byte,
+            AniFixedArrayByte,
+            length
+        )
+    }
+
+    /// Create fixed short array.
+    pub fn create_fixed_array_short(&self, length: usize) -> Result<AniFixedArrayShort<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Short,
+            sys::ani_fixedarray_short,
+            AniFixedArrayShort,
+            length
+        )
+    }
+
+    /// Create fixed int array.
+    pub fn create_fixed_array_int(&self, length: usize) -> Result<AniFixedArrayInt<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Int,
+            sys::ani_fixedarray_int,
+            AniFixedArrayInt,
+            length
+        )
+    }
+
+    /// Create fixed long array.
+    pub fn create_fixed_array_long(&self, length: usize) -> Result<AniFixedArrayLong<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Long,
+            sys::ani_fixedarray_long,
+            AniFixedArrayLong,
+            length
+        )
+    }
+
+    /// Create fixed float array.
+    pub fn create_fixed_array_float(&self, length: usize) -> Result<AniFixedArrayFloat<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Float,
+            sys::ani_fixedarray_float,
+            AniFixedArrayFloat,
+            length
+        )
+    }
+
+    /// Create fixed double array.
+    pub fn create_fixed_array_double(&self, length: usize) -> Result<AniFixedArrayDouble<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Double,
+            sys::ani_fixedarray_double,
+            AniFixedArrayDouble,
+            length
+        )
+    }
+
+    /// Get boolean region from fixed array.
+    pub fn get_fixed_array_region_boolean(
+        &self,
+        array: &AniFixedArrayBoolean<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<bool>> {
+        let mut raw = vec![0 as sys::ani_boolean; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Boolean,
+            array.as_raw(),
+            offset,
+            length,
+            raw.as_mut_ptr()
+        )?;
+        Ok(raw.into_iter().map(|v| v != 0).collect())
+    }
+
+    /// Set boolean region to fixed array.
+    pub fn set_fixed_array_region_boolean(
+        &self,
+        array: &AniFixedArrayBoolean<'_>,
+        offset: usize,
+        values: &[bool],
+    ) -> Result<()> {
+        let raw: Vec<sys::ani_boolean> = values.iter().map(|v| if *v { 1 } else { 0 }).collect();
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Boolean,
+            array.as_raw(),
+            offset,
+            raw.len(),
+            raw.as_ptr()
+        )
+    }
+
+    /// Get char region from fixed array.
+    pub fn get_fixed_array_region_char(
+        &self,
+        array: &AniFixedArrayChar<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<sys::ani_char>> {
+        let mut buffer = vec![0 as sys::ani_char; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Char,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set char region to fixed array.
+    pub fn set_fixed_array_region_char(
+        &self,
+        array: &AniFixedArrayChar<'_>,
+        offset: usize,
+        values: &[sys::ani_char],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Char,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get byte region from fixed array.
+    pub fn get_fixed_array_region_byte(
+        &self,
+        array: &AniFixedArrayByte<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<i8>> {
+        let mut buffer = vec![0_i8; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Byte,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set byte region to fixed array.
+    pub fn set_fixed_array_region_byte(
+        &self,
+        array: &AniFixedArrayByte<'_>,
+        offset: usize,
+        values: &[i8],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Byte,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get short region from fixed array.
+    pub fn get_fixed_array_region_short(
+        &self,
+        array: &AniFixedArrayShort<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<i16>> {
+        let mut buffer = vec![0_i16; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Short,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set short region to fixed array.
+    pub fn set_fixed_array_region_short(
+        &self,
+        array: &AniFixedArrayShort<'_>,
+        offset: usize,
+        values: &[i16],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Short,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get int region from fixed array.
+    pub fn get_fixed_array_region_int(
+        &self,
+        array: &AniFixedArrayInt<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<i32>> {
+        let mut buffer = vec![0_i32; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Int,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set int region to fixed array.
+    pub fn set_fixed_array_region_int(
+        &self,
+        array: &AniFixedArrayInt<'_>,
+        offset: usize,
+        values: &[i32],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Int,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get long region from fixed array.
+    pub fn get_fixed_array_region_long(
+        &self,
+        array: &AniFixedArrayLong<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<i64>> {
+        let mut buffer = vec![0_i64; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Long,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set long region to fixed array.
+    pub fn set_fixed_array_region_long(
+        &self,
+        array: &AniFixedArrayLong<'_>,
+        offset: usize,
+        values: &[i64],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Long,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get float region from fixed array.
+    pub fn get_fixed_array_region_float(
+        &self,
+        array: &AniFixedArrayFloat<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<f32>> {
+        let mut buffer = vec![0_f32; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Float,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set float region to fixed array.
+    pub fn set_fixed_array_region_float(
+        &self,
+        array: &AniFixedArrayFloat<'_>,
+        offset: usize,
+        values: &[f32],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Float,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Get double region from fixed array.
+    pub fn get_fixed_array_region_double(
+        &self,
+        array: &AniFixedArrayDouble<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<f64>> {
+        let mut buffer = vec![0_f64; length];
+        ani_call!(
+            self,
+            FixedArray_GetRegion_Double,
+            array.as_raw(),
+            offset,
+            length,
+            buffer.as_mut_ptr()
+        )?;
+        Ok(buffer)
+    }
+
+    /// Set double region to fixed array.
+    pub fn set_fixed_array_region_double(
+        &self,
+        array: &AniFixedArrayDouble<'_>,
+        offset: usize,
+        values: &[f64],
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_SetRegion_Double,
+            array.as_raw(),
+            offset,
+            values.len(),
+            values.as_ptr()
+        )
+    }
+
+    /// Create fixed reference array.
+    pub fn create_fixed_array_ref(
+        &self,
+        element_type: &AniType<'_>,
+        length: usize,
+        initial_element: Option<&AniRef<'_>>,
+    ) -> Result<AniFixedArrayRef<'local>> {
+        let initial = initial_element
+            .map(|r| r.as_raw())
+            .unwrap_or(ptr::null_mut());
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Ref,
+            sys::ani_fixedarray_ref,
+            AniFixedArrayRef,
+            element_type.as_raw(),
+            length,
+            initial
+        )
+    }
+
+    /// Set reference element of fixed reference array.
+    pub fn set_fixed_array_ref(
+        &self,
+        array: &AniFixedArrayRef<'_>,
+        index: usize,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            FixedArray_Set_Ref,
+            array.as_raw(),
+            index,
+            value.as_raw()
+        )
+    }
+
+    /// Get reference element of fixed reference array.
+    pub fn get_fixed_array_ref(
+        &self,
+        array: &AniFixedArrayRef<'_>,
+        index: usize,
+    ) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            FixedArray_Get_Ref,
+            sys::ani_ref,
+            AniRef,
+            array.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple item count.
+    pub fn get_tuple_number_of_items(&self, tuple: &AniTupleValue<'_>) -> Result<usize> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetNumberOfItems,
+            sys::ani_size,
+            0,
+            tuple.as_raw()
+        )
+    }
+
+    /// Get tuple boolean item.
+    pub fn get_tuple_item_boolean(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<bool> {
+        let value = ani_call_ret!(
+            self,
+            TupleValue_GetItem_Boolean,
+            sys::ani_boolean,
+            0,
+            tuple.as_raw(),
+            index
+        )?;
+        Ok(value != 0)
+    }
+
+    /// Get tuple char item.
+    pub fn get_tuple_item_char(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+    ) -> Result<sys::ani_char> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Char,
+            sys::ani_char,
+            0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple byte item.
+    pub fn get_tuple_item_byte(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<i8> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Byte,
+            sys::ani_byte,
+            0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple short item.
+    pub fn get_tuple_item_short(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<i16> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Short,
+            sys::ani_short,
+            0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple int item.
+    pub fn get_tuple_item_int(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<i32> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Int,
+            sys::ani_int,
+            0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple long item.
+    pub fn get_tuple_item_long(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<i64> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Long,
+            sys::ani_long,
+            0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple float item.
+    pub fn get_tuple_item_float(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<f32> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Float,
+            sys::ani_float,
+            0.0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple double item.
+    pub fn get_tuple_item_double(&self, tuple: &AniTupleValue<'_>, index: usize) -> Result<f64> {
+        ani_call_ret!(
+            self,
+            TupleValue_GetItem_Double,
+            sys::ani_double,
+            0.0,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Get tuple reference item.
+    pub fn get_tuple_item_ref(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+    ) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            TupleValue_GetItem_Ref,
+            sys::ani_ref,
+            AniRef,
+            tuple.as_raw(),
+            index
+        )
+    }
+
+    /// Set tuple boolean item.
+    pub fn set_tuple_item_boolean(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: bool,
+    ) -> Result<()> {
+        let value: sys::ani_boolean = if value { 1 } else { 0 };
+        ani_call!(
+            self,
+            TupleValue_SetItem_Boolean,
+            tuple.as_raw(),
+            index,
+            value
+        )
+    }
+
+    /// Set tuple char item.
+    pub fn set_tuple_item_char(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: sys::ani_char,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Char, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple byte item.
+    pub fn set_tuple_item_byte(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: i8,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Byte, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple short item.
+    pub fn set_tuple_item_short(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: i16,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Short, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple int item.
+    pub fn set_tuple_item_int(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: i32,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Int, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple long item.
+    pub fn set_tuple_item_long(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: i64,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Long, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple float item.
+    pub fn set_tuple_item_float(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: f32,
+    ) -> Result<()> {
+        ani_call!(self, TupleValue_SetItem_Float, tuple.as_raw(), index, value)
+    }
+
+    /// Set tuple double item.
+    pub fn set_tuple_item_double(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: f64,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            TupleValue_SetItem_Double,
+            tuple.as_raw(),
+            index,
+            value
+        )
+    }
+
+    /// Set tuple reference item.
+    pub fn set_tuple_item_ref(
+        &self,
+        tuple: &AniTupleValue<'_>,
+        index: usize,
+        value: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            TupleValue_SetItem_Ref,
+            tuple.as_raw(),
+            index,
+            value.as_raw()
+        )
+    }
+
+    /// Check dynamic value instance relationship.
+    pub fn any_instance_of(&self, value: &AniRef<'_>, ty: &AniRef<'_>) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Any_InstanceOf,
+            sys::ani_boolean,
+            0,
+            value.as_raw(),
+            ty.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Get dynamic property by name.
+    pub fn any_get_property(&self, value: &AniRef<'_>, name: &str) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call_wrap!(
+            self,
+            Any_GetProperty,
+            sys::ani_ref,
+            AniRef,
+            value.as_raw(),
+            c_name.as_ptr()
+        )
+    }
+
+    /// Set dynamic property by name.
+    pub fn any_set_property(
+        &self,
+        value: &AniRef<'_>,
+        name: &str,
+        property: &AniRef<'_>,
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid property name"))?;
+        ani_call!(
+            self,
+            Any_SetProperty,
+            value.as_raw(),
+            c_name.as_ptr(),
+            property.as_raw()
+        )
+    }
+
+    /// Get dynamic value by index.
+    pub fn any_get_by_index(&self, value: &AniRef<'_>, index: usize) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            Any_GetByIndex,
+            sys::ani_ref,
+            AniRef,
+            value.as_raw(),
+            index
+        )
+    }
+
+    /// Set dynamic value by index.
+    pub fn any_set_by_index(
+        &self,
+        value: &AniRef<'_>,
+        index: usize,
+        item: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(self, Any_SetByIndex, value.as_raw(), index, item.as_raw())
+    }
+
+    /// Get dynamic value by dynamic key.
+    pub fn any_get_by_value(&self, value: &AniRef<'_>, key: &AniRef<'_>) -> Result<AniRef<'local>> {
+        ani_call_wrap!(
+            self,
+            Any_GetByValue,
+            sys::ani_ref,
+            AniRef,
+            value.as_raw(),
+            key.as_raw()
+        )
+    }
+
+    /// Set dynamic value by dynamic key.
+    pub fn any_set_by_value(
+        &self,
+        value: &AniRef<'_>,
+        key: &AniRef<'_>,
+        item: &AniRef<'_>,
+    ) -> Result<()> {
+        ani_call!(
+            self,
+            Any_SetByValue,
+            value.as_raw(),
+            key.as_raw(),
+            item.as_raw()
+        )
+    }
+
+    /// Call dynamic function.
+    pub fn any_call(&self, func: &AniRef<'_>, args: &[AniRef<'_>]) -> Result<AniRef<'local>> {
+        let mut raw_args = Self::ref_args_to_raw(args);
+        let raw_ptr = if raw_args.is_empty() {
+            ptr::null_mut()
+        } else {
+            raw_args.as_mut_ptr()
+        };
+        ani_call_wrap!(
+            self,
+            Any_Call,
+            sys::ani_ref,
+            AniRef,
+            func.as_raw(),
+            raw_args.len(),
+            raw_ptr
+        )
+    }
+
+    /// Call dynamic method by name.
+    pub fn any_call_method(
+        &self,
+        this_ref: &AniRef<'_>,
+        name: &str,
+        args: &[AniRef<'_>],
+    ) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let mut raw_args = Self::ref_args_to_raw(args);
+        let raw_ptr = if raw_args.is_empty() {
+            ptr::null_mut()
+        } else {
+            raw_args.as_mut_ptr()
+        };
+        ani_call_wrap!(
+            self,
+            Any_CallMethod,
+            sys::ani_ref,
+            AniRef,
+            this_ref.as_raw(),
+            c_name.as_ptr(),
+            raw_args.len(),
+            raw_ptr
+        )
+    }
+
+    /// Construct dynamic object via ctor reference.
+    pub fn any_new(&self, ctor: &AniRef<'_>, args: &[AniRef<'_>]) -> Result<AniRef<'local>> {
+        let mut raw_args = Self::ref_args_to_raw(args);
+        let raw_ptr = if raw_args.is_empty() {
+            ptr::null_mut()
+        } else {
+            raw_args.as_mut_ptr()
+        };
+        ani_call_wrap!(
+            self,
+            Any_New,
+            sys::ani_ref,
+            AniRef,
+            ctor.as_raw(),
+            raw_args.len(),
+            raw_ptr
+        )
+    }
 
     /// Create an int array
     pub fn create_int_array(&self, length: usize) -> Result<AniArrayInt<'local>> {
@@ -1194,6 +4473,34 @@ impl<'local> Env<'local> {
             0,
             obj.as_raw(),
             cls.as_raw()
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Get the direct super class of a type.
+    pub fn get_super_class(&self, ty: &AniType<'_>) -> Result<AniClass<'local>> {
+        ani_call_wrap!(
+            self,
+            Type_GetSuperClass,
+            sys::ani_class,
+            AniClass,
+            ty.as_raw()
+        )
+    }
+
+    /// Check whether `to_type` can be assigned from `from_type`.
+    pub fn is_assignable_from(
+        &self,
+        from_type: &AniType<'_>,
+        to_type: &AniType<'_>,
+    ) -> Result<bool> {
+        let result = ani_call_ret!(
+            self,
+            Type_IsAssignableFrom,
+            sys::ani_boolean,
+            0,
+            from_type.as_raw(),
+            to_type.as_raw()
         )?;
         Ok(result != 0)
     }
@@ -1432,10 +4739,9 @@ impl<'local> Env<'local> {
             ptr::null_mut(),
             ptr::null_mut()
         )?;
-        Ok((
-            unsafe { AniResolver::from_raw(resolver) },
-            unsafe { AniObject::from_raw(promise) },
-        ))
+        Ok((unsafe { AniResolver::from_raw(resolver) }, unsafe {
+            AniObject::from_raw(promise)
+        }))
     }
 
     /// Resolve a Promise with a value

@@ -8,11 +8,11 @@
 use std::borrow::Cow;
 use std::ffi::CString;
 
+use crate::ani_call_ret;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::sys;
 use crate::types::AniString;
-use crate::ani_call_ret;
 
 use super::traits::{FromAni, ToAni, TypeInfo};
 
@@ -181,8 +181,15 @@ pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -
     let env_ref = unsafe { Env::from_raw_unchecked(env) };
     let len: usize = ani_call_ret!(env_ref, String_GetUTF8Size, usize, 0, string)?;
     let mut buffer = vec![0u8; len + 1];
-    let chars_copied: usize =
-        ani_call_ret!(env_ref, String_GetUTF8, usize, 0, string, buffer.as_mut_ptr() as *mut i8, len + 1)?;
+    let chars_copied: usize = ani_call_ret!(
+        env_ref,
+        String_GetUTF8,
+        usize,
+        0,
+        string,
+        buffer.as_mut_ptr() as *mut i8,
+        len + 1
+    )?;
     buffer.truncate(chars_copied);
     String::from_utf8(buffer)
         .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid UTF-8 string"))
@@ -203,7 +210,14 @@ pub unsafe fn string_to_raw(env: *mut sys::ani_env, s: &str) -> Result<sys::ani_
     let env_ref = unsafe { Env::from_raw_unchecked(env) };
     let c_str = CString::new(s)
         .map_err(|_| Error::new(crate::error::Status::InvalidType, "Invalid string"))?;
-    ani_call_ret!(env_ref, String_NewUTF8, sys::ani_string, std::ptr::null_mut(), c_str.as_ptr(), s.len())
+    ani_call_ret!(
+        env_ref,
+        String_NewUTF8,
+        sys::ani_string,
+        std::ptr::null_mut(),
+        c_str.as_ptr(),
+        s.len()
+    )
 }
 
 #[cfg(test)]

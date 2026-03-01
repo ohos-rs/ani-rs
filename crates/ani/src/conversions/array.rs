@@ -39,7 +39,14 @@ impl<'env> ToAni<'env> for Vec<i32> {
             self.len()
         )?;
         if !self.is_empty() {
-            ani_call!(env, Array_SetRegion_Int, array, 0, self.len(), self.as_ptr())?;
+            ani_call!(
+                env,
+                Array_SetRegion_Int,
+                array,
+                0,
+                self.len(),
+                self.as_ptr()
+            )?;
         }
         Ok(array)
     }
@@ -71,7 +78,14 @@ impl<'env> ToAni<'env> for Vec<i64> {
             self.len()
         )?;
         if !self.is_empty() {
-            ani_call!(env, Array_SetRegion_Long, array, 0, self.len(), self.as_ptr())?;
+            ani_call!(
+                env,
+                Array_SetRegion_Long,
+                array,
+                0,
+                self.len(),
+                self.as_ptr()
+            )?;
         }
         Ok(array)
     }
@@ -84,7 +98,14 @@ impl<'env> FromAni<'env> for Vec<i64> {
         let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
         let mut buffer = vec![0i64; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Long, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                Array_GetRegion_Long,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer)
     }
@@ -103,7 +124,14 @@ impl<'env> ToAni<'env> for Vec<f64> {
             self.len()
         )?;
         if !self.is_empty() {
-            ani_call!(env, Array_SetRegion_Double, array, 0, self.len(), self.as_ptr())?;
+            ani_call!(
+                env,
+                Array_SetRegion_Double,
+                array,
+                0,
+                self.len(),
+                self.as_ptr()
+            )?;
         }
         Ok(array)
     }
@@ -116,7 +144,14 @@ impl<'env> FromAni<'env> for Vec<f64> {
         let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
         let mut buffer = vec![0f64; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Double, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                Array_GetRegion_Double,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer)
     }
@@ -135,7 +170,14 @@ impl<'env> ToAni<'env> for Vec<f32> {
             self.len()
         )?;
         if !self.is_empty() {
-            ani_call!(env, Array_SetRegion_Float, array, 0, self.len(), self.as_ptr())?;
+            ani_call!(
+                env,
+                Array_SetRegion_Float,
+                array,
+                0,
+                self.len(),
+                self.as_ptr()
+            )?;
         }
         Ok(array)
     }
@@ -148,7 +190,14 @@ impl<'env> FromAni<'env> for Vec<f32> {
         let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
         let mut buffer = vec![0f32; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Float, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                Array_GetRegion_Float,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer)
     }
@@ -189,7 +238,14 @@ impl<'env> FromAni<'env> for Vec<bool> {
         let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
         let mut buffer: Vec<sys::ani_boolean> = vec![0; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Boolean, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                Array_GetRegion_Boolean,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer.into_iter().map(|b| b != 0).collect())
     }
@@ -228,7 +284,14 @@ impl<'env> FromAni<'env> for Vec<u8> {
         let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
         let mut buffer: Vec<i8> = vec![0; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Byte, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                Array_GetRegion_Byte,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer.into_iter().map(|b| b as u8).collect())
     }

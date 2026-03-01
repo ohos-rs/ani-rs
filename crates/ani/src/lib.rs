@@ -29,6 +29,7 @@
 //!
 //! - `bindgen_runtime`: Type conversion traits and runtime support
 //! - `env`: ANI environment wrapper
+//! - `vm`: ANI VM wrapper
 //! - `types`: ANI type wrappers (AniString, AniObject, etc.)
 //! - `error`: Error handling
 //! - `conversions`: Type conversion system (ToAni, FromAni traits)
@@ -51,6 +52,7 @@ pub mod env;
 pub mod error;
 pub mod module_register;
 pub mod types;
+pub mod vm;
 
 /// Prelude module - commonly used types and traits
 ///
@@ -59,42 +61,32 @@ pub mod types;
 /// use ani::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::env::Env;
+    pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{BusinessError, Error, Result, Status, check_status};
     pub use crate::types::{
         AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
-        AniEnum, AniError, AniField, AniFnObject, AniFunction, AniMethod, AniModule, AniNamespace,
-        AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString, AniType,
-        AniVariable, GlobalRef, WeakRef, ani_value_boolean, ani_value_byte, ani_value_char,
-        ani_value_double, ani_value_float, ani_value_int, ani_value_long, ani_value_ref,
-        ani_value_short, native_function,
+        AniEnum, AniEnumItem, AniError, AniField, AniFixedArray, AniFixedArrayBoolean,
+        AniFixedArrayByte, AniFixedArrayChar, AniFixedArrayDouble, AniFixedArrayFloat,
+        AniFixedArrayInt, AniFixedArrayLong, AniFixedArrayRef, AniFixedArrayShort, AniFnObject,
+        AniFunction, AniMethod, AniModule, AniNamespace, AniObject, AniRef, AniResolver,
+        AniStaticField, AniStaticMethod, AniString, AniTupleValue, AniType, AniVariable, GlobalRef,
+        WeakRef, ani_value_boolean, ani_value_byte, ani_value_char, ani_value_double,
+        ani_value_float, ani_value_int, ani_value_long, ani_value_ref, ani_value_short,
+        native_function,
     };
+    pub use crate::vm::{AniVm, AttachGuard, VmOptions};
 
     // Deprecated type aliases for backward compatibility
     #[allow(deprecated)]
     pub use crate::error::{JsError, JsRangeError, JsTypeError};
 
-    // Export from conversions module
-    pub use crate::conversions::{
-        AniThrowable, AniValue, ArrayBuffer, ArrayBufferSlice, Boxable, Either, Either3, Either4,
-        Either5, Either6, Either7, Either8, Either9, Either10, Either11, Either12, Either13,
-        Either14, Either15, Either16, FromAni, FromAniDirect, FromAniObject, NativePointer, Null,
-        ToAni, ToAniDirect, ToAniObject, TypeInfo, Unboxable, Undefined, ValidateFromAni,
-    };
+    // Export all conversion types/traits/helpers.
+    pub use crate::conversions::*;
 
     // Keep backward compatibility by also exporting from bindgen_runtime
     pub use crate::bindgen_runtime::{
         FromAni as BrFromAni, ToAni as BrToAni, TypeInfo as BrTypeInfo,
     };
-
-    // Promise types
-    pub use crate::conversions::{Deferred, PromiseRaw};
-
-    // Function types
-    pub use crate::conversions::{FnArgs, Function, FunctionRef, ToAniArg, ToAniArgs};
-
-    // Reference types
-    pub use crate::conversions::Ref;
 
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }

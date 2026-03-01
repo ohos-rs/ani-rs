@@ -90,7 +90,11 @@ fn classify_param(arg: &FnArg, param_name: Option<&str>) -> ParamKind {
 
             // Check for Class type
             if is_class_type(ty) {
-                return ParamKind::Injected(InjectedParamKind::Class);
+                if let Some(name) = param_name {
+                    if name == "class" || name == "_class" {
+                        return ParamKind::Injected(InjectedParamKind::Class);
+                    }
+                }
             }
 
             // Check if parameter named "this" with AniObject type

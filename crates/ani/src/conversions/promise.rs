@@ -284,8 +284,13 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `value` - The value to resolve with (as AniRef)
     pub fn resolve(self, env: &Env<'_>, value: &AniRef<'_>) -> Result<()> {
-        ani_call!(env, PromiseResolver_Resolve, self.resolver.as_raw(), value.as_raw())
-            .map_err(|_| Error::new(Status::GenericFailure, "Failed to resolve promise"))
+        ani_call!(
+            env,
+            PromiseResolver_Resolve,
+            self.resolver.as_raw(),
+            value.as_raw()
+        )
+        .map_err(|_| Error::new(Status::GenericFailure, "Failed to resolve promise"))
     }
 
     /// Resolve the Promise with an int value

@@ -260,6 +260,46 @@ impl ToAniArg for bool {
     }
 }
 
+impl<'a> ToAniArg for crate::types::AniRef<'a> {
+    fn to_ani_arg<'env>(&self, _env: &Env<'env>) -> Result<sys::ani_ref> {
+        Ok(self.as_raw())
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Object;"
+    }
+}
+
+impl<'a> ToAniArg for crate::types::AniObject<'a> {
+    fn to_ani_arg<'env>(&self, _env: &Env<'env>) -> Result<sys::ani_ref> {
+        Ok(self.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Object;"
+    }
+}
+
+impl<'a> ToAniArg for crate::types::AniString<'a> {
+    fn to_ani_arg<'env>(&self, _env: &Env<'env>) -> Result<sys::ani_ref> {
+        Ok(self.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+}
+
+impl<'a> ToAniArg for crate::types::AniClass<'a> {
+    fn to_ani_arg<'env>(&self, _env: &Env<'env>) -> Result<sys::ani_ref> {
+        Ok(self.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Class;"
+    }
+}
+
 // ============================================================================
 // Boxing Helpers
 // ============================================================================

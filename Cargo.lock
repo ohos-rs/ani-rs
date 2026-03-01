@@ -23,6 +23,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-any-dynamic"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-any-value-wrapper"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-array-generic"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-arraybuffer"
 version = "0.1.0"
 dependencies = [
@@ -55,12 +79,76 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-call-variadic-v"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-class-bind-static-native"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-class-reflect"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-class-static"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-class-static-by-name"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-enum-item-wrapper"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-error"
 version = "0.1.0"
 dependencies = [
  "ani",
  "ani-derive",
  "anyhow",
+]
+
+[[package]]
+name = "ani-example-fixed-array-wrapper"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-fixed-tuple-enum-utf16"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
 ]
 
 [[package]]
@@ -72,7 +160,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-function-variable"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-interface"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-module-member"
 version = "0.1.0"
 dependencies = [
  "ani",
@@ -89,6 +193,14 @@ dependencies = [
 
 [[package]]
 name = "ani-example-new-class"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-object-typed"
 version = "0.1.0"
 dependencies = [
  "ani",
@@ -120,6 +232,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-reference-scope"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-setfield"
 version = "0.1.0"
 dependencies = [
@@ -136,7 +256,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-tuple-value-wrapper"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-type-relation"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-union"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-vm"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-weak-ref"
 version = "0.1.0"
 dependencies = [
  "ani",

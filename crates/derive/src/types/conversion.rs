@@ -71,6 +71,11 @@ fn generate_type_conversion(
         // String types
         AniType::String(s) => generate_string_type_conversion(param_name, converted_name, s),
 
+        // AniObject and handle-like types - use FromAni for strong typing
+        AniType::AniObject => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty)
+        }
+
         // Option<T>
         AniType::Wrapper(WrapperType::Option(inner)) => {
             generate_option_conversion(param_name, converted_name, inner.as_ref())
@@ -90,11 +95,14 @@ fn generate_type_conversion(
         }
 
         // ArrayBuffer / ArrayBufferSlice - from_ani(ani_arraybuffer)
-        AniType::ArrayBuffer => generate_arraybuffer_param_conversion(
-            param_name,
-            converted_name,
-            ty,
-        ),
+        AniType::ArrayBuffer => {
+            generate_arraybuffer_param_conversion(param_name, converted_name, ty)
+        }
+
+        // Unknown/custom types - fallback to FromAni
+        AniType::Unknown(_) => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty)
+        }
 
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
@@ -261,6 +269,24 @@ fn generate_arraybuffer_param_conversion(
     }
 }
 
+/// Generate generic parameter conversion using FromAni::from_ani.
+fn generate_generic_from_ani_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            ani::conversions::FromAni::from_ani(
+                &env_wrapper,
+                #param_name as <#ty as ani::conversions::FromAni<'_>>::Input,
+            )
+                .expect("Failed to convert ANI value")
+        };
+    }
+}
+
 // ============================================================================
 // Return Value Conversion
 // ============================================================================
@@ -402,7 +428,13 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
                 Err(_) => std::ptr::null_mut()
             }
         },
-        _ => quote! { val },
+        _ => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
+                Ok(v) => v,
+                Err(_) => Default::default()
+            }
+        },
     };
 
     quote! {

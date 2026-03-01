@@ -175,9 +175,7 @@ impl Drop for ArrayBuffer {
     fn drop(&mut self) {
         let backing = std::mem::replace(&mut self.backing, ArrayBufferBacking::Owned(Vec::new()));
         if let ArrayBufferBacking::AniRef {
-            global_ref,
-            env,
-            ..
+            global_ref, env, ..
         } = backing
         {
             if !env.is_null() && !global_ref.is_null() {
@@ -362,7 +360,8 @@ impl<'env> FromAni<'env> for ArrayBuffer {
             (api.GlobalReference_Create, api.GlobalReference_Delete)
         {
             let mut global_ref: sys::ani_ref = ptr::null_mut();
-            let status = unsafe { create_global(env.as_raw(), value as sys::ani_ref, &mut global_ref) };
+            let status =
+                unsafe { create_global(env.as_raw(), value as sys::ani_ref, &mut global_ref) };
 
             if status == sys::ani_status_ANI_OK && !global_ref.is_null() {
                 if let Ok((data_ptr, length)) = ani_call_2ret!(

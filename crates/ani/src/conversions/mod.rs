@@ -15,13 +15,20 @@
 //! - `promise` - Promise and Deferred types
 //! - `result` - Result type conversions
 //! - `collections` - Collection type conversions
+//! - `fixed_array` - Fixed array wrapper conversions
+//! - `tuple_value` - Tuple value wrappers
+//! - `enum_item` - Enum item wrappers
+//! - `any_value` - Dynamic Any wrapper
 //! - `traits` - Core conversion traits
 
+mod any_value;
 mod array;
 mod arraybuffer;
 mod boxed;
 mod collections;
 mod either;
+mod enum_item;
+mod fixed_array;
 mod function;
 mod null;
 mod object;
@@ -32,13 +39,17 @@ mod reference;
 mod result;
 mod string;
 mod traits;
+mod tuple_value;
 mod undefined;
 
 // Re-export all public items
+pub use any_value::*;
 pub use arraybuffer::*;
 pub use boxed::*;
 pub use collections::*;
 pub use either::*;
+pub use enum_item::*;
+pub use fixed_array::*;
 pub use function::*;
 pub use null::*;
 pub use object::*;
@@ -48,4 +59,5 @@ pub use reference::*;
 pub use result::*;
 pub use string::*;
 pub use traits::*;
+pub use tuple_value::*;
 pub use undefined::*;
