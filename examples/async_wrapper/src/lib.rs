@@ -77,11 +77,7 @@ pub fn promise_delayed(env: &Env<'_>, delay_ms: i32, value: String) -> Result<i6
 }
 
 #[ani]
-pub fn promise_maybe_succeed(
-    env: &Env<'_>,
-    should_succeed: bool,
-    value: i32,
-) -> Result<i64> {
+pub fn promise_maybe_succeed(env: &Env<'_>, should_succeed: bool, value: i32) -> Result<i64> {
     let (deferred, promise) = PromiseRaw::deferred(env)?;
 
     if should_succeed {

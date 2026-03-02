@@ -135,6 +135,14 @@ mod tests {
     }
 
     #[test]
+    fn test_record_type_signature() {
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(HashMap<String, i32>)),
+            "Lescompat/Record;"
+        );
+    }
+
+    #[test]
     fn test_result_type_signature() {
         // Result<String, Error> should use the Ok type signature
         assert_eq!(

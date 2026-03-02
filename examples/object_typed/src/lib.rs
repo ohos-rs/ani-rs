@@ -27,11 +27,7 @@ pub fn property_roundtrip_float(env: &Env<'_>, obj: AniObject<'_>, value: f32) -
 }
 
 #[ani]
-pub fn call_typed_methods(
-    env: &Env<'_>,
-    obj: AniObject<'_>,
-    method: AniMethod,
-) -> Result<f32> {
+pub fn call_typed_methods(env: &Env<'_>, obj: AniObject<'_>, method: AniMethod) -> Result<f32> {
     let args = [ani_value_int(1)];
     let ch = env.call_char_method(&obj, &method, &args)? as f32;
     let byte = env.call_byte_method(&obj, &method, &args)? as f32;

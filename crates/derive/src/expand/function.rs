@@ -2,7 +2,6 @@
 //!
 //! Expands `#[ani]` macro for functions.
 
-use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn};
@@ -13,7 +12,8 @@ use crate::codegen::{
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    class_to_descriptor, generate_fn_signature, module_to_descriptor, namespace_to_descriptor,
+    EtsDeclKind, class_to_descriptor, emit_compile_ets_decl, generate_fn_ets_decl,
+    generate_fn_signature, module_to_descriptor, namespace_to_descriptor,
 };
 
 /// Expand `#[ani]` for functions
@@ -25,11 +25,9 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let func_name = &func.sig.ident;
     let func_name_str = func_name.to_string();
 
-    // Determine ArkTS function name (camelCase)
-    let ets_name = attrs
-        .name
-        .clone()
-        .unwrap_or_else(|| func_name.to_string().to_case(Case::Camel));
+    // Determine ArkTS function name.
+    // Keep Rust naming by default to avoid unexpected renaming in generated ETS.
+    let ets_name = attrs.name.clone().unwrap_or_else(|| func_name.to_string());
 
     // Check if function has self parameter (instance method)
     let has_self = func
@@ -54,6 +52,23 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
         .signature
         .clone()
         .unwrap_or_else(|| generate_fn_signature(&func.sig, has_self || is_class_method));
+    let ets_signature = generate_fn_ets_decl(&func.sig, &ets_name, has_self || is_class_method);
+
+    let (ets_kind, ets_target) = if let Some(class) = attrs.class.as_deref() {
+        (EtsDeclKind::Class, class.to_string())
+    } else if let Some(namespace) = attrs.namespace.as_deref() {
+        (EtsDeclKind::Namespace, namespace.to_string())
+    } else if let Some(module) = attrs.module.as_deref() {
+        if module.is_empty() {
+            (EtsDeclKind::Global, String::new())
+        } else {
+            (EtsDeclKind::Namespace, module.to_string())
+        }
+    } else {
+        (EtsDeclKind::Global, String::new())
+    };
+
+    emit_compile_ets_decl(ets_kind, &ets_target, &ets_signature, is_static);
 
     // Generate wrapper function name
     let wrapper_name = format_ident!("__ani_native_{}", func_name);

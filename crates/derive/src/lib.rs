@@ -162,8 +162,8 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
 ///
 /// # Object/Class Definition
 ///
-/// - `#[ani(object)]` - Define ANI object type
-/// - `#[ani(object = "CustomName")]` - Use custom name
+/// - `#[ani(object)]` - Attach class descriptor metadata to a Rust struct
+/// - `#[ani(object = "CustomName")]` - Use custom descriptor name
 ///
 /// # Examples
 ///

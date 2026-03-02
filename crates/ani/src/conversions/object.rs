@@ -116,13 +116,7 @@ impl<'env> FromAni<'env> for AniObject<'env> {
     }
 }
 
-impl_ref_handle_conversion!(
-    AniRef,
-    sys::ani_ref,
-    "Lstd/core/Object;",
-    "ani_ref",
-    "ref"
-);
+impl_ref_handle_conversion!(AniRef, sys::ani_ref, "Lstd/core/Object;", "ani_ref", "ref");
 
 // ============================================================================
 // AniClass Conversion

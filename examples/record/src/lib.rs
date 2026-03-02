@@ -25,6 +25,31 @@ pub fn create_record() -> i64 {
     Box::into_raw(boxed) as i64
 }
 
+/// Build a Record directly via Rust <-> ANI collection conversion.
+///
+/// Corresponding ArkTS definition:
+/// ```typescript
+/// native function createRecordDirect(): Record<string, int>;
+/// ```
+#[ani]
+pub fn create_record_direct() -> HashMap<String, i32> {
+    let mut map = HashMap::new();
+    map.insert("answer".to_string(), 42);
+    map.insert("size".to_string(), 2);
+    map
+}
+
+/// Consume a Record from ArkTS as `HashMap<String, i32>`.
+///
+/// Corresponding ArkTS definition:
+/// ```typescript
+/// native function recordSum(entry: Record<string, int>): int;
+/// ```
+#[ani]
+pub fn record_sum(entry: HashMap<String, i32>) -> i32 {
+    entry.values().copied().sum()
+}
+
 /// Set value in Record
 ///
 /// Corresponding ArkTS definition:

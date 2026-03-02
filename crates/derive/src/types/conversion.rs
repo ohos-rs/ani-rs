@@ -72,9 +72,7 @@ fn generate_type_conversion(
         AniType::String(s) => generate_string_type_conversion(param_name, converted_name, s),
 
         // AniObject and handle-like types - use FromAni for strong typing
-        AniType::AniObject => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty)
-        }
+        AniType::AniObject => generate_generic_from_ani_conversion(param_name, converted_name, ty),
 
         // Option<T>
         AniType::Wrapper(WrapperType::Option(inner)) => {
@@ -99,10 +97,11 @@ fn generate_type_conversion(
             generate_arraybuffer_param_conversion(param_name, converted_name, ty)
         }
 
+        // Record<string, V> - use FromAni on typed Rust container (e.g. HashMap<String, V>)
+        AniType::Record(_) => generate_generic_from_ani_conversion(param_name, converted_name, ty),
+
         // Unknown/custom types - fallback to FromAni
-        AniType::Unknown(_) => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty)
-        }
+        AniType::Unknown(_) => generate_generic_from_ani_conversion(param_name, converted_name, ty),
 
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
@@ -375,6 +374,15 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
             }
         },
 
+        // Record<string, V> - ToAni returns AniObject, convert to raw pointer.
+        AniType::Record(_) => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
+                Ok(obj) => obj.into_raw(),
+                Err(_) => std::ptr::null_mut()
+            }
+        },
+
         // PromiseRaw - extract raw
         AniType::Promise(_) => quote! {
             result.into_raw()
@@ -425,6 +433,13 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
                 Ok(ab) => ab,
+                Err(_) => std::ptr::null_mut()
+            }
+        },
+        AniType::Record(_) => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
+                Ok(obj) => obj.into_raw(),
                 Err(_) => std::ptr::null_mut()
             }
         },

@@ -2,7 +2,6 @@
 //!
 //! Expands `#[ani]` macro for impl blocks.
 
-use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, ItemImpl};
@@ -104,7 +103,7 @@ fn extract_struct_name(impl_block: &ItemImpl) -> Result<String, TokenStream> {
 /// Process a single method in impl block
 fn process_method(struct_name: &str, method: &syn::ImplItemFn) -> (TokenStream, TokenStream) {
     let method_name = &method.sig.ident;
-    let ets_name = method_name.to_string().to_case(Case::Camel);
+    let ets_name = method_name.to_string();
 
     let has_self = method
         .sig

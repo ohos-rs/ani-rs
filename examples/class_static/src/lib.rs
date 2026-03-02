@@ -15,11 +15,7 @@ pub fn static_field_roundtrip_int(
 }
 
 #[ani]
-pub fn call_static_int(
-    env: &Env<'_>,
-    cls: AniClass<'_>,
-    method: AniStaticMethod,
-) -> Result<i32> {
+pub fn call_static_int(env: &Env<'_>, cls: AniClass<'_>, method: AniStaticMethod) -> Result<i32> {
     let args = [ani_value_int(2), ani_value_int(3)];
     env.call_static_method_int(&cls, &method, &args)
 }

@@ -87,6 +87,14 @@ pub struct PromiseType {
     pub inner: Option<Box<AniType>>,
 }
 
+/// Record type (`Record<string, V>`)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RecordType {
+    /// Value type `V`
+    pub value: Box<AniType>,
+}
+
 /// The main ANI type enum
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -107,6 +115,8 @@ pub enum AniType {
     Either(EitherType),
     /// Promise type
     Promise(PromiseType),
+    /// Record type
+    Record(RecordType),
     /// AniObject - raw object type
     AniObject,
     /// ArrayBuffer - binary data buffer type
@@ -197,6 +207,13 @@ impl AniType {
                 inner: extract_first_generic_type(&segment.arguments)
                     .map(|t| Box::new(AniType::from_syn_type(&t))),
             });
+        }
+
+        // HashMap<String, V> maps to ArkTS Record<string, V>
+        if ident == "HashMap" {
+            if let Some(record) = parse_record_type(&segment.arguments) {
+                return AniType::Record(record);
+            }
         }
 
         // Check for generic wrapper types
@@ -354,6 +371,7 @@ impl AniType {
             AniType::FnArgs(_) => quote! { ani::sys::ani_object },
             AniType::Either(_) => quote! { ani::sys::ani_object },
             AniType::Promise(_) => quote! { ani::sys::ani_object },
+            AniType::Record(_) => quote! { ani::sys::ani_object },
             AniType::AniObject => quote! { ani::sys::ani_object },
             AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
@@ -421,6 +439,7 @@ impl AniType {
             }
             AniType::Either(_) => "Lstd/core/Object;".to_string(),
             AniType::Promise(_) => "Lstd/core/Object;".to_string(),
+            AniType::Record(_) => "Lescompat/Record;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
             AniType::ArrayBuffer => "Lescompat/ArrayBuffer;".to_string(),
             AniType::Tuple(elements) => {
@@ -585,6 +604,23 @@ fn parse_either_type(ident: &str, args: &PathArguments) -> Option<EitherType> {
     })
 }
 
+/// Parse `HashMap<String, V>` as `Record<string, V>`.
+fn parse_record_type(args: &PathArguments) -> Option<RecordType> {
+    let types = extract_all_generic_types(args);
+    if types.len() != 2 {
+        return None;
+    }
+
+    let key_ty = AniType::from_syn_type(&types[0]);
+    if !matches!(key_ty, AniType::String(_)) {
+        return None;
+    }
+
+    Some(RecordType {
+        value: Box::new(AniType::from_syn_type(&types[1])),
+    })
+}
+
 /// Check if a type path refers to a specific identifier
 fn is_path_ident(type_path: &TypePath, ident: &str) -> bool {
     type_path.path.is_ident(ident)
@@ -734,6 +770,10 @@ mod tests {
         let ty: Type = syn::parse_quote!(Vec<i32>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "[I");
+
+        let ty: Type = syn::parse_quote!(HashMap<String, i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lescompat/Record;");
     }
 
     #[test]
@@ -774,6 +814,20 @@ mod tests {
             ));
         } else {
             panic!("Expected Tuple type");
+        }
+    }
+
+    #[test]
+    fn test_parse_record() {
+        let ty: Type = syn::parse_quote!(HashMap<String, i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Record(record) = ani_type {
+            assert!(matches!(
+                record.value.as_ref(),
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+        } else {
+            panic!("Expected Record type");
         }
     }
 

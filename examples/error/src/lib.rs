@@ -79,10 +79,7 @@ impl std::fmt::Display for AuthError {
 
 /// Simulates a login function that uses custom AuthError.
 /// The error will be converted to a JavaScript exception when thrown.
-fn authenticate(
-    username: &str,
-    password: &str,
-) -> std::result::Result<String, Error<AuthError>> {
+fn authenticate(username: &str, password: &str) -> std::result::Result<String, Error<AuthError>> {
     if username.is_empty() || password.is_empty() {
         return Err(Error::new(
             AuthError::InvalidCredentials,

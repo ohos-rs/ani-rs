@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::sys;
 use crate::types::*;
 
+use super::boxed::{Boxable, Unboxable};
 use super::traits::{FromAni, ToAni, TypeInfo};
 
 // ============================================================================
@@ -28,62 +29,126 @@ impl<V: TypeInfo> TypeInfo for HashMap<String, V> {
     }
 }
 
-// HashMap<String, String> conversion
-impl<'env> ToAni<'env> for HashMap<String, String> {
+/// Value conversion for `Record<string, V>` mapping.
+pub trait RecordValue<'env>: Sized {
+    /// Convert Rust value into ANI ref used by Record values.
+    fn to_record_ref(self, env: &Env<'env>) -> Result<AniRef<'env>>;
+
+    /// Convert ANI ref value from Record into Rust value.
+    fn from_record_ref(env: &Env<'env>, value: &AniRef<'env>) -> Result<Self>;
+}
+
+impl<'env> RecordValue<'env> for String {
+    fn to_record_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = env.create_string(&self)?;
+        Ok(unsafe { AniRef::from_raw(value.into_raw() as sys::ani_ref) })
+    }
+
+    fn from_record_ref(env: &Env<'env>, value: &AniRef<'env>) -> Result<Self> {
+        let ani_string = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+        env.get_string(&ani_string)
+    }
+}
+
+macro_rules! impl_record_value_boxed {
+    ($ty:ty) => {
+        impl<'env> RecordValue<'env> for $ty {
+            fn to_record_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+                let boxed = <$ty as Boxable<'env>>::box_value(self, env)?;
+                Ok(unsafe { AniRef::from_raw(boxed.into_raw() as sys::ani_ref) })
+            }
+
+            fn from_record_ref(env: &Env<'env>, value: &AniRef<'env>) -> Result<Self> {
+                let obj = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+                <$ty as Unboxable<'env>>::unbox(env, &obj)
+            }
+        }
+    };
+}
+
+impl_record_value_boxed!(bool);
+impl_record_value_boxed!(i8);
+impl_record_value_boxed!(i16);
+impl_record_value_boxed!(u16);
+impl_record_value_boxed!(i32);
+impl_record_value_boxed!(i64);
+impl_record_value_boxed!(f32);
+impl_record_value_boxed!(f64);
+
+impl<'env> RecordValue<'env> for AniRef<'env> {
+    fn to_record_ref(self, _env: &Env<'env>) -> Result<AniRef<'env>> {
+        Ok(self)
+    }
+
+    fn from_record_ref(_env: &Env<'env>, value: &AniRef<'env>) -> Result<Self> {
+        Ok(unsafe { AniRef::from_raw(value.as_raw()) })
+    }
+}
+
+impl<'env> RecordValue<'env> for AniObject<'env> {
+    fn to_record_ref(self, _env: &Env<'env>) -> Result<AniRef<'env>> {
+        Ok(unsafe { AniRef::from_raw(self.into_raw() as sys::ani_ref) })
+    }
+
+    fn from_record_ref(_env: &Env<'env>, value: &AniRef<'env>) -> Result<Self> {
+        Ok(unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) })
+    }
+}
+
+impl<'env, V> ToAni<'env> for HashMap<String, V>
+where
+    V: RecordValue<'env>,
+{
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        // Create Record object
         let record_class = env.find_class("Lescompat/Record;")?;
         let ctor = env.find_constructor(&record_class, ":V")?;
         let record = env.new_object(&record_class, &ctor, &[])?;
+        let record_ref = unsafe { AniRef::from_raw(record.as_raw() as sys::ani_ref) };
 
-        // Get set method
-        let set_method =
-            env.find_method(&record_class, "set", "Lstd/core/String;Lstd/core/Object;:V")?;
-
-        // Set each key-value pair
         for (key, value) in self {
             let ani_key = env.create_string(&key)?;
-            let ani_value = env.create_string(&value)?;
-
-            let args = [
-                ani_value_ref(ani_key.as_raw() as sys::ani_ref),
-                ani_value_ref(ani_value.as_raw() as sys::ani_ref),
-            ];
-
-            env.call_method_void(&record, &set_method, &args)?;
+            let key_ref = unsafe { AniRef::from_raw(ani_key.as_raw() as sys::ani_ref) };
+            let value_ref = value.to_record_ref(env)?;
+            env.any_set_by_value(&record_ref, &key_ref, &value_ref)?;
         }
 
         Ok(record)
     }
 }
 
-// HashMap<String, i32> conversion
-impl<'env> ToAni<'env> for HashMap<String, i32> {
-    type Output = AniObject<'env>;
+impl<'env, V> FromAni<'env> for HashMap<String, V>
+where
+    V: RecordValue<'env>,
+{
+    type Input = sys::ani_object;
 
-    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let record_class = env.find_class("Lescompat/Record;")?;
-        let ctor = env.find_constructor(&record_class, ":V")?;
-        let record = env.new_object(&record_class, &ctor, &[])?;
-
-        let set_method =
-            env.find_method(&record_class, "set", "Lstd/core/String;Lstd/core/Object;:V")?;
-
-        for (key, value) in self {
-            let ani_key = env.create_string(&key)?;
-            let boxed_value = super::boxed::Boxable::box_value(value, env)?;
-
-            let args = [
-                ani_value_ref(ani_key.as_raw() as sys::ani_ref),
-                ani_value_ref(boxed_value.as_raw() as sys::ani_ref),
-            ];
-
-            env.call_method_void(&record, &set_method, &args)?;
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                "Null pointer: record",
+            ));
         }
 
-        Ok(record)
+        let record_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
+        let keys_ref = env.any_call_method(&record_ref, "keys", &[])?;
+
+        // Record.keys() should return an array of keys.
+        let keys_array = unsafe { AniArray::from_raw(keys_ref.as_raw() as sys::ani_array) };
+        let len = env.get_array_length(&keys_array)?;
+        let mut out = HashMap::with_capacity(len);
+
+        for i in 0..len {
+            let key_ref = env.get_array_element(&keys_array, i)?;
+            let key = String::from_record_ref(env, &key_ref)?;
+            let value_ref = env.any_get_by_value(&record_ref, &key_ref)?;
+            let value = V::from_record_ref(env, &value_ref)?;
+            out.insert(key, value);
+        }
+
+        Ok(out)
     }
 }
 
