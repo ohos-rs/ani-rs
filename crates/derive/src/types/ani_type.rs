@@ -450,7 +450,9 @@ impl AniType {
                     .collect::<Vec<_>>()
                     .join("")
             }
-            AniType::Unknown(_) => "Lstd/core/Object;".to_string(),
+            AniType::Unknown(ty) => {
+                unknown_type_to_signature(ty).unwrap_or_else(|| "Lstd/core/Object;".to_string())
+            }
         }
     }
 
@@ -619,6 +621,48 @@ fn parse_record_type(args: &PathArguments) -> Option<RecordType> {
     Some(RecordType {
         value: Box::new(AniType::from_syn_type(&types[1])),
     })
+}
+
+fn unknown_type_to_signature(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Path(type_path) => {
+            let last = type_path.path.segments.last()?.ident.to_string();
+            if let Some(sig) = known_ani_runtime_signature(&last) {
+                return Some(sig.to_string());
+            }
+
+            let path = type_path
+                .path
+                .segments
+                .iter()
+                .map(|seg| seg.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("/");
+
+            if path.is_empty() {
+                None
+            } else {
+                Some(format!("L{};", path))
+            }
+        }
+        Type::Reference(type_ref) => unknown_type_to_signature(type_ref.elem.as_ref()),
+        Type::Paren(type_paren) => unknown_type_to_signature(type_paren.elem.as_ref()),
+        Type::Group(type_group) => unknown_type_to_signature(type_group.elem.as_ref()),
+        _ => None,
+    }
+}
+
+fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
+    match ident {
+        "AniString" => Some("Lstd/core/String;"),
+        "AniArrayBuffer" => Some("Lescompat/ArrayBuffer;"),
+        "AniFunction" | "AniFnObject" => Some("Lstd/core/Function;"),
+        "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
+        | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
+        | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
+        | "GlobalRef" | "WeakRef" => Some("Lstd/core/Object;"),
+        _ => None,
+    }
 }
 
 /// Check if a type path refers to a specific identifier
@@ -896,5 +940,19 @@ mod tests {
         let ty: Type = syn::parse_quote!((String, bool, f64));
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/String;ZD");
+    }
+
+    #[test]
+    fn test_unknown_custom_type_signature() {
+        let ty: Type = syn::parse_quote!(crate::models::UserInfo);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lcrate/models/UserInfo;");
+    }
+
+    #[test]
+    fn test_unknown_known_ani_wrapper_signature() {
+        let ty: Type = syn::parse_quote!(AniString<'_>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;");
     }
 }

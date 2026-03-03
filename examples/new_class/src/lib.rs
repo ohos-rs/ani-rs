@@ -3,6 +3,10 @@
 //! This example shows class methods, constructors, getter/setter bindings
 
 use ani_derive::ani;
+use std::sync::{
+    atomic::{AtomicI32, Ordering},
+    Mutex, OnceLock,
+};
 
 // ============================================================================
 // Calculator Class - Demonstrates class method binding
@@ -33,25 +37,25 @@ pub fn create() -> i64 {
 
 /// Addition (instance method)
 #[ani(class = "Calculator")]
-pub fn add(_this: i64, a: i32, b: i32) -> i32 {
+pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
 /// Subtraction (instance method)
 #[ani(class = "Calculator")]
-pub fn subtract(_this: i64, a: i32, b: i32) -> i32 {
+pub fn subtract(a: i32, b: i32) -> i32 {
     a - b
 }
 
 /// Multiplication (instance method)
 #[ani(class = "Calculator")]
-pub fn multiply(_this: i64, a: f64, b: f64) -> f64 {
+pub fn multiply(a: f64, b: f64) -> f64 {
     a * b
 }
 
 /// Division (instance method)
 #[ani(class = "Calculator")]
-pub fn divide(_this: i64, a: f64, b: f64) -> f64 {
+pub fn divide(a: f64, b: f64) -> f64 {
     if b == 0.0 {
         0.0
     } else {
@@ -63,63 +67,57 @@ pub fn divide(_this: i64, a: f64, b: f64) -> f64 {
 // Person Class - Demonstrates stateful class
 // ============================================================================
 
-/// Person class
-pub struct Person {
-    name: String,
-    age: i32,
+static PERSON_AGE: AtomicI32 = AtomicI32::new(0);
+static PERSON_NAME: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn person_name_store() -> &'static Mutex<String> {
+    PERSON_NAME.get_or_init(|| Mutex::new(String::new()))
 }
 
 /// Create Person (constructor)
 #[ani(class = "Person", constructor)]
-pub fn person_new(name: String, age: i32) -> i64 {
-    let person = Box::new(Person { name, age });
-    Box::into_raw(person) as i64
+pub fn person_new(name: String, age: i32) {
+    PERSON_AGE.store(age, Ordering::SeqCst);
+    if let Ok(mut slot) = person_name_store().lock() {
+        *slot = name;
+    }
 }
 
 /// Get name
 #[ani(class = "Person", name = "getName")]
-pub fn person_get_name(this: i64) -> String {
-    unsafe {
-        let person = &*(this as *const Person);
-        person.name.clone()
-    }
+pub fn person_get_name() -> String {
+    person_name_store()
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
 }
 
 /// Get age
 #[ani(class = "Person", name = "getAge")]
-pub fn person_get_age(this: i64) -> i32 {
-    unsafe {
-        let person = &*(this as *const Person);
-        person.age
-    }
+pub fn person_get_age() -> i32 {
+    PERSON_AGE.load(Ordering::SeqCst)
 }
 
 /// Set age
 #[ani(class = "Person", name = "setAge")]
-pub fn person_set_age(this: i64, age: i32) {
-    unsafe {
-        let person = &mut *(this as *mut Person);
-        person.age = age;
-    }
+pub fn person_set_age(age: i32) {
+    PERSON_AGE.store(age, Ordering::SeqCst);
 }
 
 /// Greeting
 #[ani(class = "Person")]
-pub fn greet(this: i64) -> String {
-    unsafe {
-        let person = &*(this as *const Person);
-        format!(
-            "Hello, I'm {} and I'm {} years old!",
-            person.name, person.age
-        )
-    }
+pub fn greet() -> String {
+    let name = person_get_name();
+    let age = person_get_age();
+    format!("Hello, I'm {} and I'm {} years old!", name, age)
 }
 
 /// Release Person
 #[ani(class = "Person", name = "destroy")]
-pub fn person_destroy(this: i64) {
-    unsafe {
-        let _ = Box::from_raw(this as *mut Person);
+pub fn person_destroy() {
+    PERSON_AGE.store(0, Ordering::SeqCst);
+    if let Ok(mut slot) = person_name_store().lock() {
+        slot.clear();
     }
 }
 
@@ -134,34 +132,28 @@ mod tests {
 
     #[test]
     fn test_calculator() {
-        let calc_ptr = create();
-        assert_ne!(calc_ptr, 0);
+        let calc_token = create();
+        assert_ne!(calc_token, 0);
 
-        assert_eq!(add(calc_ptr, 2, 3), 5);
-        assert_eq!(subtract(calc_ptr, 5, 3), 2);
-        assert!((multiply(calc_ptr, 2.0, 3.0) - 6.0).abs() < f64::EPSILON);
-        assert!((divide(calc_ptr, 6.0, 2.0) - 3.0).abs() < f64::EPSILON);
-
-        // Cleanup
-        unsafe {
-            let _ = Box::from_raw(calc_ptr as *mut Calculator);
-        }
+        assert_eq!(add(2, 3), 5);
+        assert_eq!(subtract(5, 3), 2);
+        assert!((multiply(2.0, 3.0) - 6.0).abs() < f64::EPSILON);
+        assert!((divide(6.0, 2.0) - 3.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_person() {
-        let person_ptr = person_new("Alice".to_string(), 30);
-        assert_ne!(person_ptr, 0);
+        person_new("Alice".to_string(), 30);
 
-        assert_eq!(person_get_name(person_ptr), "Alice");
-        assert_eq!(person_get_age(person_ptr), 30);
+        assert_eq!(person_get_name(), "Alice");
+        assert_eq!(person_get_age(), 30);
 
-        person_set_age(person_ptr, 31);
-        assert_eq!(person_get_age(person_ptr), 31);
+        person_set_age(31);
+        assert_eq!(person_get_age(), 31);
 
-        assert_eq!(greet(person_ptr), "Hello, I'm Alice and I'm 31 years old!");
+        assert_eq!(greet(), "Hello, I'm Alice and I'm 31 years old!");
 
         // Cleanup
-        person_destroy(person_ptr);
+        person_destroy();
     }
 }

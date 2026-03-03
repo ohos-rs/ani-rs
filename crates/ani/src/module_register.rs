@@ -23,8 +23,21 @@ pub struct ModuleRegisterEntry {
     pub callback: RegisterCallback,
 }
 
+/// Init callback registration entry
+#[derive(Clone)]
+pub struct InitRegisterEntry {
+    /// Function name (for debugging)
+    pub name: &'static str,
+    /// Callback invoked during module initialization
+    pub callback: RegisterCallback,
+}
+
 /// Global registry for module exports
 static MODULE_REGISTER_CALLBACKS: RwLock<Vec<ModuleRegisterEntry>> = RwLock::new(Vec::new());
+/// Global registry for init callbacks that run before native binding registration
+static INIT_BEFORE_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
+/// Global registry for init callbacks that run after native binding registration
+static INIT_AFTER_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
 
 /// Register a module export callback
 ///
@@ -36,6 +49,48 @@ pub fn register_module_export(name: &'static str, callback: RegisterCallback) {
         .write()
         .expect("Failed to acquire write lock for MODULE_REGISTER_CALLBACKS")
         .push(entry);
+}
+
+/// Register an init callback.
+///
+/// If `before_bindings` is true, the callback runs before binding registration.
+/// Otherwise, it runs after binding registration.
+#[doc(hidden)]
+pub fn register_init_callback(
+    name: &'static str,
+    before_bindings: bool,
+    callback: RegisterCallback,
+) {
+    let entry = InitRegisterEntry { name, callback };
+    let callbacks = if before_bindings {
+        &INIT_BEFORE_BINDINGS_CALLBACKS
+    } else {
+        &INIT_AFTER_BINDINGS_CALLBACKS
+    };
+
+    callbacks
+        .write()
+        .expect("Failed to acquire write lock for init callbacks")
+        .push(entry);
+}
+
+/// Execute init callbacks that should run before native binding registration.
+#[doc(hidden)]
+pub unsafe fn execute_before_bindings_inits(env: *mut sys::ani_env) -> sys::ani_status {
+    let callbacks = INIT_BEFORE_BINDINGS_CALLBACKS
+        .read()
+        .expect("Failed to acquire read lock for INIT_BEFORE_BINDINGS_CALLBACKS");
+
+    for entry in callbacks.iter() {
+        // SAFETY: The callback is a function pointer registered via #[ani(init)] macro
+        let status = unsafe { (entry.callback)(env) };
+        if status != sys::ani_status_ANI_OK {
+            eprintln!("Failed to run before_bindings init: {}", entry.name);
+            return status;
+        }
+    }
+
+    sys::ani_status_ANI_OK
 }
 
 /// Execute all registered callbacks
@@ -59,6 +114,25 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
     sys::ani_status_ANI_OK
 }
 
+/// Execute init callbacks that should run after native binding registration.
+#[doc(hidden)]
+pub unsafe fn execute_after_bindings_inits(env: *mut sys::ani_env) -> sys::ani_status {
+    let callbacks = INIT_AFTER_BINDINGS_CALLBACKS
+        .read()
+        .expect("Failed to acquire read lock for INIT_AFTER_BINDINGS_CALLBACKS");
+
+    for entry in callbacks.iter() {
+        // SAFETY: The callback is a function pointer registered via #[ani(init)] macro
+        let status = unsafe { (entry.callback)(env) };
+        if status != sys::ani_status_ANI_OK {
+            eprintln!("Failed to run after_bindings init: {}", entry.name);
+            return status;
+        }
+    }
+
+    sys::ani_status_ANI_OK
+}
+
 /// Get the number of registered callbacks (for debugging)
 #[doc(hidden)]
 pub fn registered_count() -> usize {
@@ -75,5 +149,13 @@ pub fn clear_registrations() {
     MODULE_REGISTER_CALLBACKS
         .write()
         .expect("Failed to acquire write lock for MODULE_REGISTER_CALLBACKS")
+        .clear();
+    INIT_BEFORE_BINDINGS_CALLBACKS
+        .write()
+        .expect("Failed to acquire write lock for INIT_BEFORE_BINDINGS_CALLBACKS")
+        .clear();
+    INIT_AFTER_BINDINGS_CALLBACKS
+        .write()
+        .expect("Failed to acquire write lock for INIT_AFTER_BINDINGS_CALLBACKS")
         .clear();
 }

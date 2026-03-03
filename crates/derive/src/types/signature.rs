@@ -29,6 +29,29 @@ pub fn generate_fn_signature(sig: &Signature, skip_first: bool) -> String {
     generate_signature_from_inputs(&sig.inputs, &sig.output, skip_first)
 }
 
+/// Generate ANI signature for a constructor.
+///
+/// Constructor signatures always return void (`:` with no return type suffix).
+pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
+    let mut ctor_sig = String::new();
+
+    let params: Vec<_> = sig
+        .inputs
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .filter(|arg| !should_skip_in_signature(arg))
+        .collect();
+
+    for input in params {
+        if let FnArg::Typed(pat_type) = input {
+            ctor_sig.push_str(&rust_type_to_signature(&pat_type.ty));
+        }
+    }
+
+    ctor_sig.push(':');
+    ctor_sig
+}
+
 /// Generate signature from parameter list
 fn generate_signature_from_inputs(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
@@ -214,5 +237,13 @@ mod tests {
 
         let vec_ty: syn::Type = syn::parse_quote!(Vec<String>);
         assert!(!AniType::from_syn_type(&vec_ty).is_either());
+    }
+
+    #[test]
+    fn test_ctor_signature_generation() {
+        let sig: Signature = syn::parse_quote! {
+            fn init(this: i64, name: String, age: i32)
+        };
+        assert_eq!(generate_ctor_signature(&sig, true), "Lstd/core/String;I:");
     }
 }

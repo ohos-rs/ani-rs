@@ -424,6 +424,32 @@ pub fn generate_fn_ets_decl(sig: &Signature, ets_name: &str, skip_first: bool) -
     format!("{ets_name}({}): {ret}", params.join(", "))
 }
 
+/// Generate ETS declaration signature string for a constructor.
+///
+/// Output example: `constructor(name: string, age: int)`
+pub fn generate_ctor_ets_decl(sig: &Signature, skip_first: bool) -> String {
+    let mut params: Vec<String> = Vec::new();
+
+    for (idx, arg) in sig
+        .inputs
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .filter(|arg| !should_skip_in_signature(arg))
+        .enumerate()
+    {
+        if let FnArg::Typed(pat_type) = arg {
+            let name = match pat_type.pat.as_ref() {
+                Pat::Ident(ident) => ident.ident.to_string(),
+                _ => format!("arg{}", idx),
+            };
+            let ty = rust_type_to_ets(&pat_type.ty);
+            params.push(format!("{name}: {ty}"));
+        }
+    }
+
+    format!("constructor({})", params.join(", "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +537,16 @@ mod tests {
         assert!(rendered.contains("class Person {"));
         assert!(rendered.contains("native getName(): string;"));
         assert!(rendered.contains("native static create(name: string): long;"));
+    }
+
+    #[test]
+    fn test_generate_ctor_ets_decl() {
+        let sig: Signature = syn::parse_quote! {
+            fn person_new(this: i64, name: String, age: i32)
+        };
+        assert_eq!(
+            generate_ctor_ets_decl(&sig, true),
+            "constructor(name: string, age: int)"
+        );
     }
 }

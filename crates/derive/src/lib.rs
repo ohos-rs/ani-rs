@@ -122,7 +122,17 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
                         return status;
                     }
 
+                    let status = ::ani::module_register::execute_before_bindings_inits(env);
+                    if status != ::ani::sys::ani_status_ANI_OK {
+                        return status;
+                    }
+
                     let status = ::ani::module_register::execute_registrations(env);
+                    if status != ::ani::sys::ani_status_ANI_OK {
+                        return status;
+                    }
+
+                    let status = ::ani::module_register::execute_after_bindings_inits(env);
                     if status != ::ani::sys::ani_status_ANI_OK {
                         return status;
                     }

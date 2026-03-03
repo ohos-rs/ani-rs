@@ -176,6 +176,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-init-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-interface"
 version = "0.1.0"
 dependencies = [

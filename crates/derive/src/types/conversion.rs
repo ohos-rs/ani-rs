@@ -118,7 +118,14 @@ fn generate_primitive_conversion(
         PrimitiveType::Bool => {
             quote! { let #converted_name = #param_name != 0; }
         }
-        // All other primitives are direct pass-through
+        PrimitiveType::U8 => quote! { let #converted_name = #param_name as u8; },
+        PrimitiveType::U16 => quote! { let #converted_name = #param_name as u16; },
+        PrimitiveType::U32 => quote! { let #converted_name = #param_name as u32; },
+        PrimitiveType::U64 => quote! { let #converted_name = #param_name as u64; },
+        PrimitiveType::Char => quote! {
+            let #converted_name = std::char::from_u32(#param_name as u32).unwrap_or('\0');
+        },
+        // Signed primitives are direct pass-through.
         _ => quote! { let #converted_name = #param_name; },
     }
 }
@@ -341,6 +348,10 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
         // Numeric primitives - direct return
         AniType::Primitive(p) => match p {
             PrimitiveType::Bool => quote! { if result { 1 } else { 0 } },
+            PrimitiveType::U8 => quote! { result as ani::sys::ani_byte },
+            PrimitiveType::U32 => quote! { result as ani::sys::ani_int },
+            PrimitiveType::U64 => quote! { result as ani::sys::ani_long },
+            PrimitiveType::Char => quote! { (result as u32) as ani::sys::ani_char },
             _ => quote! { result },
         },
 
@@ -428,6 +439,10 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
             }
         },
         AniType::Primitive(PrimitiveType::Bool) => quote! { if val { 1 } else { 0 } },
+        AniType::Primitive(PrimitiveType::U8) => quote! { val as ani::sys::ani_byte },
+        AniType::Primitive(PrimitiveType::U32) => quote! { val as ani::sys::ani_int },
+        AniType::Primitive(PrimitiveType::U64) => quote! { val as ani::sys::ani_long },
+        AniType::Primitive(PrimitiveType::Char) => quote! { (val as u32) as ani::sys::ani_char },
         AniType::Unit => quote! {},
         AniType::ArrayBuffer => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
