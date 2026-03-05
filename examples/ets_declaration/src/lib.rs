@@ -12,7 +12,7 @@ pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
-#[ani(namespace = "Math.Utils")]
+#[ani(namespace = "AniMath.Utils")]
 pub fn sqrt(x: f64) -> f64 {
     x.sqrt()
 }

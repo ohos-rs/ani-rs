@@ -4322,7 +4322,13 @@ impl<'local> Env<'local> {
 
     /// Create an int array
     pub fn create_int_array(&self, length: usize) -> Result<AniArrayInt<'local>> {
-        ani_call_wrap!(self, Array_New_Int, sys::ani_array_int, AniArrayInt, length)
+        ani_call_wrap!(
+            self,
+            FixedArray_New_Int,
+            sys::ani_fixedarray_int,
+            AniArrayInt,
+            length
+        )
     }
 
     /// Get array length

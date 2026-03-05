@@ -7,7 +7,7 @@ use quote::quote;
 use syn::{DeriveInput, Fields, ItemStruct};
 
 use crate::parser::BindgenAttrs;
-use crate::types::class_to_descriptor;
+use crate::types::{class_to_descriptor, current_module_name, qualify_member_descriptor};
 
 /// Expand `#[ani]` for structs
 pub fn expand_struct(
@@ -20,7 +20,9 @@ pub fn expand_struct(
         .class
         .clone()
         .unwrap_or_else(|| struct_name.to_string());
-    let class_descriptor = class_to_descriptor(&class_name);
+    let module_name = current_module_name();
+    let class_descriptor =
+        class_to_descriptor(&qualify_member_descriptor(&class_name, &module_name));
 
     // Generate field accessors (placeholder for future implementation)
     let _field_accessors = generate_field_accessors(&struct_item);
@@ -72,7 +74,9 @@ fn generate_field_accessors(struct_item: &ItemStruct) -> Vec<TokenStream> {
 pub fn expand_class_derive(input: DeriveInput) -> TokenStream {
     let name = &input.ident;
     let class_name = name.to_string();
-    let class_descriptor = class_to_descriptor(&class_name);
+    let module_name = current_module_name();
+    let class_descriptor =
+        class_to_descriptor(&qualify_member_descriptor(&class_name, &module_name));
 
     quote! {
         impl ani::AniBindable for #name {

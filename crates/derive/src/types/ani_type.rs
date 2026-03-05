@@ -437,11 +437,22 @@ impl AniType {
                     .collect::<Vec<_>>()
                     .join("")
             }
-            AniType::Either(_) => "Lstd/core/Object;".to_string(),
+            AniType::Either(either) => {
+                let mut variants = String::new();
+                for ty in &either.types {
+                    let variant = AniType::from_syn_type(ty.as_ref()).to_union_variant_signature();
+                    variants.push_str(&variant);
+                }
+                if variants.is_empty() {
+                    "C{std.core.Object}".to_string()
+                } else {
+                    format!("X{{{variants}}}")
+                }
+            }
             AniType::Promise(_) => "Lstd/core/Object;".to_string(),
-            AniType::Record(_) => "Lescompat/Record;".to_string(),
+            AniType::Record(_) => "Lstd/core/Record;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
-            AniType::ArrayBuffer => "Lescompat/ArrayBuffer;".to_string(),
+            AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
             AniType::Tuple(elements) => {
                 // Tuple generates signature for each element
                 elements
@@ -461,6 +472,46 @@ impl AniType {
         match self {
             AniType::Primitive(p) => p.to_boxed_signature(),
             _ => self.to_signature(),
+        }
+    }
+
+    fn to_union_variant_signature(&self) -> String {
+        match self {
+            AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
+            AniType::String(_) => "C{std.core.String}".to_string(),
+            AniType::AniObject => "C{std.core.Object}".to_string(),
+            AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
+            AniType::Record(_) => "C{std.core.Record}".to_string(),
+            AniType::Function(_) => "C{std.core.Function}".to_string(),
+            AniType::Wrapper(WrapperType::Vec(inner)) => {
+                format!("A{{{}}}", inner.to_fixed_array_elem_signature())
+            }
+            AniType::Wrapper(WrapperType::Option(inner)) => inner.to_union_variant_signature(),
+            AniType::Wrapper(WrapperType::Result(inner)) => inner.to_union_variant_signature(),
+            AniType::Wrapper(WrapperType::Ref(inner)) => inner.to_union_variant_signature(),
+            AniType::Either(either) => {
+                let mut variants = String::new();
+                for ty in &either.types {
+                    variants.push_str(&AniType::from_syn_type(ty.as_ref()).to_union_variant_signature());
+                }
+                if variants.is_empty() {
+                    "C{std.core.Object}".to_string()
+                } else {
+                    format!("X{{{variants}}}")
+                }
+            }
+            AniType::Promise(_) => "C{std.core.Object}".to_string(),
+            AniType::FnArgs(_) | AniType::Tuple(_) | AniType::Unit => "C{std.core.Object}".to_string(),
+            AniType::Unknown(ty) => unknown_type_to_signature(ty)
+                .map(|sig| to_new_style_ref_signature(&sig))
+                .unwrap_or_else(|| "C{std.core.Object}".to_string()),
+        }
+    }
+
+    fn to_fixed_array_elem_signature(&self) -> String {
+        match self {
+            AniType::Primitive(p) => p.to_new_primitive_signature().to_string(),
+            _ => self.to_union_variant_signature(),
         }
     }
 }
@@ -498,6 +549,32 @@ impl PrimitiveType {
         }
     }
 
+    fn to_new_primitive_signature(&self) -> &'static str {
+        match self {
+            PrimitiveType::Bool => "z",
+            PrimitiveType::I8 | PrimitiveType::U8 => "b",
+            PrimitiveType::I16 => "s",
+            PrimitiveType::U16 | PrimitiveType::Char => "c",
+            PrimitiveType::I32 | PrimitiveType::U32 => "i",
+            PrimitiveType::I64 | PrimitiveType::U64 => "l",
+            PrimitiveType::F32 => "f",
+            PrimitiveType::F64 => "d",
+        }
+    }
+
+    fn to_boxed_new_signature(&self) -> &'static str {
+        match self {
+            PrimitiveType::Bool => "C{std.core.Boolean}",
+            PrimitiveType::I8 | PrimitiveType::U8 => "C{std.core.Byte}",
+            PrimitiveType::I16 => "C{std.core.Short}",
+            PrimitiveType::U16 | PrimitiveType::Char => "C{std.core.Char}",
+            PrimitiveType::I32 | PrimitiveType::U32 => "C{std.core.Int}",
+            PrimitiveType::I64 | PrimitiveType::U64 => "C{std.core.Long}",
+            PrimitiveType::F32 => "C{std.core.Float}",
+            PrimitiveType::F64 => "C{std.core.Double}",
+        }
+    }
+
     /// Get the Rust type identifier for this primitive
     pub fn rust_type_str(&self) -> &'static str {
         match self {
@@ -521,8 +598,14 @@ impl WrapperType {
     /// Generate the wrapper type signature
     pub fn to_signature(&self) -> String {
         match self {
-            WrapperType::Option(inner) => inner.to_boxed_signature(),
-            WrapperType::Vec(inner) => format!("[{}", inner.to_signature()),
+            WrapperType::Option(inner) => {
+                format!(
+                    "X{{{}{}}}",
+                    inner.to_union_variant_signature(),
+                    "C{std.core.Null}"
+                )
+            }
+            WrapperType::Vec(inner) => format!("A{{{}}}", inner.to_fixed_array_elem_signature()),
             WrapperType::Result(inner) => inner.to_signature(),
             WrapperType::Ref(inner) => {
                 // For Ref<AniObject>, return Object signature
@@ -655,13 +738,49 @@ fn unknown_type_to_signature(ty: &Type) -> Option<String> {
 fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
     match ident {
         "AniString" => Some("Lstd/core/String;"),
-        "AniArrayBuffer" => Some("Lescompat/ArrayBuffer;"),
+        "AniArrayBuffer" => Some("Lstd/core/ArrayBuffer;"),
+        "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("A{z}"),
+        "FixedByteArray" | "AniFixedArrayByte" => Some("A{b}"),
+        "FixedShortArray" | "AniFixedArrayShort" => Some("A{s}"),
+        "FixedCharArray" | "AniFixedArrayChar" => Some("A{c}"),
+        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("A{i}"),
+        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("A{l}"),
+        "FixedFloatArray" | "AniFixedArrayFloat" => Some("A{f}"),
+        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("A{d}"),
         "AniFunction" | "AniFnObject" => Some("Lstd/core/Function;"),
         "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
         | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
         | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
         | "GlobalRef" | "WeakRef" => Some("Lstd/core/Object;"),
         _ => None,
+    }
+}
+
+fn to_new_style_ref_signature(signature: &str) -> String {
+    if signature.starts_with("C{")
+        || signature.starts_with("A{")
+        || signature.starts_with("X{")
+        || signature.starts_with("E{")
+        || signature.starts_with("P{")
+    {
+        return signature.to_string();
+    }
+    if let Some(inner) = signature
+        .strip_prefix('L')
+        .and_then(|s| s.strip_suffix(';'))
+    {
+        return format!("C{{{}}}", inner.replace('/', "."));
+    }
+    match signature {
+        "Z" | "z" => "C{std.core.Boolean}".to_string(),
+        "B" | "b" => "C{std.core.Byte}".to_string(),
+        "S" | "s" => "C{std.core.Short}".to_string(),
+        "C" | "c" => "C{std.core.Char}".to_string(),
+        "I" | "i" => "C{std.core.Int}".to_string(),
+        "J" | "l" => "C{std.core.Long}".to_string(),
+        "F" | "f" => "C{std.core.Float}".to_string(),
+        "D" | "d" => "C{std.core.Double}".to_string(),
+        _ => "C{std.core.Object}".to_string(),
     }
 }
 
@@ -813,18 +932,18 @@ mod tests {
 
         let ty: Type = syn::parse_quote!(Vec<i32>);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "[I");
+        assert_eq!(ani_type.to_signature(), "A{i}");
 
         let ty: Type = syn::parse_quote!(HashMap<String, i32>);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "Lescompat/Record;");
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Record;");
     }
 
     #[test]
     fn test_boxed_signature() {
         let ty: Type = syn::parse_quote!(Option<i32>);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "Lstd/core/Int;");
+        assert_eq!(ani_type.to_signature(), "X{C{std.core.Int}C{std.core.Null}}");
     }
 
     #[test]

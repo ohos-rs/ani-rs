@@ -8,7 +8,9 @@ use syn::{FnArg, ItemFn, ItemImpl};
 
 use crate::codegen::generate_wrapper;
 use crate::parser::BindgenAttrs;
-use crate::types::{class_to_descriptor, generate_fn_signature};
+use crate::types::{
+    class_to_descriptor, current_module_name, generate_fn_signature, qualify_member_descriptor,
+};
 
 /// Expand `#[ani]` for impl blocks
 pub fn expand_impl(attrs: BindgenAttrs, impl_block: ItemImpl, prepare: TokenStream) -> TokenStream {
@@ -18,7 +20,9 @@ pub fn expand_impl(attrs: BindgenAttrs, impl_block: ItemImpl, prepare: TokenStre
     };
 
     let class_name = attrs.class.clone().unwrap_or_else(|| struct_name.clone());
-    let class_descriptor = class_to_descriptor(&class_name);
+    let module_name = current_module_name();
+    let class_descriptor =
+        class_to_descriptor(&qualify_member_descriptor(&class_name, &module_name));
 
     let mut wrappers = Vec::new();
     let mut method_entries = Vec::new();

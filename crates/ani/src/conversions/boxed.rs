@@ -59,7 +59,7 @@ impl<'env> Boxable<'env> for bool {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "Z:V"
+        "z:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -71,16 +71,16 @@ impl<'env> Boxable<'env> for bool {
 }
 
 impl<'env> Unboxable<'env> for bool {
+    fn unbox_method_name() -> &'static str {
+        "valueOf"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":Z"
+        ":z"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_boolean(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_boolean(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -96,7 +96,7 @@ impl<'env> Boxable<'env> for i8 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "B:V"
+        "b:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -108,16 +108,16 @@ impl<'env> Boxable<'env> for i8 {
 }
 
 impl<'env> Unboxable<'env> for i8 {
+    fn unbox_method_name() -> &'static str {
+        "toByte"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":B"
+        ":b"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_byte(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_byte(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -133,7 +133,7 @@ impl<'env> Boxable<'env> for i16 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "S:V"
+        "s:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -145,16 +145,16 @@ impl<'env> Boxable<'env> for i16 {
 }
 
 impl<'env> Unboxable<'env> for i16 {
+    fn unbox_method_name() -> &'static str {
+        "toShort"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":S"
+        ":s"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_short(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_short(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -170,7 +170,7 @@ impl<'env> Boxable<'env> for u16 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "C:V"
+        "c:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -182,16 +182,16 @@ impl<'env> Boxable<'env> for u16 {
 }
 
 impl<'env> Unboxable<'env> for u16 {
+    fn unbox_method_name() -> &'static str {
+        "toChar"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":C"
+        ":c"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_char(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_char(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -203,7 +203,7 @@ impl<'env> Boxable<'env> for char {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "C:V"
+        "c:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -223,7 +223,7 @@ impl<'env> Boxable<'env> for i32 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "I:V"
+        "i:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -235,16 +235,16 @@ impl<'env> Boxable<'env> for i32 {
 }
 
 impl<'env> Unboxable<'env> for i32 {
+    fn unbox_method_name() -> &'static str {
+        "toInt"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":I"
+        ":i"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_int(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_int(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -260,7 +260,7 @@ impl<'env> Boxable<'env> for i64 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "J:V"
+        "l:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -272,16 +272,16 @@ impl<'env> Boxable<'env> for i64 {
 }
 
 impl<'env> Unboxable<'env> for i64 {
+    fn unbox_method_name() -> &'static str {
+        "toLong"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":J"
+        ":l"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_long(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_long(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -297,7 +297,7 @@ impl<'env> Boxable<'env> for f32 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "F:V"
+        "f:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -309,16 +309,16 @@ impl<'env> Boxable<'env> for f32 {
 }
 
 impl<'env> Unboxable<'env> for f32 {
+    fn unbox_method_name() -> &'static str {
+        "toFloat"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":F"
+        ":f"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_float(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_float(obj, Self::unbox_method_name(), None)
     }
 }
 
@@ -334,7 +334,7 @@ impl<'env> Boxable<'env> for f64 {
     }
 
     fn box_constructor_signature() -> &'static str {
-        "D:V"
+        "d:"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
@@ -346,16 +346,16 @@ impl<'env> Boxable<'env> for f64 {
 }
 
 impl<'env> Unboxable<'env> for f64 {
+    fn unbox_method_name() -> &'static str {
+        "toDouble"
+    }
+
     fn unbox_method_signature() -> &'static str {
-        ":D"
+        ":d"
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_double(
-            obj,
-            Self::unbox_method_name(),
-            Some(Self::unbox_method_signature()),
-        )
+        env.call_method_by_name_double(obj, Self::unbox_method_name(), None)
     }
 }
 

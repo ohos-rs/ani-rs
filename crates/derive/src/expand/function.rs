@@ -12,9 +12,9 @@ use crate::codegen::{
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    EtsDeclKind, class_to_descriptor, emit_compile_ets_decl, generate_ctor_ets_decl,
-    generate_ctor_signature, generate_fn_ets_decl, generate_fn_signature, module_to_descriptor,
-    namespace_to_descriptor,
+    EtsDeclKind, class_to_descriptor, current_module_name, emit_compile_ets_decl,
+    generate_ctor_ets_decl, generate_ctor_signature, generate_fn_ets_decl, generate_fn_signature,
+    module_to_descriptor, namespace_to_descriptor, qualify_member_descriptor,
 };
 
 /// Expand `#[ani]` for functions
@@ -106,6 +106,7 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     // Generate registration function based on target
     let register_fn = generate_register_fn(
         &attrs,
+        is_static,
         &register_name,
         &register_symbol_name,
         &signature,
@@ -181,22 +182,26 @@ fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Resul
 /// Generate appropriate registration function based on attributes
 fn generate_register_fn(
     attrs: &BindgenAttrs,
+    is_static: bool,
     register_name: &proc_macro2::Ident,
     ets_name: &str,
     signature: &str,
     wrapper_name: &proc_macro2::Ident,
 ) -> TokenStream {
+    let module_name = current_module_name();
+
     if let Some(ref class) = attrs.class {
-        let descriptor = class_to_descriptor(class);
+        let descriptor = class_to_descriptor(&qualify_member_descriptor(class, &module_name));
         generate_class_register(
             register_name,
             &descriptor,
+            is_static,
             ets_name,
             signature,
             wrapper_name,
         )
     } else if let Some(ref ns) = attrs.namespace {
-        let descriptor = namespace_to_descriptor(ns);
+        let descriptor = namespace_to_descriptor(&qualify_member_descriptor(ns, &module_name));
         generate_namespace_register(
             register_name,
             &descriptor,
@@ -205,11 +210,16 @@ fn generate_register_fn(
             wrapper_name,
         )
     } else {
-        let descriptor = attrs
-            .module
-            .as_ref()
-            .map(|m| module_to_descriptor(m))
-            .unwrap_or_default();
+        let descriptor = attrs.module.as_ref().map_or_else(
+            || module_to_descriptor(&module_name),
+            |m| {
+                if m.trim().is_empty() {
+                    module_to_descriptor(&module_name)
+                } else {
+                    module_to_descriptor(m)
+                }
+            },
+        );
         generate_module_register(
             register_name,
             &descriptor,

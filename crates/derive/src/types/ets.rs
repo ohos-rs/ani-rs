@@ -123,25 +123,16 @@ impl NamespaceNode {
     }
 }
 
-fn render_class_block(
-    out: &mut String,
-    indent: usize,
-    class_name: &str,
-    methods: &[(bool, String)],
-    lib_name: &str,
-) {
+fn render_class_block(out: &mut String, indent: usize, class_name: &str, methods: &[(bool, String)]) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}class {class_name} {{\n"));
 
     let mut methods = methods.to_vec();
     methods.sort_by(|a, b| a.1.cmp(&b.1));
     let inner = " ".repeat(indent + 2);
-    out.push_str(&format!(
-        "{inner}static {{ loadLibrary(\"{lib_name}\"); }}\n"
-    ));
     for (is_static, sig) in methods {
         if is_static {
-            out.push_str(&format!("{inner}native static {sig};\n"));
+            out.push_str(&format!("{inner}static native {sig};\n"));
         } else {
             out.push_str(&format!("{inner}native {sig};\n"));
         }
@@ -149,32 +140,23 @@ fn render_class_block(
     out.push_str(&format!("{pad}}}\n"));
 }
 
-fn render_namespace(
-    out: &mut String,
-    indent: usize,
-    name: &str,
-    node: &NamespaceNode,
-    lib_name: &str,
-) {
+fn render_namespace(out: &mut String, indent: usize, name: &str, node: &NamespaceNode) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}namespace {name} {{\n"));
     let inner = " ".repeat(indent + 2);
 
     let mut fns = node.functions.clone();
     fns.sort();
-    if !fns.is_empty() {
-        out.push_str(&format!("{inner}loadLibrary(\"{lib_name}\");\n"));
-    }
     for sig in fns {
         out.push_str(&format!("{inner}native function {sig};\n"));
     }
 
     for (class_name, methods) in &node.classes {
-        render_class_block(out, indent + 2, class_name, methods, lib_name);
+        render_class_block(out, indent + 2, class_name, methods);
     }
 
     for (child, child_node) in &node.children {
-        render_namespace(out, indent + 2, child, child_node, lib_name);
+        render_namespace(out, indent + 2, child, child_node);
     }
 
     out.push_str(&format!("{pad}}}\n"));
@@ -209,7 +191,6 @@ fn render_decls(decls: &[EtsDecl]) -> String {
 
     if !globals.is_empty() {
         section_break(&mut out, &mut has_content);
-        out.push_str(&format!("loadLibrary(\"{lib_name}\");\n"));
         for sig in globals {
             out.push_str(&format!("native function {sig};\n"));
         }
@@ -217,12 +198,17 @@ fn render_decls(decls: &[EtsDecl]) -> String {
 
     for (class_name, methods) in &root.classes {
         section_break(&mut out, &mut has_content);
-        render_class_block(&mut out, 0, class_name, methods, &lib_name);
+        render_class_block(&mut out, 0, class_name, methods);
     }
 
     for (name, node) in &root.children {
         section_break(&mut out, &mut has_content);
-        render_namespace(&mut out, 0, name, node, &lib_name);
+        render_namespace(&mut out, 0, name, node);
+    }
+
+    if has_content {
+        out.push('\n');
+        out.push_str(&format!("loadLibrary(\"{lib_name}\");\n"));
     }
 
     out
@@ -264,20 +250,24 @@ fn ani_type_to_ets(ty: &AniType) -> String {
         AniType::Primitive(p) => primitive_to_ets(p).to_string(),
         AniType::String(StringType::String | StringType::Str) => "string".to_string(),
         AniType::Unit => "void".to_string(),
-        AniType::Wrapper(WrapperType::Option(inner)) => {
-            format!("{} | null", ani_type_to_ets(inner))
-        }
-        AniType::Wrapper(WrapperType::Vec(inner)) => format!("Array<{}>", ani_type_to_ets(inner)),
+        AniType::Wrapper(WrapperType::Option(inner)) => option_inner_to_ets(inner),
+        AniType::Wrapper(WrapperType::Vec(inner)) => vec_inner_to_ets(inner),
         AniType::Wrapper(WrapperType::Result(inner)) => ani_type_to_ets(inner),
         AniType::Wrapper(WrapperType::Ref(inner)) => ani_type_to_ets(inner),
         AniType::Function(_) => "Function".to_string(),
         AniType::FnArgs(_) => "Array<Object>".to_string(),
-        AniType::Either(either) => either
-            .types
-            .iter()
-            .map(|item| rust_type_to_ets(item.as_ref()))
-            .collect::<Vec<_>>()
-            .join(" | "),
+        AniType::Either(either) => {
+            let variants = either
+                .types
+                .iter()
+                .map(|ty| ani_type_to_ets_union_variant(&AniType::from_syn_type(ty)))
+                .collect::<Vec<_>>();
+            if variants.is_empty() {
+                "Object".to_string()
+            } else {
+                variants.join(" | ")
+            }
+        }
         AniType::Promise(promise) => {
             let inner = promise
                 .inner
@@ -286,7 +276,7 @@ fn ani_type_to_ets(ty: &AniType) -> String {
                 .unwrap_or_else(|| "void".to_string());
             format!("Promise<{}>", inner)
         }
-        AniType::Record(record) => format!("Record<string, {}>", ani_type_to_ets(&record.value)),
+        AniType::Record(record) => format!("Record<string, {}>", ani_type_to_ets(record.value.as_ref())),
         AniType::AniObject => "Object".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::Tuple(items) => format!(
@@ -311,6 +301,35 @@ fn unknown_type_to_ets(ty: &Type) -> Option<String> {
     }
 }
 
+fn option_inner_to_ets(inner: &AniType) -> String {
+    match inner {
+        AniType::Primitive(p) => format!("{} | null", boxed_primitive_to_ets(p)),
+        AniType::String(StringType::String | StringType::Str) => "String | null".to_string(),
+        _ => format!("{} | null", ani_type_to_ets(inner)),
+    }
+}
+
+fn ani_type_to_ets_union_variant(ty: &AniType) -> String {
+    match ty {
+        AniType::Primitive(p) => boxed_primitive_to_ets(p).to_string(),
+        AniType::String(StringType::String | StringType::Str) => "String".to_string(),
+        AniType::Wrapper(WrapperType::Option(inner)) => {
+            format!("{} | null", ani_type_to_ets_union_variant(inner))
+        }
+        AniType::Wrapper(WrapperType::Result(inner)) | AniType::Wrapper(WrapperType::Ref(inner)) => {
+            ani_type_to_ets_union_variant(inner)
+        }
+        _ => ani_type_to_ets(ty),
+    }
+}
+
+fn vec_inner_to_ets(inner: &AniType) -> String {
+    if let AniType::Primitive(p) = inner {
+        return fixed_array_type_name(p).to_string();
+    }
+    format!("Array<{}>", ani_type_to_ets(inner))
+}
+
 fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
     let segment = type_path.path.segments.last()?;
     let ident = segment.ident.to_string();
@@ -332,19 +351,45 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "AniArrayBuffer" => Some("ArrayBuffer"),
         "AniFnObject" | "AniFunction" => Some("Function"),
         "AniArray" | "AniArrayRef" | "AniFixedArray" | "AniFixedArrayRef" => Some("Array<Object>"),
-        "AniArrayInt" | "AniFixedArrayInt" => Some("Array<int>"),
-        "AniArrayLong" | "AniFixedArrayLong" => Some("Array<long>"),
-        "AniArrayDouble" | "AniFixedArrayDouble" => Some("Array<double>"),
-        "AniFixedArrayFloat" => Some("Array<float>"),
-        "AniFixedArrayByte" => Some("Array<byte>"),
-        "AniFixedArrayShort" => Some("Array<short>"),
-        "AniFixedArrayChar" => Some("Array<char>"),
-        "AniFixedArrayBoolean" => Some("Array<boolean>"),
+        "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("FixedArray<boolean>"),
+        "FixedByteArray" | "AniFixedArrayByte" => Some("FixedArray<byte>"),
+        "FixedShortArray" | "AniFixedArrayShort" => Some("FixedArray<short>"),
+        "FixedCharArray" | "AniFixedArrayChar" => Some("FixedArray<char>"),
+        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("FixedArray<int>"),
+        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("FixedArray<long>"),
+        "FixedFloatArray" | "AniFixedArrayFloat" => Some("FixedArray<float>"),
+        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("FixedArray<double>"),
         "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
         | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
         | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
         | "GlobalRef" | "WeakRef" => Some("Object"),
         _ => None,
+    }
+}
+
+fn boxed_primitive_to_ets(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::Bool => "Boolean",
+        PrimitiveType::I8 | PrimitiveType::U8 => "Byte",
+        PrimitiveType::I16 => "Short",
+        PrimitiveType::U16 | PrimitiveType::Char => "Char",
+        PrimitiveType::I32 | PrimitiveType::U32 => "Int",
+        PrimitiveType::I64 | PrimitiveType::U64 => "Long",
+        PrimitiveType::F32 => "Float",
+        PrimitiveType::F64 => "Double",
+    }
+}
+
+fn fixed_array_type_name(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::Bool => "FixedArray<boolean>",
+        PrimitiveType::I8 | PrimitiveType::U8 => "FixedArray<byte>",
+        PrimitiveType::I16 => "FixedArray<short>",
+        PrimitiveType::U16 | PrimitiveType::Char => "FixedArray<char>",
+        PrimitiveType::I32 | PrimitiveType::U32 => "FixedArray<int>",
+        PrimitiveType::I64 | PrimitiveType::U64 => "FixedArray<long>",
+        PrimitiveType::F32 => "FixedArray<float>",
+        PrimitiveType::F64 => "FixedArray<double>",
     }
 }
 
@@ -393,6 +438,85 @@ fn primitive_to_ets(p: &PrimitiveType) -> &'static str {
     }
 }
 
+fn sanitize_param_name(name: &str, idx: usize) -> String {
+    if name.is_empty() {
+        return format!("arg{idx}");
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return format!("arg{idx}");
+    }
+
+    const RESERVED: &[&str] = &[
+        "abstract",
+        "any",
+        "as",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "constructor",
+        "continue",
+        "declare",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "export",
+        "extends",
+        "false",
+        "finally",
+        "float",
+        "for",
+        "function",
+        "if",
+        "import",
+        "in",
+        "instanceof",
+        "int",
+        "interface",
+        "let",
+        "long",
+        "namespace",
+        "native",
+        "new",
+        "null",
+        "object",
+        "private",
+        "protected",
+        "public",
+        "record",
+        "return",
+        "short",
+        "static",
+        "string",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "type",
+        "undefined",
+        "var",
+        "void",
+        "while",
+    ];
+
+    if RESERVED.contains(&name) {
+        return format!("{name}_");
+    }
+    name.to_string()
+}
+
 /// Generate ETS declaration signature string for a function.
 ///
 /// Output example: `add(a: int, b: int): int`
@@ -411,6 +535,7 @@ pub fn generate_fn_ets_decl(sig: &Signature, ets_name: &str, skip_first: bool) -
                 Pat::Ident(ident) => ident.ident.to_string(),
                 _ => format!("arg{}", idx),
             };
+            let name = sanitize_param_name(&name, idx);
             let ty = rust_type_to_ets(&pat_type.ty);
             params.push(format!("{name}: {ty}"));
         }
@@ -442,6 +567,7 @@ pub fn generate_ctor_ets_decl(sig: &Signature, skip_first: bool) -> String {
                 Pat::Ident(ident) => ident.ident.to_string(),
                 _ => format!("arg{}", idx),
             };
+            let name = sanitize_param_name(&name, idx);
             let ty = rust_type_to_ets(&pat_type.ty);
             params.push(format!("{name}: {ty}"));
         }
@@ -499,6 +625,17 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_fn_ets_decl_uses_boxed_variants_for_option_and_either() {
+        let sig: Signature = syn::parse_quote! {
+            fn convert(a: Option<i32>, b: Option<bool>, c: Either<String, i32>) -> Either<String, i32>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "convert", false),
+            "convert(a: Int | null, b: Boolean | null, c: String | Int): String | Int"
+        );
+    }
+
+    #[test]
     fn test_render_decls_uses_ani_native_style() {
         let decls = vec![
             EtsDecl {
@@ -536,7 +673,7 @@ mod tests {
         assert!(rendered.contains("native function sqrt(x: double): double;"));
         assert!(rendered.contains("class Person {"));
         assert!(rendered.contains("native getName(): string;"));
-        assert!(rendered.contains("native static create(name: string): long;"));
+        assert!(rendered.contains("static native create(name: string): long;"));
     }
 
     #[test]

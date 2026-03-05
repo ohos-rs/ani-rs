@@ -26,22 +26,22 @@ impl<T: TypeInfo> TypeInfo for Vec<T> {
     }
 }
 
-// Vec<i32> -> ani_array_int
+// Vec<i32> -> ani_fixedarray_int
 impl<'env> ToAni<'env> for Vec<i32> {
-    type Output = sys::ani_array_int;
+    type Output = sys::ani_fixedarray_int;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Int,
-            sys::ani_array_int,
+            FixedArray_New_Int,
+            sys::ani_fixedarray_int,
             std::ptr::null_mut(),
             self.len()
         )?;
         if !self.is_empty() {
             ani_call!(
                 env,
-                Array_SetRegion_Int,
+                FixedArray_SetRegion_Int,
                 array,
                 0,
                 self.len(),
@@ -53,34 +53,47 @@ impl<'env> ToAni<'env> for Vec<i32> {
 }
 
 impl<'env> FromAni<'env> for Vec<i32> {
-    type Input = sys::ani_array_int;
+    type Input = sys::ani_fixedarray_int;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer = vec![0i32; len];
         if len > 0 {
-            ani_call!(env, Array_GetRegion_Int, value, 0, len, buffer.as_mut_ptr())?;
+            ani_call!(
+                env,
+                FixedArray_GetRegion_Int,
+                value,
+                0,
+                len,
+                buffer.as_mut_ptr()
+            )?;
         }
         Ok(buffer)
     }
 }
 
-// Vec<i64> -> ani_array_long
+// Vec<i64> -> ani_fixedarray_long
 impl<'env> ToAni<'env> for Vec<i64> {
-    type Output = sys::ani_array_long;
+    type Output = sys::ani_fixedarray_long;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Long,
-            sys::ani_array_long,
+            FixedArray_New_Long,
+            sys::ani_fixedarray_long,
             std::ptr::null_mut(),
             self.len()
         )?;
         if !self.is_empty() {
             ani_call!(
                 env,
-                Array_SetRegion_Long,
+                FixedArray_SetRegion_Long,
                 array,
                 0,
                 self.len(),
@@ -92,15 +105,21 @@ impl<'env> ToAni<'env> for Vec<i64> {
 }
 
 impl<'env> FromAni<'env> for Vec<i64> {
-    type Input = sys::ani_array_long;
+    type Input = sys::ani_fixedarray_long;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer = vec![0i64; len];
         if len > 0 {
             ani_call!(
                 env,
-                Array_GetRegion_Long,
+                FixedArray_GetRegion_Long,
                 value,
                 0,
                 len,
@@ -111,22 +130,22 @@ impl<'env> FromAni<'env> for Vec<i64> {
     }
 }
 
-// Vec<f64> -> ani_array_double
+// Vec<f64> -> ani_fixedarray_double
 impl<'env> ToAni<'env> for Vec<f64> {
-    type Output = sys::ani_array_double;
+    type Output = sys::ani_fixedarray_double;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Double,
-            sys::ani_array_double,
+            FixedArray_New_Double,
+            sys::ani_fixedarray_double,
             std::ptr::null_mut(),
             self.len()
         )?;
         if !self.is_empty() {
             ani_call!(
                 env,
-                Array_SetRegion_Double,
+                FixedArray_SetRegion_Double,
                 array,
                 0,
                 self.len(),
@@ -138,15 +157,21 @@ impl<'env> ToAni<'env> for Vec<f64> {
 }
 
 impl<'env> FromAni<'env> for Vec<f64> {
-    type Input = sys::ani_array_double;
+    type Input = sys::ani_fixedarray_double;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer = vec![0f64; len];
         if len > 0 {
             ani_call!(
                 env,
-                Array_GetRegion_Double,
+                FixedArray_GetRegion_Double,
                 value,
                 0,
                 len,
@@ -157,22 +182,22 @@ impl<'env> FromAni<'env> for Vec<f64> {
     }
 }
 
-// Vec<f32> -> ani_array_float
+// Vec<f32> -> ani_fixedarray_float
 impl<'env> ToAni<'env> for Vec<f32> {
-    type Output = sys::ani_array_float;
+    type Output = sys::ani_fixedarray_float;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Float,
-            sys::ani_array_float,
+            FixedArray_New_Float,
+            sys::ani_fixedarray_float,
             std::ptr::null_mut(),
             self.len()
         )?;
         if !self.is_empty() {
             ani_call!(
                 env,
-                Array_SetRegion_Float,
+                FixedArray_SetRegion_Float,
                 array,
                 0,
                 self.len(),
@@ -184,15 +209,21 @@ impl<'env> ToAni<'env> for Vec<f32> {
 }
 
 impl<'env> FromAni<'env> for Vec<f32> {
-    type Input = sys::ani_array_float;
+    type Input = sys::ani_fixedarray_float;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer = vec![0f32; len];
         if len > 0 {
             ani_call!(
                 env,
-                Array_GetRegion_Float,
+                FixedArray_GetRegion_Float,
                 value,
                 0,
                 len,
@@ -203,15 +234,15 @@ impl<'env> FromAni<'env> for Vec<f32> {
     }
 }
 
-// Vec<bool> -> ani_array_boolean
+// Vec<bool> -> ani_fixedarray_boolean
 impl<'env> ToAni<'env> for Vec<bool> {
-    type Output = sys::ani_array_boolean;
+    type Output = sys::ani_fixedarray_boolean;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Boolean,
-            sys::ani_array_boolean,
+            FixedArray_New_Boolean,
+            sys::ani_fixedarray_boolean,
             std::ptr::null_mut(),
             self.len()
         )?;
@@ -220,7 +251,7 @@ impl<'env> ToAni<'env> for Vec<bool> {
                 self.iter().map(|&b| if b { 1 } else { 0 }).collect();
             ani_call!(
                 env,
-                Array_SetRegion_Boolean,
+                FixedArray_SetRegion_Boolean,
                 array,
                 0,
                 self.len(),
@@ -232,15 +263,21 @@ impl<'env> ToAni<'env> for Vec<bool> {
 }
 
 impl<'env> FromAni<'env> for Vec<bool> {
-    type Input = sys::ani_array_boolean;
+    type Input = sys::ani_fixedarray_boolean;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer: Vec<sys::ani_boolean> = vec![0; len];
         if len > 0 {
             ani_call!(
                 env,
-                Array_GetRegion_Boolean,
+                FixedArray_GetRegion_Boolean,
                 value,
                 0,
                 len,
@@ -251,22 +288,22 @@ impl<'env> FromAni<'env> for Vec<bool> {
     }
 }
 
-// Vec<u8> / bytes -> ani_array_byte (align with napi-rs: Buffer is explicit type; Vec<u8> = byte array)
+// Vec<u8> / bytes -> ani_fixedarray_byte
 impl<'env> ToAni<'env> for Vec<u8> {
-    type Output = sys::ani_array_byte;
+    type Output = sys::ani_fixedarray_byte;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let array = ani_call_ret!(
             env,
-            Array_New_Byte,
-            sys::ani_array_byte,
+            FixedArray_New_Byte,
+            sys::ani_fixedarray_byte,
             std::ptr::null_mut(),
             self.len()
         )?;
         if !self.is_empty() {
             ani_call!(
                 env,
-                Array_SetRegion_Byte,
+                FixedArray_SetRegion_Byte,
                 array,
                 0,
                 self.len(),
@@ -278,15 +315,21 @@ impl<'env> ToAni<'env> for Vec<u8> {
 }
 
 impl<'env> FromAni<'env> for Vec<u8> {
-    type Input = sys::ani_array_byte;
+    type Input = sys::ani_fixedarray_byte;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let len = ani_call_ret!(env, Array_GetLength, usize, 0, value as sys::ani_array)?;
+        let len = ani_call_ret!(
+            env,
+            FixedArray_GetLength,
+            usize,
+            0,
+            value as sys::ani_fixedarray
+        )?;
         let mut buffer: Vec<i8> = vec![0; len];
         if len > 0 {
             ani_call!(
                 env,
-                Array_GetRegion_Byte,
+                FixedArray_GetRegion_Byte,
                 value,
                 0,
                 len,
@@ -302,7 +345,7 @@ impl<'env> FromAni<'env> for Vec<u8> {
 // ============================================================================
 
 impl<'env> ToAni<'env> for &[i32] {
-    type Output = sys::ani_array_int;
+    type Output = sys::ani_fixedarray_int;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         self.to_vec().to_ani(env)
@@ -310,7 +353,7 @@ impl<'env> ToAni<'env> for &[i32] {
 }
 
 impl<'env> ToAni<'env> for &[i64] {
-    type Output = sys::ani_array_long;
+    type Output = sys::ani_fixedarray_long;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         self.to_vec().to_ani(env)
@@ -318,7 +361,7 @@ impl<'env> ToAni<'env> for &[i64] {
 }
 
 impl<'env> ToAni<'env> for &[f64] {
-    type Output = sys::ani_array_double;
+    type Output = sys::ani_fixedarray_double;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         self.to_vec().to_ani(env)
@@ -326,7 +369,7 @@ impl<'env> ToAni<'env> for &[f64] {
 }
 
 impl<'env> ToAni<'env> for &[u8] {
-    type Output = sys::ani_array_byte;
+    type Output = sys::ani_fixedarray_byte;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         self.to_vec().to_ani(env)

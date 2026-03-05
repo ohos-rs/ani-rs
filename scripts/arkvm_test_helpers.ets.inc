@@ -1,0 +1,68 @@
+let __ani_fail_count: int = 0;
+
+function __ani_pass(name: string): void {
+  console.log("[ASSERT PASS] " + name);
+}
+
+function __ani_fail(name: string, detail: string): void {
+  console.log("[ASSERT FAIL] " + name + " :: " + detail);
+  __ani_fail_count += 1;
+}
+
+function __assert_true(name: string, cond: boolean): void {
+  if (cond) {
+    __ani_pass(name);
+  } else {
+    __ani_fail(name, "condition=false");
+  }
+}
+
+function __assert_bool(name: string, got: boolean): void {
+  __assert_true(name, got || !got);
+}
+
+function __assert_eq_int(name: string, got: int, expected: int): void {
+  if (got == expected) {
+    __ani_pass(name);
+  } else {
+    __ani_fail(name, "got=" + got + ", expected=" + expected);
+  }
+}
+
+function __assert_eq_long(name: string, got: long, expected: long): void {
+  if (got == expected) {
+    __ani_pass(name);
+  } else {
+    __ani_fail(name, "got=" + got + ", expected=" + expected);
+  }
+}
+
+function __assert_eq_double(name: string, got: double, expected: double): void {
+  let delta = got - expected;
+  if (delta < 0.0) {
+    delta = -delta;
+  }
+  if (delta < 0.000001) {
+    __ani_pass(name);
+  } else {
+    __ani_fail(name, "got=" + got + ", expected=" + expected);
+  }
+}
+
+function __assert_eq_string(name: string, got: string, expected: string): void {
+  if (got == expected) {
+    __ani_pass(name);
+  } else {
+    __ani_fail(name, "got=" + got + ", expected=" + expected);
+  }
+}
+
+function __assert_throws(name: string, fn: () => void): void {
+  let thrown = false;
+  try {
+    fn();
+  } catch (_e) {
+    thrown = true;
+  }
+  __assert_true(name, thrown);
+}

@@ -6,6 +6,9 @@
 //! Functions marked with `#[ani]` are automatically registered at library load time,
 //! and `ANI_Constructor` collects and executes all registrations.
 
+use std::collections::BTreeMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_void};
 use std::sync::RwLock;
 
 use crate::sys;
@@ -32,12 +35,33 @@ pub struct InitRegisterEntry {
     pub callback: RegisterCallback,
 }
 
+/// Native binding target kind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum BindingTargetKind {
+    Module,
+    Namespace,
+    ClassInstance,
+    ClassStatic,
+}
+
+/// Deferred binding entry collected during registration callbacks.
+#[derive(Clone, Copy)]
+pub struct PendingBindingEntry {
+    pub target_kind: BindingTargetKind,
+    pub descriptor: &'static str,
+    pub name: usize,
+    pub signature: usize,
+    pub pointer: usize,
+}
+
 /// Global registry for module exports
 static MODULE_REGISTER_CALLBACKS: RwLock<Vec<ModuleRegisterEntry>> = RwLock::new(Vec::new());
 /// Global registry for init callbacks that run before native binding registration
 static INIT_BEFORE_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
 /// Global registry for init callbacks that run after native binding registration
 static INIT_AFTER_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
+/// Deferred native bindings collected from generated per-function callbacks.
+static PENDING_BINDINGS: RwLock<Vec<PendingBindingEntry>> = RwLock::new(Vec::new());
 
 /// Register a module export callback
 ///
@@ -74,6 +98,229 @@ pub fn register_init_callback(
         .push(entry);
 }
 
+fn queue_binding(
+    target_kind: BindingTargetKind,
+    descriptor: &'static str,
+    name: &'static str,
+    signature: &'static str,
+    pointer: *const c_void,
+) -> sys::ani_status {
+    let entry = PendingBindingEntry {
+        target_kind,
+        descriptor,
+        name: name.as_ptr() as usize,
+        signature: signature.as_ptr() as usize,
+        pointer: pointer as usize,
+    };
+    PENDING_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_BINDINGS")
+        .push(entry);
+    sys::ani_status_ANI_OK
+}
+
+/// Queue a module-level native function binding.
+#[doc(hidden)]
+pub fn queue_module_binding(
+    descriptor: &'static str,
+    name: &'static str,
+    signature: &'static str,
+    pointer: *const c_void,
+) -> sys::ani_status {
+    queue_binding(
+        BindingTargetKind::Module,
+        descriptor,
+        name,
+        signature,
+        pointer,
+    )
+}
+
+/// Queue a namespace native function binding.
+#[doc(hidden)]
+pub fn queue_namespace_binding(
+    descriptor: &'static str,
+    name: &'static str,
+    signature: &'static str,
+    pointer: *const c_void,
+) -> sys::ani_status {
+    queue_binding(
+        BindingTargetKind::Namespace,
+        descriptor,
+        name,
+        signature,
+        pointer,
+    )
+}
+
+/// Queue a class native method binding.
+#[doc(hidden)]
+pub fn queue_class_binding(
+    descriptor: &'static str,
+    is_static: bool,
+    name: &'static str,
+    signature: &'static str,
+    pointer: *const c_void,
+) -> sys::ani_status {
+    let target_kind = if is_static {
+        BindingTargetKind::ClassStatic
+    } else {
+        BindingTargetKind::ClassInstance
+    };
+    queue_binding(target_kind, descriptor, name, signature, pointer)
+}
+
+const DEFMODULE_PREFIX: &str = "@defModule.";
+
+fn is_builtin_descriptor(descriptor: &str) -> bool {
+    descriptor.starts_with("std.")
+        || descriptor.starts_with("escompat.")
+        || descriptor.starts_with("arkts.")
+        || descriptor.starts_with("@")
+}
+
+fn descriptor_candidates(descriptor: &str) -> Vec<String> {
+    let trimmed = descriptor.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    out.push(trimmed.to_string());
+    if !is_builtin_descriptor(trimmed) && !trimmed.starts_with(DEFMODULE_PREFIX) {
+        // Some test suites use @defModule-prefixed descriptors.
+        // Keep it as a fallback only after raw dotted descriptor.
+        out.push(format!("{DEFMODULE_PREFIX}{trimmed}"));
+    }
+    out
+}
+
+unsafe fn reset_pending_error_if_any(
+    api: &sys::__ani_interaction_api,
+    env: *mut sys::ani_env,
+    debug: bool,
+) {
+    let Some(exist_unhandled) = api.ExistUnhandledError else {
+        return;
+    };
+    let Some(reset_error) = api.ResetError else {
+        return;
+    };
+
+    let mut has_unhandled: sys::ani_boolean = 0;
+    let status = unsafe { exist_unhandled(env, &mut has_unhandled) };
+    if status != sys::ani_status_ANI_OK || has_unhandled == 0 {
+        return;
+    }
+
+    let reset_status = unsafe { reset_error(env) };
+    if debug {
+        eprintln!("[ani] ResetError status={reset_status}");
+    }
+}
+
+unsafe fn find_module_with_fallback(
+    api: &sys::__ani_interaction_api,
+    env: *mut sys::ani_env,
+    descriptor: &str,
+    debug: bool,
+) -> (sys::ani_status, sys::ani_module) {
+    let candidates = descriptor_candidates(descriptor);
+    if candidates.is_empty() {
+        return (sys::ani_status_ANI_OK, std::ptr::null_mut());
+    }
+
+    let mut last_status = sys::ani_status_ANI_NOT_FOUND;
+    for candidate in candidates {
+        let c_descriptor = match CString::new(candidate.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
+        };
+        let mut module: sys::ani_module = std::ptr::null_mut();
+        let status = unsafe { (api.FindModule.unwrap())(env, c_descriptor.as_ptr(), &mut module) };
+        if debug {
+            eprintln!("[ani] FindModule descriptor={candidate} status={status} ptr={module:p}");
+        }
+        if status == sys::ani_status_ANI_OK && !module.is_null() {
+            return (status, module);
+        }
+        if status != sys::ani_status_ANI_OK {
+            unsafe { reset_pending_error_if_any(api, env, debug) };
+        }
+        last_status = status;
+    }
+
+    (last_status, std::ptr::null_mut())
+}
+
+unsafe fn find_namespace_with_fallback(
+    api: &sys::__ani_interaction_api,
+    env: *mut sys::ani_env,
+    descriptor: &str,
+    debug: bool,
+) -> (sys::ani_status, sys::ani_namespace) {
+    let candidates = descriptor_candidates(descriptor);
+    if candidates.is_empty() {
+        return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut());
+    }
+
+    let mut last_status = sys::ani_status_ANI_NOT_FOUND;
+    for candidate in candidates {
+        let c_descriptor = match CString::new(candidate.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
+        };
+        let mut ns: sys::ani_namespace = std::ptr::null_mut();
+        let status = unsafe { (api.FindNamespace.unwrap())(env, c_descriptor.as_ptr(), &mut ns) };
+        if debug {
+            eprintln!("[ani] FindNamespace descriptor={candidate} status={status} ptr={ns:p}");
+        }
+        if status == sys::ani_status_ANI_OK && !ns.is_null() {
+            return (status, ns);
+        }
+        if status != sys::ani_status_ANI_OK {
+            unsafe { reset_pending_error_if_any(api, env, debug) };
+        }
+        last_status = status;
+    }
+
+    (last_status, std::ptr::null_mut())
+}
+
+unsafe fn find_class_with_fallback(
+    api: &sys::__ani_interaction_api,
+    env: *mut sys::ani_env,
+    descriptor: &str,
+    debug: bool,
+) -> (sys::ani_status, sys::ani_class) {
+    let candidates = descriptor_candidates(descriptor);
+    if candidates.is_empty() {
+        return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut());
+    }
+
+    let mut last_status = sys::ani_status_ANI_NOT_FOUND;
+    for candidate in candidates {
+        let c_descriptor = match CString::new(candidate.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
+        };
+        let mut cls: sys::ani_class = std::ptr::null_mut();
+        let status = unsafe { (api.FindClass.unwrap())(env, c_descriptor.as_ptr(), &mut cls) };
+        if debug {
+            eprintln!("[ani] FindClass descriptor={candidate} status={status} ptr={cls:p}");
+        }
+        if status == sys::ani_status_ANI_OK && !cls.is_null() {
+            return (status, cls);
+        }
+        if status != sys::ani_status_ANI_OK {
+            unsafe { reset_pending_error_if_any(api, env, debug) };
+        }
+        last_status = status;
+    }
+
+    (last_status, std::ptr::null_mut())
+}
+
 /// Execute init callbacks that should run before native binding registration.
 #[doc(hidden)]
 pub unsafe fn execute_before_bindings_inits(env: *mut sys::ani_env) -> sys::ani_status {
@@ -101,12 +348,176 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
     let callbacks = MODULE_REGISTER_CALLBACKS
         .read()
         .expect("Failed to acquire read lock for MODULE_REGISTER_CALLBACKS");
+    let debug = std::env::var("ANI_DEBUG_REGISTER").ok().as_deref() == Some("1");
+    PENDING_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_BINDINGS")
+        .clear();
+
+    if debug {
+        eprintln!("[ani] execute_registrations count={}", callbacks.len());
+    }
 
     for entry in callbacks.iter() {
+        if debug {
+            eprintln!("[ani] register begin: {}", entry.name);
+        }
         // SAFETY: The callback is a function pointer registered via #[ani] macro
         let status = unsafe { (entry.callback)(env) };
+        if debug {
+            eprintln!("[ani] register end: {} status={}", entry.name, status);
+        }
         if status != sys::ani_status_ANI_OK {
-            eprintln!("Failed to register function: {}", entry.name);
+            eprintln!(
+                "Failed to register function: {} (status={})",
+                entry.name, status
+            );
+            return status;
+        }
+    }
+
+    let pending = PENDING_BINDINGS
+        .read()
+        .expect("Failed to acquire read lock for PENDING_BINDINGS");
+
+    let mut grouped: BTreeMap<(BindingTargetKind, &'static str), Vec<sys::ani_native_function>> =
+        BTreeMap::new();
+    for entry in pending.iter() {
+        grouped
+            .entry((entry.target_kind, entry.descriptor))
+            .or_default()
+            .push(sys::ani_native_function {
+                name: entry.name as *const c_char,
+                signature: entry.signature as *const c_char,
+                pointer: entry.pointer as *const c_void,
+            });
+    }
+    drop(pending);
+
+    if grouped.is_empty() {
+        if debug {
+            eprintln!("[ani] no pending bindings");
+        }
+        return sys::ani_status_ANI_OK;
+    }
+
+    let api = &*(*env);
+    for ((target_kind, descriptor), functions) in grouped {
+        if debug {
+            eprintln!(
+                "[ani] bind target={target_kind:?} descriptor={descriptor} count={}",
+                functions.len()
+            );
+            for (idx, f) in functions.iter().enumerate() {
+                let name = if f.name.is_null() {
+                    "<null>"
+                } else {
+                    // SAFETY: debug-only diagnostics for static C string literals.
+                    unsafe { CStr::from_ptr(f.name) }.to_str().unwrap_or("<invalid>")
+                };
+                let sig = if f.signature.is_null() {
+                    "<null>"
+                } else {
+                    // SAFETY: debug-only diagnostics for static C string literals.
+                    unsafe { CStr::from_ptr(f.signature) }
+                        .to_str()
+                        .unwrap_or("<invalid>")
+                };
+                eprintln!("[ani]   fn[{idx}] name={name} sig={sig} ptr={:p}", f.pointer);
+            }
+        }
+
+        let status = match target_kind {
+            BindingTargetKind::ClassInstance => {
+                let (status, cls) = unsafe { find_class_with_fallback(api, env, descriptor, debug) };
+                if status != sys::ani_status_ANI_OK {
+                    status
+                } else if cls.is_null() {
+                    sys::ani_status_ANI_NOT_FOUND
+                } else {
+                    (api.Class_BindNativeMethods.unwrap())(
+                        env,
+                        cls,
+                        functions.as_ptr(),
+                        functions.len(),
+                    )
+                }
+            }
+            BindingTargetKind::ClassStatic => {
+                let (status, cls) = unsafe { find_class_with_fallback(api, env, descriptor, debug) };
+                if status != sys::ani_status_ANI_OK {
+                    status
+                } else if cls.is_null() {
+                    sys::ani_status_ANI_NOT_FOUND
+                } else {
+                    (api.Class_BindStaticNativeMethods.unwrap())(
+                        env,
+                        cls,
+                        functions.as_ptr(),
+                        functions.len(),
+                    )
+                }
+            }
+            BindingTargetKind::Namespace => {
+                let (status, ns) =
+                    unsafe { find_namespace_with_fallback(api, env, descriptor, debug) };
+                if status != sys::ani_status_ANI_OK {
+                    status
+                } else if ns.is_null() {
+                    sys::ani_status_ANI_NOT_FOUND
+                } else {
+                    (api.Namespace_BindNativeFunctions.unwrap())(
+                        env,
+                        ns,
+                        functions.as_ptr(),
+                        functions.len(),
+                    )
+                }
+            }
+            BindingTargetKind::Module => {
+                if descriptor.is_empty() {
+                    sys::ani_status_ANI_INVALID_ARGS
+                } else {
+                    let (status, module) =
+                        unsafe { find_module_with_fallback(api, env, descriptor, debug) };
+                    if status != sys::ani_status_ANI_OK {
+                        status
+                    } else if module.is_null() {
+                        sys::ani_status_ANI_NOT_FOUND
+                    } else {
+                        if debug {
+                            for (idx, f) in functions.iter().enumerate() {
+                                let mut found: sys::ani_function = core::ptr::null_mut();
+                                let check_status = unsafe {
+                                    (api.Module_FindFunction.unwrap())(
+                                        env,
+                                        module,
+                                        f.name,
+                                        f.signature,
+                                        &mut found,
+                                    )
+                                };
+                                eprintln!(
+                                    "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
+                                );
+                            }
+                        }
+                        (api.Module_BindNativeFunctions.unwrap())(
+                            env,
+                            module,
+                            functions.as_ptr(),
+                            functions.len(),
+                        )
+                    }
+                }
+            }
+        };
+
+        if debug {
+            eprintln!("[ani] bind done target={target_kind:?} status={status}");
+        }
+
+        if status != sys::ani_status_ANI_OK {
             return status;
         }
     }
@@ -157,5 +568,9 @@ pub fn clear_registrations() {
     INIT_AFTER_BINDINGS_CALLBACKS
         .write()
         .expect("Failed to acquire write lock for INIT_AFTER_BINDINGS_CALLBACKS")
+        .clear();
+    PENDING_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_BINDINGS")
         .clear();
 }

@@ -155,22 +155,22 @@ define_ref_type!(
 
 define_ref_type!(
     /// ANI int array type
-    AniArrayInt, sys::ani_array_int
+    AniArrayInt, sys::ani_fixedarray_int
 );
 
 define_ref_type!(
     /// ANI long array type
-    AniArrayLong, sys::ani_array_long
+    AniArrayLong, sys::ani_fixedarray_long
 );
 
 define_ref_type!(
     /// ANI double array type
-    AniArrayDouble, sys::ani_array_double
+    AniArrayDouble, sys::ani_fixedarray_double
 );
 
 define_ref_type!(
     /// ANI reference array type
-    AniArrayRef, sys::ani_array_ref
+    AniArrayRef, sys::ani_array
 );
 
 define_ref_type!(

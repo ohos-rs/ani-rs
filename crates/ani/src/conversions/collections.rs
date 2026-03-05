@@ -22,7 +22,7 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 
 impl<V: TypeInfo> TypeInfo for HashMap<String, V> {
     fn type_signature() -> &'static str {
-        "Lescompat/Record;"
+        "Lstd/core/Record;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
@@ -102,7 +102,7 @@ where
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let record_class = env.find_class("Lescompat/Record;")?;
+        let record_class = env.find_class("Lstd/core/Record;")?;
         let ctor = env.find_constructor(&record_class, ":V")?;
         let record = env.new_object(&record_class, &ctor, &[])?;
         let record_ref = unsafe { AniRef::from_raw(record.as_raw() as sys::ani_ref) };
@@ -231,7 +231,7 @@ impl TypeInfo for (String, String) {
 
 // Tuple to array conversion
 impl<'env> ToAni<'env> for (i32, i32) {
-    type Output = sys::ani_array_int;
+    type Output = sys::ani_fixedarray_int;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         vec![self.0, self.1].to_ani(env)
@@ -239,7 +239,7 @@ impl<'env> ToAni<'env> for (i32, i32) {
 }
 
 impl<'env> FromAni<'env> for (i32, i32) {
-    type Input = sys::ani_array_int;
+    type Input = sys::ani_fixedarray_int;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let vec: Vec<i32> = Vec::from_ani(env, value)?;
@@ -254,7 +254,7 @@ impl<'env> FromAni<'env> for (i32, i32) {
 }
 
 impl<'env> ToAni<'env> for (i32, i32, i32) {
-    type Output = sys::ani_array_int;
+    type Output = sys::ani_fixedarray_int;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         vec![self.0, self.1, self.2].to_ani(env)
@@ -262,7 +262,7 @@ impl<'env> ToAni<'env> for (i32, i32, i32) {
 }
 
 impl<'env> ToAni<'env> for (f64, f64) {
-    type Output = sys::ani_array_double;
+    type Output = sys::ani_fixedarray_double;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         vec![self.0, self.1].to_ani(env)
@@ -402,7 +402,7 @@ mod tests {
     fn test_hashmap_type_signature() {
         assert_eq!(
             <HashMap<String, String>>::type_signature(),
-            "Lescompat/Record;"
+            "Lstd/core/Record;"
         );
     }
 

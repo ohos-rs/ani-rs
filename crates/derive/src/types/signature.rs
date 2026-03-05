@@ -49,7 +49,7 @@ pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
     }
 
     ctor_sig.push(':');
-    ctor_sig
+    normalize_bind_signature(&ctor_sig)
 }
 
 /// Generate signature from parameter list
@@ -84,7 +84,119 @@ fn generate_signature_from_inputs(
         }
     }
 
-    sig
+    normalize_bind_signature(&sig)
+}
+
+fn map_primitive_sig(ch: char) -> char {
+    match ch {
+        'Z' => 'z',
+        'B' => 'b',
+        'S' => 's',
+        'C' => 'c',
+        'I' => 'i',
+        'J' => 'l',
+        'F' => 'f',
+        'D' => 'd',
+        other => other,
+    }
+}
+
+fn parse_array_token_len(bytes: &[u8], mut i: usize) -> usize {
+    let start = i;
+    while i < bytes.len() && bytes[i] == b'[' {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return i - start;
+    }
+    if bytes[i] == b'L' {
+        i += 1;
+        while i < bytes.len() && bytes[i] != b';' {
+            i += 1;
+        }
+        if i < bytes.len() {
+            i += 1;
+        }
+    } else {
+        i += 1;
+    }
+    i - start
+}
+
+fn parse_braced_token_len(bytes: &[u8], i: usize) -> Option<usize> {
+    if i + 2 >= bytes.len() || bytes[i + 1] != b'{' {
+        return None;
+    }
+    if !matches!(bytes[i], b'A' | b'C' | b'E' | b'P' | b'X') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut j = i + 1;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'{' => depth += 1,
+            b'}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j - i + 1);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+fn normalize_sig_side(side: &str) -> String {
+    let bytes = side.as_bytes();
+    let mut out = String::with_capacity(side.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if let Some(len) = parse_braced_token_len(bytes, i) {
+            out.push_str(&side[i..i + len]);
+            i += len;
+            continue;
+        }
+        match bytes[i] {
+            b'[' => {
+                let len = parse_array_token_len(bytes, i);
+                out.push_str(&side[i..i + len]);
+                i += len;
+            }
+            b'L' => {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j] != b';' {
+                    j += 1;
+                }
+                let inner = side[i + 1..j].replace('/', ".");
+                out.push_str("C{");
+                out.push_str(&inner);
+                out.push('}');
+                i = if j < bytes.len() { j + 1 } else { j };
+            }
+            b => {
+                out.push(map_primitive_sig(b as char));
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn normalize_bind_signature(signature: &str) -> String {
+    let (params, ret) = signature.split_once(':').unwrap_or((signature, ""));
+    let params = normalize_sig_side(params);
+    let ret = if ret == "V" {
+        String::new()
+    } else {
+        normalize_sig_side(ret)
+    };
+    format!("{params}:{ret}")
 }
 
 // ============================================================================
@@ -92,21 +204,55 @@ fn generate_signature_from_inputs(
 // ============================================================================
 
 /// Convert class name to ANI descriptor
-/// Example: "MyModule.MyClass" -> "LMyModule/MyClass;"
+/// Example: "MyModule.MyClass" -> "MyModule.MyClass"
 pub fn class_to_descriptor(name: &str) -> String {
-    let path = name.replace('.', "/");
-    format!("L{};", path)
+    name.to_string()
 }
 
 /// Convert namespace to ANI descriptor
 pub fn namespace_to_descriptor(name: &str) -> String {
-    let path = name.replace('.', "/");
-    format!("L{};", path)
+    name.to_string()
 }
 
 /// Convert module to ANI descriptor
 pub fn module_to_descriptor(name: &str) -> String {
-    format!("L{};", name)
+    name.to_string()
+}
+
+/// Get current crate module name used by generated ETS file.
+///
+/// ANI examples and generated declaration file names use package name with
+/// `-` converted to `_`.
+pub fn current_module_name() -> String {
+    if let Ok(override_name) = std::env::var("ANI_TEST_MODULE_NAME") {
+        let trimmed = override_name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.replace('-', "_");
+        }
+    }
+    std::env::var("CARGO_PKG_NAME")
+        .unwrap_or_else(|_| String::from("entry"))
+        .replace('-', "_")
+}
+
+/// Qualify class/namespace names with current module if needed.
+///
+/// ANI `FindClass`/`FindNamespace` expect descriptors in dotted notation.
+/// For user-provided relative names (for example `Calculator` or
+/// `example.Person`), prepend the current module name.
+pub fn qualify_member_descriptor(name: &str, module_name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('@')
+        || trimmed.starts_with("std.")
+        || trimmed.starts_with("escompat.")
+        || trimmed.starts_with("arkts.")
+        || trimmed.starts_with(&format!("{module_name}."))
+    {
+        trimmed.to_string()
+    } else {
+        format!("{module_name}.{trimmed}")
+    }
 }
 
 // ============================================================================
@@ -119,8 +265,28 @@ mod tests {
 
     #[test]
     fn test_class_descriptor() {
-        assert_eq!(class_to_descriptor("hello.Foo"), "Lhello/Foo;");
-        assert_eq!(class_to_descriptor("std.core.String"), "Lstd/core/String;");
+        assert_eq!(class_to_descriptor("hello.Foo"), "hello.Foo");
+        assert_eq!(class_to_descriptor("std.core.String"), "std.core.String");
+    }
+
+    #[test]
+    fn test_qualify_member_descriptor() {
+        assert_eq!(
+            qualify_member_descriptor("Calculator", "ani_example_new_class"),
+            "ani_example_new_class.Calculator"
+        );
+        assert_eq!(
+            qualify_member_descriptor("example.Person", "ani_example_new_class"),
+            "ani_example_new_class.example.Person"
+        );
+        assert_eq!(
+            qualify_member_descriptor("@defModule.foo.Bar", "ani_example_new_class"),
+            "@defModule.foo.Bar"
+        );
+        assert_eq!(
+            qualify_member_descriptor("std.core.String", "ani_example_new_class"),
+            "std.core.String"
+        );
     }
 
     #[test]
@@ -136,24 +302,24 @@ mod tests {
 
     #[test]
     fn test_option_type_signature() {
-        // Option<i32> should use boxed Int type
+        // Option<T> is lowered to nullable union (T | null)
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Option<i32>)),
-            "Lstd/core/Int;"
+            "X{C{std.core.Int}C{std.core.Null}}"
         );
-        // Option<String> should use String type
+        // Option<String> should use string | null union signature
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Option<String>)),
-            "Lstd/core/String;"
+            "X{C{std.core.String}C{std.core.Null}}"
         );
     }
 
     #[test]
     fn test_vec_type_signature() {
-        assert_eq!(rust_type_to_signature(&syn::parse_quote!(Vec<i32>)), "[I");
+        assert_eq!(rust_type_to_signature(&syn::parse_quote!(Vec<i32>)), "A{i}");
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Vec<String>)),
-            "[Lstd/core/String;"
+            "A{C{std.core.String}}"
         );
     }
 
@@ -161,7 +327,7 @@ mod tests {
     fn test_record_type_signature() {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(HashMap<String, i32>)),
-            "Lescompat/Record;"
+            "Lstd/core/Record;"
         );
     }
 
@@ -205,11 +371,11 @@ mod tests {
     fn test_either_type_signature() {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Either<i32, String>)),
-            "Lstd/core/Object;"
+            "X{C{std.core.Int}C{std.core.String}}"
         );
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Either3<i32, String, bool>)),
-            "Lstd/core/Object;"
+            "X{C{std.core.Int}C{std.core.String}C{std.core.Boolean}}"
         );
     }
 
@@ -244,6 +410,6 @@ mod tests {
         let sig: Signature = syn::parse_quote! {
             fn init(this: i64, name: String, age: i32)
         };
-        assert_eq!(generate_ctor_signature(&sig, true), "Lstd/core/String;I:");
+        assert_eq!(generate_ctor_signature(&sig, true), "C{std.core.String}i:");
     }
 }

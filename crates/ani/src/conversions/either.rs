@@ -277,12 +277,38 @@ impl<A, B> Either<A, B> {
 
 impl<'env> ValidateFromAni<'env> for String {
     fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
-        if let Ok(cls) = env.find_class("Lstd/core/String;") {
-            let obj = unsafe { AniObject::from_raw(value) };
-            env.object_instance_of(&obj, &cls).unwrap_or(false)
-        } else {
-            false
+        if value.is_null() {
+            return false;
         }
+
+        let obj = unsafe { AniObject::from_raw(value) };
+
+        if let Ok(cls) = env.find_class("Lstd/core/String;") {
+            if env.object_instance_of(&obj, &cls).unwrap_or(false) {
+                return true;
+            }
+        }
+
+        // Primitive wrappers should not be treated as string union variants.
+        for numeric_cls in [
+            "Lstd/core/Boolean;",
+            "Lstd/core/Byte;",
+            "Lstd/core/Short;",
+            "Lstd/core/Char;",
+            "Lstd/core/Int;",
+            "Lstd/core/Long;",
+            "Lstd/core/Float;",
+            "Lstd/core/Double;",
+        ] {
+            if let Ok(cls) = env.find_class(numeric_cls) {
+                if env.object_instance_of(&obj, &cls).unwrap_or(false) {
+                    return false;
+                }
+            }
+        }
+
+        let string_ref = unsafe { AniString::from_raw(value as sys::ani_string) };
+        env.get_string(&string_ref).is_ok()
     }
 }
 
