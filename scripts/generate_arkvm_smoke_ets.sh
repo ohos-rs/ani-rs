@@ -22,6 +22,9 @@ emit_local_bindings_from_decl() {
     "$decl"
 }
 
+emit_preload_snippet() {
+  :
+}
 emit_case_snippet() {
   local pkg="$1"
   case "$pkg" in
@@ -54,25 +57,29 @@ ETS
       ;;
     ani-example-any-value-wrapper)
       cat <<'ETS'
-let add2 = (a: int, b: int): Object => { return new Int(a + b); };
-__assert_bool("dynamic_call_with_fn_args_bool", __ANI_GENERATED__.dynamic_call_with_fn_args(add2));
-class CounterAny {
-  count: int = 0;
-  next(step: int): int {
-    this.count += step;
-    return this.count;
-  }
+function makePair(a: Object, b: Object): Object {
+  return a;
 }
+__assert_bool("dynamic_call_with_fn_args_bool", __ANI_GENERATED__.dynamic_call_with_fn_args(makePair));
+class CounterAny {
+  count: Object | null = null;
+}
+__ANI_GENERATED__.dynamic_set_property(new CounterAny());
 let counter = new CounterAny();
-__assert_bool("dynamic_method_call_bool", __ANI_GENERATED__.dynamic_method_call(counter));
 __ANI_GENERATED__.dynamic_set_property(counter);
-__assert_true("dynamic_set_property_called", true);
+__assert_true("dynamic_set_property_count", counter.count != null);
 ETS
       ;;
     ani-example-array-generic)
       cat <<'ETS'
-let pushObj: Object = new String("ark");
-let setObj: Object = new String("ani");
+class ArrayPayload {
+  value: int;
+  constructor(value: int) {
+    this.value = value;
+  }
+}
+let pushObj: Object = new ArrayPayload(1);
+let setObj: Object = new ArrayPayload(2);
 __assert_bool("array_push_and_pop_bool", __ANI_GENERATED__.array_push_and_pop(pushObj));
 __assert_bool("array_set_and_get_bool", __ANI_GENERATED__.array_set_and_get(setObj));
 ETS
@@ -113,18 +120,20 @@ class MethodBox {
   constructor(v: int) {
     this.value = v;
   }
-  getVal(): int {
-    return this.value;
-  }
 }
-let methodVal = __ANI_GENERATED__.invoke_object_method_int(new MethodBox(9), "getVal");
-__assert_true("invoke_object_method_int_non_negative", methodVal >= 0);
+__assert_eq_int("get_property_int", __ANI_GENERATED__.get_property_int(new MethodBox(9)), 9);
 ETS
       ;;
     ani-example-call-variadic-v)
       cat <<'ETS'
-let sumObjFn = (a: int, b: int): Object => { return new Int(a + b); };
-__assert_bool("call_any_with_fn_args_type", __ANI_GENERATED__.call_any_with_fn_args(sumObjFn));
+export function sumValue(a: int, b: int): int {
+  return a + b;
+}
+function pairValue(a: Object, b: Object): Object {
+  return a;
+}
+__assert_bool("call_any_with_fn_args_type", __ANI_GENERATED__.call_any_with_fn_args(pairValue));
+__assert_eq_int("call_function_with_value_array", __ANI_GENERATED__.call_function_with_value_array_by_name("sumValue", 3, 4), 7);
 ETS
       ;;
     ani-example-class-bind-static-native)
@@ -143,42 +152,61 @@ ETS
       cat <<'ETS'
 class ReflectTarget {
   private _value: int = 0;
-  get value(): int {
+  public get value(): int {
     return this._value;
   }
-  set value(v: int) {
+  public set value(v: int) {
     this._value = v;
   }
 }
-let reflectToken = new ReflectTarget();
 __assert_bool(
   "resolve_getter_and_setter_bool",
-  __ANI_GENERATED__.resolve_getter_and_setter(reflectToken, "value"),
+  __ANI_GENERATED__.resolve_getter_and_setter_by_name("arkvm_test.ReflectTarget", "value"),
 );
 ETS
       ;;
     ani-example-class-static)
       cat <<'ETS'
-class StaticToken {}
-let staticClassToken = new StaticToken() as Object;
-__assert_true(
-  "lookup_static_field_invalid_returns_false",
-  !__ANI_GENERATED__.lookup_static_field(staticClassToken),
+class StaticHost {
+  static COUNT: int = 0;
+  static add(a: int, b: int): int {
+    return a + b;
+  }
+}
+__assert_bool(
+  "lookup_static_field_by_name",
+  __ANI_GENERATED__.lookup_static_field_by_name("arkvm_test.StaticHost", "COUNT"),
+);
+__assert_eq_int(
+  "static_field_roundtrip_int_by_name",
+  __ANI_GENERATED__.static_field_roundtrip_int_by_name("arkvm_test.StaticHost", "COUNT", 11),
+  11,
+);
+__assert_eq_int(
+  "call_static_int_by_name",
+  __ANI_GENERATED__.call_static_int_by_name("arkvm_test.StaticHost", "add", 2, 3),
+  5,
 );
 ETS
       ;;
     ani-example-class-static-by-name)
       cat <<'ETS'
-class ByNameToken {}
+class ByNameHost {
+  static COUNT: int = 0;
+  static PAYLOAD: Object = new Object();
+}
 class ByNamePayload {
-  key: string;
+  key: string = "";
   constructor(k: string) {
     this.key = k;
   }
 }
-let byNameToken = new ByNameToken();
-let byNameCount = __ANI_GENERATED__.static_field_by_name_roundtrip(byNameToken);
-__assert_true("static_field_by_name_roundtrip_non_negative", byNameCount >= 0);
+let byNameCount = __ANI_GENERATED__.static_field_by_name_roundtrip_named("arkvm_test.ByNameHost");
+__assert_eq_int("static_field_by_name_roundtrip_named", byNameCount, 7);
+__assert_bool(
+  "static_ref_by_name_roundtrip_named",
+  __ANI_GENERATED__.static_ref_by_name_roundtrip_named("arkvm_test.ByNameHost", new ByNamePayload("ok")),
+);
 ETS
       ;;
     ani-example-enum-item-wrapper)
@@ -229,25 +257,33 @@ ETS
       ;;
     ani-example-function)
       cat <<'ETS'
+function noArgsOk(): string {
+  return "ok";
+}
+function wrapValue(input: string): string {
+  return "wrapped:" + input;
+}
 __ANI_GENERATED__.clear_callback();
 __assert_true("has_callback_false", !__ANI_GENERATED__.has_callback());
-__ANI_GENERATED__.register_callback((value: int): int => { return value + 2; });
-__assert_true("has_callback_true", __ANI_GENERATED__.has_callback());
-let storedResult = __ANI_GENERATED__.invoke_stored_callback(3);
-__assert_true("invoke_stored_callback_non_negative", storedResult >= 0);
-let callbackResult = __ANI_GENERATED__.call_with_callback((value: int): int => { return value + 1; }, 7);
-__assert_true("call_with_callback_non_negative", callbackResult >= 0);
-__assert_eq_string(
-  "call_no_args_callback",
-  __ANI_GENERATED__.call_no_args_callback((): string => { return "ok"; }),
-  "ok",
-);
+__ANI_GENERATED__.register_string_transformer(wrapValue);
+__assert_true("has_string_transformer_true", __ANI_GENERATED__.has_string_transformer());
+__assert_eq_string("transform_string", __ANI_GENERATED__.transform_string("ani"), "wrapped:ani");
+__assert_eq_string("call_no_args_callback", __ANI_GENERATED__.call_no_args_callback(noArgsOk), "ok");
+__assert_eq_string("call_string_callback", __ANI_GENERATED__.call_string_callback(wrapValue, "ark"), "wrapped:ark");
 ETS
       ;;
     ani-example-function-variable)
       cat <<'ETS'
-__ANI_GENERATED__.call_function_void_example((): void => { });
-__assert_true("call_function_void_example_ok", true);
+export let counter: int = 0;
+export let payload: Object = new Object();
+export function addInts(a: int, b: int): int {
+  return a + b;
+}
+export function doNothing(): void {
+}
+__assert_eq_int("call_module_function_int_example", __ANI_GENERATED__.call_module_function_int_example("addInts"), 16);
+__assert_eq_int("module_variable_roundtrip_int", __ANI_GENERATED__.module_variable_roundtrip_int("counter", 11), 11);
+__assert_bool("module_variable_roundtrip_ref", __ANI_GENERATED__.module_variable_roundtrip_ref("payload", new Object()));
 ETS
       ;;
     ani-example-init-lifecycle)
@@ -278,11 +314,26 @@ ETS
       ;;
     ani-example-module-member)
       cat <<'ETS'
-class MemberToken {}
-let moduleMembersOk = __ANI_GENERATED__.find_module_members(new MemberToken());
-let namespaceMembersOk = __ANI_GENERATED__.find_namespace_members(new MemberToken());
-__assert_bool("find_module_members_bool", moduleMembersOk);
-__assert_bool("find_namespace_members_bool", namespaceMembersOk);
+export function sum(a: int, b: int): int {
+  return a + b;
+}
+export let counter: int = 1;
+namespace sample {
+  export function mul(a: int, b: int): int {
+    return a * b;
+  }
+  export let state: int = 2;
+}
+__assert_bool("find_current_module_members", __ANI_GENERATED__.find_current_module_members());
+__assert_bool("find_current_namespace_members", __ANI_GENERATED__.find_current_namespace_members("sample"));
+ETS
+      ;;
+    ani-example-nullish-union)
+      cat <<'ETS'
+__assert_bool("accept_undefined", __ANI_GENERATED__.accept_undefined(undefined));
+__assert_bool("accept_null", __ANI_GENERATED__.accept_null(null));
+__assert_true("make_undefined", __ANI_GENERATED__.make_undefined() == undefined);
+__assert_true("make_null", __ANI_GENERATED__.make_null() == null);
 ETS
       ;;
     ani-example-new-basic)
@@ -311,6 +362,17 @@ __assert_eq_string("Person.greet", person.greet(), "Hello, I'm Alice and I'm 31 
 person.destroy();
 ETS
       ;;
+    ani-example-impl-block)
+      cat <<'ETS'
+let widget = new __ANI_GENERATED__.Widget("impl", 2);
+__assert_eq_string("Widget.getName", widget.getName(), "impl");
+__assert_eq_int("Widget.getCount", widget.getCount(), 2);
+widget.setCount(5);
+__assert_eq_int("Widget.getCount_after_set", widget.getCount(), 5);
+__assert_eq_string("Widget.describe", widget.describe(), "Widget(impl, 5)");
+__assert_eq_int("Widget.sum", __ANI_GENERATED__.Widget.sum(2, 4), 6);
+ETS
+      ;;
     ani-example-object-typed)
       cat <<'ETS'
 class ObjTyped {
@@ -323,11 +385,56 @@ __assert_eq_long("field_by_name_roundtrip_long", __ANI_GENERATED__.field_by_name
 __assert_eq_double("property_roundtrip_float", __ANI_GENERATED__.property_roundtrip_float(objTyped, 1.25), 1.25);
 ETS
       ;;
+    ani-example-object-model)
+      cat <<'ETS'
+let madeUser = __ANI_GENERATED__.make_user_profile(3, "ark", true);
+__assert_eq_int("make_user_profile_id", madeUser.id, 3);
+__assert_eq_string("make_user_profile_name", madeUser.name, "ark");
+__assert_true("make_user_profile_active", madeUser.active);
+
+let inputUser = new UserProfile();
+inputUser.id = 8;
+inputUser.name = "native";
+inputUser.active = false;
+__assert_eq_string(
+  "describe_user_profile",
+  __ANI_GENERATED__.describe_user_profile(inputUser),
+  "8:native:inactive",
+);
+
+let renamedUser = __ANI_GENERATED__.rename_user_profile(inputUser, "renamed");
+__assert_eq_string("rename_user_profile_name", renamedUser.name, "renamed");
+__assert_eq_int("rename_user_profile_id", renamedUser.id, 8);
+
+let chooseOk = __ANI_GENERATED__.choose_user_profile(true) as UserProfile;
+__assert_eq_int("choose_user_profile_object_id", chooseOk.id, 7);
+__assert_eq_string("choose_user_profile_object_name", chooseOk.name, "ani");
+let chooseFallback = __ANI_GENERATED__.choose_user_profile(false) as String;
+__assert_eq_string("choose_user_profile_string", chooseFallback.toString(), "no-user");
+
+let resultOk = __ANI_GENERATED__.user_profile_result(true);
+__assert_eq_int("user_profile_result_id", resultOk.id, 9);
+__assert_eq_string("user_profile_result_name", resultOk.name, "result");
+__assert_true("user_profile_result_inactive", !resultOk.active);
+__assert_throws("user_profile_result_error", (): void => {
+  __ANI_GENERATED__.user_profile_result(false);
+});
+ETS
+      ;;
     ani-example-optional)
       cat <<'ETS'
 __assert_eq_int("with_default_simple", __ANI_GENERATED__.with_default_simple(3, 4), 12);
+__assert_eq_int("with_optional_int_some", __ANI_GENERATED__.with_optional_int(8, new Int(2)), 10);
+__assert_eq_int("with_optional_int_null", __ANI_GENERATED__.with_optional_int(8, null), 8);
+__assert_eq_double("with_optional_double_some", __ANI_GENERATED__.with_optional_double(1.5, new Double(2.0)), 3.5);
+__assert_eq_double("with_optional_double_null", __ANI_GENERATED__.with_optional_double(1.5, null), 1.5);
 __assert_eq_int("with_optional_boolean_null", __ANI_GENERATED__.with_optional_boolean(8, null), 8);
-__assert_eq_string("with_optional_string", __ANI_GENERATED__.with_optional_string("x", "y"), "x y");
+__assert_eq_int("with_optional_boolean_true", __ANI_GENERATED__.with_optional_boolean(8, new Boolean(true)), 16);
+__assert_eq_int("with_multiple_optional_mixed", __ANI_GENERATED__.with_multiple_optional(1, new Int(2), null, new Int(4)), 7);
+__assert_eq_long("with_optional_long_null", __ANI_GENERATED__.with_optional_long(9, null), 9);
+__assert_eq_double("with_optional_float_null", __ANI_GENERATED__.with_optional_float(2.5, null), 2.5);
+__assert_eq_string("with_optional_string_some", __ANI_GENERATED__.with_optional_string("x", "y"), "x y");
+__assert_eq_string("with_optional_string_null", __ANI_GENERATED__.with_optional_string("x", null), "x");
 ETS
       ;;
     ani-example-record)
@@ -505,6 +612,8 @@ while IFS= read -r cargo; do
     echo "// Regenerate with: ./scripts/generate_arkvm_smoke_ets.sh"
     echo
     emit_local_bindings_from_decl "$decl"
+    echo
+    emit_preload_snippet "$pkg"
     echo
     echo "loadLibrary(\"${base}\");"
     echo

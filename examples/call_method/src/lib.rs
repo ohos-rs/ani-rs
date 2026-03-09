@@ -19,7 +19,7 @@ pub fn invoke_object_method_int(
     target: AniObject<'_>,
     method_name: String,
 ) -> Result<i32> {
-    env.call_method_by_name_int(&target, &method_name, Some(":I"))
+    env.call_method_by_name_int(&target, &method_name, Some(":i"))
 }
 
 #[ani]

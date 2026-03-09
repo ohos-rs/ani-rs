@@ -7,6 +7,7 @@ native function init_state(): int;
 native function reset_init_state(): void;
 
 
+
 loadLibrary("ani_example_init_lifecycle");
 
 let __ani_fail_count: int = 0;

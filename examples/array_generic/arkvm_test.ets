@@ -7,6 +7,7 @@ native function array_push_and_pop(value: Object): boolean;
 native function array_set_and_get(value: Object): boolean;
 
 
+
 loadLibrary("ani_example_array_generic");
 
 let __ani_fail_count: int = 0;
@@ -79,8 +80,14 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-array-generic");
-let pushObj: Object = new String("ark");
-let setObj: Object = new String("ani");
+class ArrayPayload {
+  value: int;
+  constructor(value: int) {
+    this.value = value;
+  }
+}
+let pushObj: Object = new ArrayPayload(1);
+let setObj: Object = new ArrayPayload(2);
 __assert_bool("array_push_and_pop_bool", array_push_and_pop(pushObj));
 __assert_bool("array_set_and_get_bool", array_set_and_get(setObj));
 

@@ -8,6 +8,7 @@ native function dynamic_construct(ctor: Object, arg0: Object): boolean;
 native function dynamic_get_set(obj: Object, value: Object): boolean;
 
 
+
 loadLibrary("ani_example_any_dynamic");
 
 let __ani_fail_count: int = 0;

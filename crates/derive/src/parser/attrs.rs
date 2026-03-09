@@ -3,7 +3,7 @@
 //! Parses `#[ani(...)]` macro attributes into structured data.
 
 use syn::{
-    Ident, LitStr, Token,
+    Attribute, Ident, LitStr, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -188,6 +188,14 @@ impl From<AniAttrs> for BindgenAttrs {
             is_async: attrs.is_async,
         }
     }
+}
+
+pub fn parse_bindgen_attrs_from_attribute(attr: &Attribute) -> syn::Result<BindgenAttrs> {
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(BindgenAttrs::default());
+    }
+    let attrs = attr.parse_args::<AniAttrs>()?;
+    Ok(BindgenAttrs::from(attrs))
 }
 
 // ============================================================================

@@ -6,10 +6,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Type};
 
-use crate::codegen::{
-    generate_class_register, generate_module_register, generate_namespace_register,
-    generate_wrapper, has_this_injection,
-};
+use crate::codegen::{RegisterTarget, generate_register_fn, generate_wrapper, has_this_injection};
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
     EtsDeclKind, class_to_descriptor, current_module_name, emit_compile_ets_decl,
@@ -21,6 +18,10 @@ use crate::types::{
 pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
     if attrs.skip {
         return quote! { #prepare #func };
+    }
+
+    if let Err(err) = validate_unsupported_bind_attrs(&attrs, &func) {
+        return err.to_compile_error();
     }
 
     if let Err(err) = validate_constructor_usage(&attrs, &func) {
@@ -104,10 +105,10 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let wrapper = generate_wrapper(&func, &wrapper_name, is_class_method, is_static);
 
     // Generate registration function based on target
+    let register_target = resolve_register_target(&attrs, is_static);
     let register_fn = generate_register_fn(
-        &attrs,
-        is_static,
         &register_name,
+        &register_target,
         &register_symbol_name,
         &signature,
         &wrapper_name,
@@ -135,7 +136,7 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     }
 }
 
-fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
+pub(crate) fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
     if !attrs.constructor {
         return Ok(());
     }
@@ -179,54 +180,52 @@ fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Resul
     }
 }
 
-/// Generate appropriate registration function based on attributes
-fn generate_register_fn(
+pub(crate) fn validate_unsupported_bind_attrs(
     attrs: &BindgenAttrs,
-    is_static: bool,
-    register_name: &proc_macro2::Ident,
-    ets_name: &str,
-    signature: &str,
-    wrapper_name: &proc_macro2::Ident,
-) -> TokenStream {
+    func: &ItemFn,
+) -> syn::Result<()> {
+    if attrs.getter.is_some() || attrs.setter.is_some() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.ident,
+            "#[ani(getter)] / #[ani(setter)] are not implemented yet; use explicit native functions",
+        ));
+    }
+
+    if attrs.is_async {
+        return Err(syn::Error::new_spanned(
+            &func.sig.ident,
+            "#[ani(async)] is not implemented yet; expose async behavior explicitly via Promise APIs",
+        ));
+    }
+
+    Ok(())
+}
+
+fn resolve_register_target(attrs: &BindgenAttrs, is_static: bool) -> RegisterTarget {
     let module_name = current_module_name();
 
-    if let Some(ref class) = attrs.class {
-        let descriptor = class_to_descriptor(&qualify_member_descriptor(class, &module_name));
-        generate_class_register(
-            register_name,
-            &descriptor,
+    if let Some(class) = attrs.class.as_deref() {
+        RegisterTarget::Class {
+            descriptor: class_to_descriptor(&qualify_member_descriptor(class, &module_name)),
             is_static,
-            ets_name,
-            signature,
-            wrapper_name,
-        )
-    } else if let Some(ref ns) = attrs.namespace {
-        let descriptor = namespace_to_descriptor(&qualify_member_descriptor(ns, &module_name));
-        generate_namespace_register(
-            register_name,
-            &descriptor,
-            ets_name,
-            signature,
-            wrapper_name,
-        )
+        }
+    } else if let Some(namespace) = attrs.namespace.as_deref() {
+        RegisterTarget::Namespace(namespace_to_descriptor(&qualify_member_descriptor(
+            namespace,
+            &module_name,
+        )))
     } else {
         let descriptor = attrs.module.as_ref().map_or_else(
             || module_to_descriptor(&module_name),
-            |m| {
-                if m.trim().is_empty() {
+            |module_name_override| {
+                if module_name_override.trim().is_empty() {
                     module_to_descriptor(&module_name)
                 } else {
-                    module_to_descriptor(m)
+                    module_to_descriptor(module_name_override)
                 }
             },
         );
-        generate_module_register(
-            register_name,
-            &descriptor,
-            ets_name,
-            signature,
-            wrapper_name,
-        )
+        RegisterTarget::Module(descriptor)
     }
 }
 
@@ -481,5 +480,25 @@ mod tests {
             fn ctor() -> i64 { 1 }
         };
         assert!(validate_constructor_usage(&attrs, &func).is_err());
+    }
+
+    #[test]
+    fn rejects_getter_setter_attrs_for_now() {
+        let attrs = BindgenAttrs {
+            getter: Some("value".to_string()),
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! { fn get_value() -> i32 { 1 } };
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
+    }
+
+    #[test]
+    fn rejects_async_attr_for_now() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! { fn compute() -> i32 { 1 } };
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
     }
 }

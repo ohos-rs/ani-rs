@@ -9,6 +9,7 @@ native function field_roundtrip_boolean(obj: Object, field: Object, value: boole
 native function property_roundtrip_float(obj: Object, value: float): float;
 
 
+
 loadLibrary("ani_example_object_typed");
 
 let __ani_fail_count: int = 0;

@@ -11,6 +11,18 @@ pub fn resolve_getter_and_setter(env: &Env<'_>, cls: AniClass<'_>, name: String)
 }
 
 #[ani]
+pub fn resolve_getter_and_setter_by_name(
+    env: &Env<'_>,
+    class_name: String,
+    name: String,
+) -> Result<bool> {
+    let cls = env.find_class(&class_name)?;
+    let _getter = env.find_getter(&cls, &name)?;
+    let _setter = env.find_setter(&cls, &name)?;
+    Ok(true)
+}
+
+#[ani]
 pub fn resolve_indexable_and_iterator(
     env: &Env<'_>,
     cls: AniClass<'_>,
@@ -30,6 +42,7 @@ mod tests {
     #[test]
     fn api_signatures_compile() {
         let _ = resolve_getter_and_setter;
+        let _ = resolve_getter_and_setter_by_name;
         let _ = resolve_indexable_and_iterator;
     }
 }

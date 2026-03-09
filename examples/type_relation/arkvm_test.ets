@@ -7,6 +7,7 @@ native function check_type_relation(from: Object, to: Object): boolean;
 native function get_super_class_example(ty: Object): boolean;
 
 
+
 loadLibrary("ani_example_type_relation");
 
 let __ani_fail_count: int = 0;

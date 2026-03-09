@@ -4,6 +4,9 @@
 //! This module provides a type-safe way to handle Rust-to-ANI type conversions
 //! instead of string-based pattern matching.
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{GenericArgument, PathArguments, Type, TypePath};
@@ -105,6 +108,10 @@ pub enum AniType {
     String(StringType),
     /// Unit type ()
     Unit,
+    /// Null literal type
+    Null,
+    /// Undefined literal type
+    Undefined,
     /// Wrapper types (Option, Vec, Result, Ref)
     Wrapper(WrapperType),
     /// Function types
@@ -125,6 +132,46 @@ pub enum AniType {
     Tuple(Vec<AniType>),
     /// Unknown/custom type - fallback to object
     Unknown(Box<Type>),
+}
+
+static OBJECT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+
+fn object_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
+    OBJECT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn normalize_object_alias_key(name: &str) -> String {
+    name.split("::")
+        .flat_map(|segment| segment.split("."))
+        .filter(|segment| !segment.is_empty() && !matches!(*segment, "crate" | "self" | "super"))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+pub fn register_object_type_alias(rust_name: &str, arkts_name: &str) {
+    let rust_name = normalize_object_alias_key(rust_name);
+    let arkts_name = arkts_name.trim();
+    if rust_name.is_empty() || arkts_name.is_empty() {
+        return;
+    }
+
+    object_type_aliases()
+        .lock()
+        .expect("failed to lock object type aliases")
+        .insert(rust_name, arkts_name.to_string());
+}
+
+pub fn resolve_object_type_alias(name: &str) -> Option<String> {
+    let key = normalize_object_alias_key(name);
+    if key.is_empty() {
+        return None;
+    }
+
+    object_type_aliases()
+        .lock()
+        .expect("failed to lock object type aliases")
+        .get(&key)
+        .cloned()
 }
 
 // ============================================================================
@@ -184,6 +231,14 @@ impl AniType {
         // Check for unit type represented as path
         if ident == "()" {
             return AniType::Unit;
+        }
+
+        if ident == "Null" {
+            return AniType::Null;
+        }
+
+        if ident == "Undefined" {
+            return AniType::Undefined;
         }
 
         // Check for AniObject
@@ -366,6 +421,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_ani_c_type(),
             AniType::String(_) => quote! { ani::sys::ani_string },
             AniType::Unit => quote! { () },
+            AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
             AniType::Function(_) => quote! { ani::sys::ani_fn_object },
             AniType::FnArgs(_) => quote! { ani::sys::ani_object },
@@ -401,13 +457,9 @@ impl WrapperType {
     pub fn to_ani_c_type(&self) -> TokenStream {
         match self {
             WrapperType::Vec(_) => quote! { ani::sys::ani_array },
-            WrapperType::Option(inner) => {
-                // Option<String> returns ani_string, others return ani_object
-                if matches!(inner.as_ref(), AniType::String(StringType::String)) {
-                    quote! { ani::sys::ani_string }
-                } else {
-                    quote! { ani::sys::ani_object }
-                }
+            WrapperType::Option(_) => {
+                // Nullable values are union objects at the ANI ABI boundary.
+                quote! { ani::sys::ani_object }
             }
             WrapperType::Result(inner) => inner.to_ani_c_type(),
             WrapperType::Ref(_) => quote! { ani::sys::ani_object },
@@ -426,6 +478,8 @@ impl AniType {
             AniType::Primitive(p) => p.to_signature(),
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::Unit => "V".to_string(),
+            AniType::Null => "C{std.core.Null}".to_string(),
+            AniType::Undefined => "U".to_string(),
             AniType::Wrapper(w) => w.to_signature(),
             AniType::Function(_) => "Lstd/core/Function;".to_string(),
             AniType::FnArgs(fn_args) => {
@@ -479,6 +533,8 @@ impl AniType {
         match self {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
             AniType::String(_) => "C{std.core.String}".to_string(),
+            AniType::Null => "C{std.core.Null}".to_string(),
+            AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
@@ -492,7 +548,9 @@ impl AniType {
             AniType::Either(either) => {
                 let mut variants = String::new();
                 for ty in &either.types {
-                    variants.push_str(&AniType::from_syn_type(ty.as_ref()).to_union_variant_signature());
+                    variants.push_str(
+                        &AniType::from_syn_type(ty.as_ref()).to_union_variant_signature(),
+                    );
                 }
                 if variants.is_empty() {
                     "C{std.core.Object}".to_string()
@@ -501,7 +559,9 @@ impl AniType {
                 }
             }
             AniType::Promise(_) => "C{std.core.Object}".to_string(),
-            AniType::FnArgs(_) | AniType::Tuple(_) | AniType::Unit => "C{std.core.Object}".to_string(),
+            AniType::FnArgs(_) | AniType::Tuple(_) | AniType::Unit => {
+                "C{std.core.Object}".to_string()
+            }
             AniType::Unknown(ty) => unknown_type_to_signature(ty)
                 .map(|sig| to_new_style_ref_signature(&sig))
                 .unwrap_or_else(|| "C{std.core.Object}".to_string()),
@@ -714,24 +774,57 @@ fn unknown_type_to_signature(ty: &Type) -> Option<String> {
                 return Some(sig.to_string());
             }
 
-            let path = type_path
+            let raw_path = type_path
                 .path
                 .segments
                 .iter()
                 .map(|seg| seg.ident.to_string())
+                .filter(|seg| !matches!(seg.as_str(), "crate" | "self" | "super"))
                 .collect::<Vec<_>>()
-                .join("/");
+                .join(".");
 
+            let alias =
+                resolve_object_type_alias(&raw_path).or_else(|| resolve_object_type_alias(&last));
+            let path = alias.as_deref().unwrap_or(&raw_path);
             if path.is_empty() {
-                None
-            } else {
-                Some(format!("L{};", path))
+                return None;
             }
+
+            let qualified = qualify_custom_type_descriptor(path);
+            Some(format!("L{};", qualified.replace('.', "/")))
         }
         Type::Reference(type_ref) => unknown_type_to_signature(type_ref.elem.as_ref()),
         Type::Paren(type_paren) => unknown_type_to_signature(type_paren.elem.as_ref()),
         Type::Group(type_group) => unknown_type_to_signature(type_group.elem.as_ref()),
         _ => None,
+    }
+}
+fn qualify_custom_type_descriptor(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('@')
+        || trimmed.starts_with("std.")
+        || trimmed.starts_with("escompat.")
+        || trimmed.starts_with("arkts.")
+    {
+        return trimmed.to_string();
+    }
+
+    let module_name = std::env::var("ANI_TEST_MODULE_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::env::var("CARGO_PKG_NAME")
+                .unwrap_or_else(|_| String::from("entry"))
+                .replace('-', "_")
+        })
+        .replace('-', "_");
+
+    if trimmed.starts_with(&format!("{module_name}.")) {
+        trimmed.to_string()
+    } else {
+        format!("{module_name}.{trimmed}")
     }
 }
 
@@ -748,6 +841,8 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("A{f}"),
         "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("A{d}"),
         "AniFunction" | "AniFnObject" => Some("Lstd/core/Function;"),
+        "Null" => Some("C{std.core.Null}"),
+        "Undefined" => Some("U"),
         "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
         | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
         | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
@@ -757,7 +852,8 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
 }
 
 fn to_new_style_ref_signature(signature: &str) -> String {
-    if signature.starts_with("C{")
+    if signature == "U"
+        || signature.starts_with("C{")
         || signature.starts_with("A{")
         || signature.starts_with("X{")
         || signature.starts_with("E{")
@@ -937,13 +1033,38 @@ mod tests {
         let ty: Type = syn::parse_quote!(HashMap<String, i32>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Record;");
+
+        let ty: Type = syn::parse_quote!(Undefined);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "U");
+
+        let ty: Type = syn::parse_quote!(Null);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "C{std.core.Null}");
     }
 
     #[test]
     fn test_boxed_signature() {
         let ty: Type = syn::parse_quote!(Option<i32>);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "X{C{std.core.Int}C{std.core.Null}}");
+        assert_eq!(
+            ani_type.to_signature(),
+            "X{C{std.core.Int}C{std.core.Null}}"
+        );
+    }
+
+    #[test]
+    fn test_union_signature_uses_object_slot_for_undefined() {
+        let ty: Type = syn::parse_quote!(Either<String, Undefined>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "X{C{std.core.String}U}");
+
+        let ty: Type = syn::parse_quote!(Either3<String, Null, Undefined>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(
+            ani_type.to_signature(),
+            "X{C{std.core.String}C{std.core.Null}U}"
+        );
     }
 
     #[test]
@@ -1065,7 +1186,25 @@ mod tests {
     fn test_unknown_custom_type_signature() {
         let ty: Type = syn::parse_quote!(crate::models::UserInfo);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "Lcrate/models/UserInfo;");
+        assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
+    }
+
+    #[test]
+    fn test_unknown_custom_type_signature_local_type_is_module_qualified() {
+        let ty: Type = syn::parse_quote!(UserProfile);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lani_derive/UserProfile;");
+    }
+
+    #[test]
+    fn test_unknown_custom_type_signature_uses_registered_object_alias() {
+        register_object_type_alias("AliasedProfile", "models.AliasedProfile");
+        let ty: Type = syn::parse_quote!(AliasedProfile);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(
+            ani_type.to_signature(),
+            "Lani_derive/models/AliasedProfile;"
+        );
     }
 
     #[test]

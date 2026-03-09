@@ -22,6 +22,7 @@ native function string_record_set(record_: long, key: string, value: string): vo
 native function string_record_to_json(record_: long): string;
 
 
+
 loadLibrary("ani_example_record");
 
 let __ani_fail_count: int = 0;

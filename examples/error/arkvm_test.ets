@@ -11,6 +11,7 @@ native function read_config(path: string): string;
 native function validate_age(age: int): string;
 
 
+
 loadLibrary("ani_example_error");
 
 let __ani_fail_count: int = 0;

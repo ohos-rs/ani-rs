@@ -176,6 +176,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-impl-block"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-init-lifecycle"
 version = "0.1.0"
 dependencies = [
@@ -209,6 +217,22 @@ dependencies = [
 
 [[package]]
 name = "ani-example-new-class"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-nullish-union"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-object-model"
 version = "0.1.0"
 dependencies = [
  "ani",

@@ -354,7 +354,7 @@ impl<'local> Env<'local> {
     ///
     /// # Arguments
     ///
-    /// * `descriptor` - Class descriptor, e.g., "Lstd/core/String;"
+    /// * `descriptor` - Class name, e.g., "std.core.String"
     pub fn find_class(&self, descriptor: &str) -> Result<AniClass<'local>> {
         let c_descriptor = CString::new(descriptor)
             .map_err(|_| Error::new(Status::Error, "Invalid class descriptor"))?;

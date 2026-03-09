@@ -13,7 +13,7 @@ pub fn array_push_and_pop(env: &Env<'_>, value: AniRef<'_>) -> Result<bool> {
 
 #[ani]
 pub fn array_set_and_get(env: &Env<'_>, value: AniRef<'_>) -> Result<bool> {
-    let array = env.create_array(1, None)?;
+    let array = env.create_array(1, Some(&value))?;
     env.set_array_element(&array, 0, &value)?;
     let got = env.get_array_element(&array, 0)?;
     env.reference_equals(&got, &value)

@@ -8,6 +8,7 @@ native function roundtrip_fixed_int(values: FixedArray<int>): FixedArray<int>;
 native function sum_fixed_int(values: FixedArray<int>): int;
 
 
+
 loadLibrary("ani_example_fixed_array_wrapper");
 
 let __ani_fail_count: int = 0;

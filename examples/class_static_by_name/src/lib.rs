@@ -10,11 +10,30 @@ pub fn static_field_by_name_roundtrip(env: &Env<'_>, cls: AniClass<'_>) -> Resul
 }
 
 #[ani]
+pub fn static_field_by_name_roundtrip_named(env: &Env<'_>, class_name: String) -> Result<i32> {
+    let cls = env.find_class(&class_name)?;
+    env.set_static_field_by_name_int(&cls, "COUNT", 7)?;
+    env.get_static_field_by_name_int(&cls, "COUNT")
+}
+
+#[ani]
 pub fn static_ref_by_name_roundtrip(
     env: &Env<'_>,
     cls: AniClass<'_>,
     value: AniRef<'_>,
 ) -> Result<bool> {
+    env.set_static_field_by_name_ref(&cls, "PAYLOAD", &value)?;
+    let got = env.get_static_field_by_name_ref(&cls, "PAYLOAD")?;
+    env.reference_equals(&got, &value)
+}
+
+#[ani]
+pub fn static_ref_by_name_roundtrip_named(
+    env: &Env<'_>,
+    class_name: String,
+    value: AniRef<'_>,
+) -> Result<bool> {
+    let cls = env.find_class(&class_name)?;
     env.set_static_field_by_name_ref(&cls, "PAYLOAD", &value)?;
     let got = env.get_static_field_by_name_ref(&cls, "PAYLOAD")?;
     env.reference_equals(&got, &value)
@@ -27,6 +46,8 @@ mod tests {
     #[test]
     fn api_signatures_compile() {
         let _ = static_field_by_name_roundtrip;
+        let _ = static_field_by_name_roundtrip_named;
         let _ = static_ref_by_name_roundtrip;
+        let _ = static_ref_by_name_roundtrip_named;
     }
 }

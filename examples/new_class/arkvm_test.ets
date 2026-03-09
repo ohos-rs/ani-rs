@@ -21,6 +21,7 @@ class Person {
 }
 
 
+
 loadLibrary("ani_example_new_class");
 
 let __ani_fail_count: int = 0;

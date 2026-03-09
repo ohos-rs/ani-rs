@@ -392,10 +392,10 @@ fn create_boxed_int<'a>(env: &Env<'a>, value: i32) -> Result<AniObject<'a>> {
     use crate::types::ani_value_int;
 
     // Find std/core/Int class
-    let int_class = env.find_class("Lstd/core/Int;")?;
+    let int_class = env.find_class("std.core.Int")?;
 
     // Find constructor <ctor>(I:V)
-    let ctor = env.find_method(&int_class, "<ctor>", "I:V")?;
+    let ctor = env.find_constructor(&int_class, "i:")?;
 
     // Create boxed object
     let args = [ani_value_int(value)];
@@ -408,10 +408,10 @@ fn create_boxed_long<'a>(env: &Env<'a>, value: i64) -> Result<AniObject<'a>> {
     use crate::types::ani_value_long;
 
     // Find std/core/Long class
-    let long_class = env.find_class("Lstd/core/Long;")?;
+    let long_class = env.find_class("std.core.Long")?;
 
     // Find constructor <ctor>(J:V)
-    let ctor = env.find_method(&long_class, "<ctor>", "J:V")?;
+    let ctor = env.find_constructor(&long_class, "l:")?;
 
     // Create boxed object
     let args = [ani_value_long(value)];
@@ -424,10 +424,10 @@ fn create_boxed_double<'a>(env: &Env<'a>, value: f64) -> Result<AniObject<'a>> {
     use crate::types::ani_value_double;
 
     // Find std/core/Double class
-    let double_class = env.find_class("Lstd/core/Double;")?;
+    let double_class = env.find_class("std.core.Double")?;
 
     // Find constructor <ctor>(D:V)
-    let ctor = env.find_method(&double_class, "<ctor>", "D:V")?;
+    let ctor = env.find_constructor(&double_class, "d:")?;
 
     // Create boxed object
     let args = [ani_value_double(value)];
@@ -440,10 +440,10 @@ fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>>
     use crate::types::ani_value_boolean;
 
     // Find std/core/Boolean class
-    let boolean_class = env.find_class("Lstd/core/Boolean;")?;
+    let boolean_class = env.find_class("std.core.Boolean")?;
 
     // Find constructor <ctor>(Z:V)
-    let ctor = env.find_method(&boolean_class, "<ctor>", "Z:V")?;
+    let ctor = env.find_constructor(&boolean_class, "z:")?;
 
     // Create boxed object
     let args = [ani_value_boolean(value)];

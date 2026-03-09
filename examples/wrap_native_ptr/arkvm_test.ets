@@ -26,6 +26,7 @@ native function set_resource_name(ptr: long, name: string): void;
 native function validate_ptr_type(encoded: long, expected_type: int): boolean;
 
 
+
 loadLibrary("ani_example_wrap_ptr");
 
 let __ani_fail_count: int = 0;

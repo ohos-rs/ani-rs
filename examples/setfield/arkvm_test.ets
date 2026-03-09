@@ -19,6 +19,7 @@ native function set_field_by_handle(target: Object, field: Object, value: int): 
 native function set_price(product: Object, price: double): void;
 
 
+
 loadLibrary("ani_example_setfield");
 
 let __ani_fail_count: int = 0;

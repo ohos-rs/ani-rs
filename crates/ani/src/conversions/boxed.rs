@@ -55,7 +55,7 @@ impl<'env> Boxable<'env> for bool {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Boolean;"
+        "std.core.Boolean"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -80,7 +80,7 @@ impl<'env> Unboxable<'env> for bool {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_boolean(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_boolean(obj, "value")
     }
 }
 
@@ -92,7 +92,7 @@ impl<'env> Boxable<'env> for i8 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Byte;"
+        "std.core.Byte"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -117,7 +117,7 @@ impl<'env> Unboxable<'env> for i8 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_byte(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_byte(obj, "value")
     }
 }
 
@@ -129,7 +129,7 @@ impl<'env> Boxable<'env> for i16 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Short;"
+        "std.core.Short"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -154,7 +154,7 @@ impl<'env> Unboxable<'env> for i16 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_short(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_short(obj, "value")
     }
 }
 
@@ -166,7 +166,7 @@ impl<'env> Boxable<'env> for u16 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Char;"
+        "std.core.Char"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -191,7 +191,7 @@ impl<'env> Unboxable<'env> for u16 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_char(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_char(obj, "value")
     }
 }
 
@@ -199,7 +199,7 @@ impl<'env> Boxable<'env> for char {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Char;"
+        "std.core.Char"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -219,7 +219,7 @@ impl<'env> Boxable<'env> for i32 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Int;"
+        "std.core.Int"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -244,7 +244,7 @@ impl<'env> Unboxable<'env> for i32 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_int(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_int(obj, "value")
     }
 }
 
@@ -256,7 +256,7 @@ impl<'env> Boxable<'env> for i64 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Long;"
+        "std.core.Long"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -281,7 +281,7 @@ impl<'env> Unboxable<'env> for i64 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_long(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_long(obj, "value")
     }
 }
 
@@ -293,7 +293,7 @@ impl<'env> Boxable<'env> for f32 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Float;"
+        "std.core.Float"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -318,7 +318,7 @@ impl<'env> Unboxable<'env> for f32 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_float(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_float(obj, "value")
     }
 }
 
@@ -330,7 +330,7 @@ impl<'env> Boxable<'env> for f64 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Double;"
+        "std.core.Double"
     }
 
     fn box_constructor_signature() -> &'static str {
@@ -355,7 +355,7 @@ impl<'env> Unboxable<'env> for f64 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.call_method_by_name_double(obj, Self::unbox_method_name(), None)
+        env.get_field_by_name_double(obj, "value")
     }
 }
 
@@ -371,21 +371,21 @@ pub fn get_boxed_signature<T: Boxable<'static>>() -> &'static str {
 /// Mapping of primitive types to boxed type signatures
 pub mod boxed_signatures {
     /// Boolean box class signature
-    pub const BOOLEAN: &str = "Lstd/core/Boolean;";
+    pub const BOOLEAN: &str = "std.core.Boolean";
     /// Byte box class signature
-    pub const BYTE: &str = "Lstd/core/Byte;";
+    pub const BYTE: &str = "std.core.Byte";
     /// Short box class signature
-    pub const SHORT: &str = "Lstd/core/Short;";
+    pub const SHORT: &str = "std.core.Short";
     /// Char box class signature
-    pub const CHAR: &str = "Lstd/core/Char;";
+    pub const CHAR: &str = "std.core.Char";
     /// Int box class signature
-    pub const INT: &str = "Lstd/core/Int;";
+    pub const INT: &str = "std.core.Int";
     /// Long box class signature
-    pub const LONG: &str = "Lstd/core/Long;";
+    pub const LONG: &str = "std.core.Long";
     /// Float box class signature
-    pub const FLOAT: &str = "Lstd/core/Float;";
+    pub const FLOAT: &str = "std.core.Float";
     /// Double box class signature
-    pub const DOUBLE: &str = "Lstd/core/Double;";
+    pub const DOUBLE: &str = "std.core.Double";
 }
 
 #[cfg(test)]
@@ -396,19 +396,16 @@ mod tests {
     fn test_box_descriptors() {
         assert_eq!(
             <bool as Boxable>::box_class_descriptor(),
-            "Lstd/core/Boolean;"
+            "std.core.Boolean"
         );
-        assert_eq!(<i32 as Boxable>::box_class_descriptor(), "Lstd/core/Int;");
-        assert_eq!(<i64 as Boxable>::box_class_descriptor(), "Lstd/core/Long;");
-        assert_eq!(
-            <f64 as Boxable>::box_class_descriptor(),
-            "Lstd/core/Double;"
-        );
+        assert_eq!(<i32 as Boxable>::box_class_descriptor(), "std.core.Int");
+        assert_eq!(<i64 as Boxable>::box_class_descriptor(), "std.core.Long");
+        assert_eq!(<f64 as Boxable>::box_class_descriptor(), "std.core.Double");
     }
 
     #[test]
     fn test_boxed_signatures_module() {
-        assert_eq!(boxed_signatures::INT, "Lstd/core/Int;");
-        assert_eq!(boxed_signatures::LONG, "Lstd/core/Long;");
+        assert_eq!(boxed_signatures::INT, "std.core.Int");
+        assert_eq!(boxed_signatures::LONG, "std.core.Long");
     }
 }

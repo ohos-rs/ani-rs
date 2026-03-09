@@ -14,6 +14,7 @@ native function with_optional_long(required: long, optional: Long | null): long;
 native function with_optional_string(required: string, optional: String | null): string;
 
 
+
 loadLibrary("ani_example_optional");
 
 let __ani_fail_count: int = 0;
@@ -87,8 +88,17 @@ function __assert_throws(name: string, fn: () => void): void {
 
 console.log("[arkvm] smoke start: ani-example-optional");
 __assert_eq_int("with_default_simple", with_default_simple(3, 4), 12);
+__assert_eq_int("with_optional_int_some", with_optional_int(8, new Int(2)), 10);
+__assert_eq_int("with_optional_int_null", with_optional_int(8, null), 8);
+__assert_eq_double("with_optional_double_some", with_optional_double(1.5, new Double(2.0)), 3.5);
+__assert_eq_double("with_optional_double_null", with_optional_double(1.5, null), 1.5);
 __assert_eq_int("with_optional_boolean_null", with_optional_boolean(8, null), 8);
-__assert_eq_string("with_optional_string", with_optional_string("x", "y"), "x y");
+__assert_eq_int("with_optional_boolean_true", with_optional_boolean(8, new Boolean(true)), 16);
+__assert_eq_int("with_multiple_optional_mixed", with_multiple_optional(1, new Int(2), null, new Int(4)), 7);
+__assert_eq_long("with_optional_long_null", with_optional_long(9, null), 9);
+__assert_eq_double("with_optional_float_null", with_optional_float(2.5, null), 2.5);
+__assert_eq_string("with_optional_string_some", with_optional_string("x", "y"), "x y");
+__assert_eq_string("with_optional_string_null", with_optional_string("x", null), "x");
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

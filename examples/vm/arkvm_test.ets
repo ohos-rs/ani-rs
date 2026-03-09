@@ -10,6 +10,7 @@ native function query_vm_version_with_guard(): int;
 native function query_vm_version_with_permanent_attach(): int;
 
 
+
 loadLibrary("ani_example_vm");
 
 let __ani_fail_count: int = 0;

@@ -14,6 +14,7 @@ native function get_singleton(): long;
 native function invoke_object_method_int(target: Object, method_name: string): int;
 
 
+
 loadLibrary("ani_example_call_method");
 
 let __ani_fail_count: int = 0;
@@ -92,12 +93,8 @@ class MethodBox {
   constructor(v: int) {
     this.value = v;
   }
-  getVal(): int {
-    return this.value;
-  }
 }
-let methodVal = invoke_object_method_int(new MethodBox(9), "getVal");
-__assert_true("invoke_object_method_int_non_negative", methodVal >= 0);
+__assert_eq_int("get_property_int", get_property_int(new MethodBox(9)), 9);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

@@ -91,10 +91,7 @@ fn new(initial_value: i32) -> i64 {
 #[derive(AniClass)]
 #[ani(class = "Person")]
 struct Person {
-    #[ani(getter, setter)]
     name: String,
-    
-    #[ani(getter)]
     age: i32,
 }
 
@@ -111,6 +108,8 @@ impl Person {
 }
 ```
 
+> Note: field-level `#[ani(getter)]` / `#[ani(setter)]` generation is reserved and not implemented yet.
+
 ## Type Mappings
 
 | Rust Type | ANI Signature | ArkTS Type |
@@ -124,7 +123,41 @@ impl Person {
 | `f64` | `D` | `double` |
 | `String` | `Lstd/core/String;` | `String` |
 | `Vec<T>` | `[T` | `Array<T>` |
-| `Option<i32>` | `Lstd/core/Int;` | `Int \| null` |
+| `Option<i32>` | `X{C{std.core.Int}C{std.core.Null}}` | `Int \| null` |
+| `Null` | `C{std.core.Null}` | `null` |
+| `Undefined` | `U` | `undefined` |
+| `Either<String, Undefined>` | `X{C{std.core.String}U}` | `String \| undefined` |
+| `Either3<String, Null, Undefined>` | `X{C{std.core.String}C{std.core.Null}U}` | `String \| null \| undefined` |
+
+## Nullish Semantics
+
+`ani-rs` now keeps `null` and `undefined` distinct:
+
+- `Option<T>` maps to `T | null`
+- `Either<T, Undefined>` maps to `T | undefined`
+- `Either3<T, Null, Undefined>` maps to `T | null | undefined`
+- ArkTS optional parameters or optional object properties are a separate language feature and are not inferred from `Option<T>`
+
+```rust,ignore
+use ani::conversions::{Either, Either3, Null, Undefined};
+
+#[ani]
+fn maybe_name(value: Either<String, Undefined>) -> String {
+    match value {
+        Either::A(name) => name,
+        Either::B(_) => "<missing>".to_string(),
+    }
+}
+
+#[ani]
+fn maybe_title(value: Either3<String, Null, Undefined>) -> String {
+    match value {
+        Either3::A(title) => title,
+        Either3::B(_) => "<null>".to_string(),
+        Either3::C(_) => "<undefined>".to_string(),
+    }
+}
+```
 
 ## ETS Code Generation
 

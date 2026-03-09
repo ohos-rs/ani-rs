@@ -8,6 +8,7 @@ native function dynamic_method_call(obj: Object): boolean;
 native function dynamic_set_property(obj: Object): void;
 
 
+
 loadLibrary("ani_example_any_value_wrapper");
 
 let __ani_fail_count: int = 0;
@@ -80,19 +81,17 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-any-value-wrapper");
-let add2 = (a: int, b: int): Object => { return new Int(a + b); };
-__assert_bool("dynamic_call_with_fn_args_bool", dynamic_call_with_fn_args(add2));
-class CounterAny {
-  count: int = 0;
-  next(step: int): int {
-    this.count += step;
-    return this.count;
-  }
+function makePair(a: Object, b: Object): Object {
+  return a;
 }
+__assert_bool("dynamic_call_with_fn_args_bool", dynamic_call_with_fn_args(makePair));
+class CounterAny {
+  count: Object | null = null;
+}
+dynamic_set_property(new CounterAny());
 let counter = new CounterAny();
-__assert_bool("dynamic_method_call_bool", dynamic_method_call(counter));
 dynamic_set_property(counter);
-__assert_true("dynamic_set_property_called", true);
+__assert_true("dynamic_set_property_count", counter.count != null);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

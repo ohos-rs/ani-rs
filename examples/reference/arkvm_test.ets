@@ -18,6 +18,7 @@ native function store_object(obj: Object): void;
 native function use_stored_object(): boolean;
 
 
+
 loadLibrary("ani_example_reference");
 
 let __ani_fail_count: int = 0;

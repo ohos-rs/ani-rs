@@ -56,14 +56,11 @@ where
 
 /// Throw an ANI error
 pub fn throw_error(env: &Env<'_>, message: &str) -> Result<()> {
-    let ani_msg = env.create_string(message)?;
-    let error_class = env.find_class("Lstd/core/Error;")?;
-    let ctor = env.find_constructor(&error_class, "Lstd/core/String;:V")?;
-    let args = [crate::types::ani_value_ref(ani_msg.as_raw() as sys::ani_ref)];
-    let error_obj = env.new_object(&error_class, &ctor, &args[..])?;
-    ani_call!(env, ThrowError, error_obj.as_raw() as sys::ani_error)
+    let error = crate::error::Error::new(crate::error::Status::Error, message);
+    let business_error = crate::error::BusinessError::from(error);
+    unsafe { business_error.throw_into(env.as_raw()) };
+    Ok(())
 }
-
 /// Throw a type error
 pub fn throw_type_error(env: &Env<'_>, expected: &str, got: &str) -> Result<()> {
     let message = format!("Type error: expected {}, got {}", expected, got);

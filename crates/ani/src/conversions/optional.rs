@@ -3,8 +3,9 @@
 //! Implements conversion between Rust Option types and ANI nullable types
 //! - Option<T> <-> nullable T (null | T)
 //!
-//! This module provides generic support for Option<T> where T implements
-//! the required conversion traits (ToAni/FromAni).
+//! In ANI, nullable values are represented as union object references at the
+//! ABI boundary. Even `Option<String>` and boxed primitive options flow through
+//! `ani_object` when exposed from native functions.
 
 use crate::env::Env;
 use crate::error::Result;
@@ -26,8 +27,8 @@ impl<T: TypeInfo> TypeInfo for Option<T> {
     }
 
     fn ani_c_type() -> &'static str {
-        // Option always uses ani_ref since it can be null
-        "ani_ref"
+        // Nullable unions are represented as ANI objects.
+        "ani_object"
     }
 }
 
@@ -51,19 +52,27 @@ impl<'env> OptionalPrimitive<'env> for i64 {}
 impl<'env> OptionalPrimitive<'env> for f32 {}
 impl<'env> OptionalPrimitive<'env> for f64 {}
 
+fn is_option_none_ref(env: &Env<'_>, value: sys::ani_object) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let value_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
+    env.is_null(&value_ref).unwrap_or(false)
+}
+
 impl<'env, T> ToAni<'env> for Option<T>
 where
     T: OptionalPrimitive<'env>,
 {
-    type Output = sys::ani_ref;
+    type Output = sys::ani_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
             Some(value) => {
                 let boxed = value.box_value(env)?;
-                Ok(boxed.as_raw() as sys::ani_ref)
+                Ok(boxed.into_raw())
             }
-            None => Ok(std::ptr::null_mut()),
+            None => env.get_null_object(),
         }
     }
 }
@@ -72,13 +81,13 @@ impl<'env, T> FromAni<'env> for Option<T>
 where
     T: OptionalPrimitive<'env>,
 {
-    type Input = sys::ani_ref;
+    type Input = sys::ani_object;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
+        if is_option_none_ref(env, value) {
             Ok(None)
         } else {
-            let obj = unsafe { AniObject::from_raw(value as sys::ani_object) };
+            let obj = unsafe { AniObject::from_raw(value) };
             let unboxed = T::unbox(env, &obj)?;
             Ok(Some(unboxed))
         }
@@ -90,27 +99,27 @@ where
 // ============================================================================
 
 impl<'env> ToAni<'env> for Option<String> {
-    type Output = sys::ani_string;
+    type Output = sys::ani_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
             Some(s) => {
                 let ani_str = env.create_string(&s)?;
-                Ok(ani_str.into_raw())
+                Ok(ani_str.into_raw() as sys::ani_object)
             }
-            None => Ok(std::ptr::null_mut()),
+            None => env.get_null_object(),
         }
     }
 }
 
 impl<'env> FromAni<'env> for Option<String> {
-    type Input = sys::ani_string;
+    type Input = sys::ani_object;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
+        if is_option_none_ref(env, value) {
             Ok(None)
         } else {
-            let ani_str = unsafe { AniString::from_raw(value) };
+            let ani_str = unsafe { AniString::from_raw(value as sys::ani_string) };
             let s = env.get_string(&ani_str)?;
             Ok(Some(s))
         }
@@ -124,10 +133,10 @@ impl<'env> FromAni<'env> for Option<String> {
 impl<'env> ToAni<'env> for Option<AniObject<'env>> {
     type Output = sys::ani_object;
 
-    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
             Some(obj) => Ok(obj.as_raw()),
-            None => Ok(std::ptr::null_mut()),
+            None => env.get_null_object(),
         }
     }
 }
@@ -135,8 +144,8 @@ impl<'env> ToAni<'env> for Option<AniObject<'env>> {
 impl<'env> FromAni<'env> for Option<AniObject<'env>> {
     type Input = sys::ani_object;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if value.is_null() {
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if is_option_none_ref(env, value) {
             Ok(None)
         } else {
             Ok(Some(unsafe { AniObject::from_raw(value) }))
@@ -237,8 +246,8 @@ mod tests {
 
     #[test]
     fn test_option_ani_c_type() {
-        assert_eq!(<Option<i32>>::ani_c_type(), "ani_ref");
-        assert_eq!(<Option<String>>::ani_c_type(), "ani_ref");
+        assert_eq!(<Option<i32>>::ani_c_type(), "ani_object");
+        assert_eq!(<Option<String>>::ani_c_type(), "ani_object");
     }
 
     #[test]

@@ -315,6 +315,23 @@ mod tests {
     }
 
     #[test]
+    fn test_explicit_nullish_type_signatures() {
+        assert_eq!(rust_type_to_signature(&syn::parse_quote!(Undefined)), "U");
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Null)),
+            "C{std.core.Null}"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Either<String, Undefined>)),
+            "X{C{std.core.String}U}"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Either3<String, Null, Undefined>)),
+            "X{C{std.core.String}C{std.core.Null}U}"
+        );
+    }
+
+    #[test]
     fn test_vec_type_signature() {
         assert_eq!(rust_type_to_signature(&syn::parse_quote!(Vec<i32>)), "A{i}");
         assert_eq!(

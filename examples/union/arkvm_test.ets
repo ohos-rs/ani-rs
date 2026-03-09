@@ -11,6 +11,7 @@ native function handle_three_types(value: String | Int | Boolean): string;
 native function return_either(use_string: boolean): String | Int;
 
 
+
 loadLibrary("ani_example_union");
 
 let __ani_fail_count: int = 0;

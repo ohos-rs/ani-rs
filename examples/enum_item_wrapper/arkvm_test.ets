@@ -8,6 +8,7 @@ native function enum_item_name(enm: Object, name: string): string;
 native function enum_item_value_int(enm: Object, name: string): int;
 
 
+
 loadLibrary("ani_example_enum_item_wrapper");
 
 let __ani_fail_count: int = 0;

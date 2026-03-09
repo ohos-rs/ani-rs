@@ -6,6 +6,7 @@
 native function weak_ref_roundtrip(value: Object): boolean;
 
 
+
 loadLibrary("ani_example_weak_ref");
 
 let __ani_fail_count: int = 0;

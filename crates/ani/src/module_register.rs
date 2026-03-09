@@ -38,19 +38,28 @@ pub struct InitRegisterEntry {
 /// Native binding target kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum BindingTargetKind {
+    /// Top-level module functions.
     Module,
+    /// Namespace functions.
     Namespace,
+    /// Instance methods on a class.
     ClassInstance,
+    /// Static methods on a class.
     ClassStatic,
 }
 
 /// Deferred binding entry collected during registration callbacks.
 #[derive(Clone, Copy)]
 pub struct PendingBindingEntry {
+    /// Binding destination category.
     pub target_kind: BindingTargetKind,
+    /// Target descriptor (module / namespace / class descriptor).
     pub descriptor: &'static str,
+    /// Pointer to static C string for function name.
     pub name: usize,
+    /// Pointer to static C string for function signature.
     pub signature: usize,
+    /// Native callback function pointer.
     pub pointer: usize,
 }
 
@@ -401,7 +410,11 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         return sys::ani_status_ANI_OK;
     }
 
-    let api = &*(*env);
+    let api = unsafe {
+        // SAFETY: `env` comes from ANI entrypoints and is expected to be a valid
+        // pointer to `ani_env`, whose first field points to API table.
+        &*(*env)
+    };
     for ((target_kind, descriptor), functions) in grouped {
         if debug {
             eprintln!(
@@ -413,7 +426,9 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     "<null>"
                 } else {
                     // SAFETY: debug-only diagnostics for static C string literals.
-                    unsafe { CStr::from_ptr(f.name) }.to_str().unwrap_or("<invalid>")
+                    unsafe { CStr::from_ptr(f.name) }
+                        .to_str()
+                        .unwrap_or("<invalid>")
                 };
                 let sig = if f.signature.is_null() {
                     "<null>"
@@ -423,39 +438,48 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                         .to_str()
                         .unwrap_or("<invalid>")
                 };
-                eprintln!("[ani]   fn[{idx}] name={name} sig={sig} ptr={:p}", f.pointer);
+                eprintln!(
+                    "[ani]   fn[{idx}] name={name} sig={sig} ptr={:p}",
+                    f.pointer
+                );
             }
         }
 
         let status = match target_kind {
             BindingTargetKind::ClassInstance => {
-                let (status, cls) = unsafe { find_class_with_fallback(api, env, descriptor, debug) };
+                let (status, cls) =
+                    unsafe { find_class_with_fallback(api, env, descriptor, debug) };
                 if status != sys::ani_status_ANI_OK {
                     status
                 } else if cls.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
-                    (api.Class_BindNativeMethods.unwrap())(
-                        env,
-                        cls,
-                        functions.as_ptr(),
-                        functions.len(),
-                    )
+                    unsafe {
+                        (api.Class_BindNativeMethods.unwrap())(
+                            env,
+                            cls,
+                            functions.as_ptr(),
+                            functions.len(),
+                        )
+                    }
                 }
             }
             BindingTargetKind::ClassStatic => {
-                let (status, cls) = unsafe { find_class_with_fallback(api, env, descriptor, debug) };
+                let (status, cls) =
+                    unsafe { find_class_with_fallback(api, env, descriptor, debug) };
                 if status != sys::ani_status_ANI_OK {
                     status
                 } else if cls.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
-                    (api.Class_BindStaticNativeMethods.unwrap())(
-                        env,
-                        cls,
-                        functions.as_ptr(),
-                        functions.len(),
-                    )
+                    unsafe {
+                        (api.Class_BindStaticNativeMethods.unwrap())(
+                            env,
+                            cls,
+                            functions.as_ptr(),
+                            functions.len(),
+                        )
+                    }
                 }
             }
             BindingTargetKind::Namespace => {
@@ -466,12 +490,14 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                 } else if ns.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
-                    (api.Namespace_BindNativeFunctions.unwrap())(
-                        env,
-                        ns,
-                        functions.as_ptr(),
-                        functions.len(),
-                    )
+                    unsafe {
+                        (api.Namespace_BindNativeFunctions.unwrap())(
+                            env,
+                            ns,
+                            functions.as_ptr(),
+                            functions.len(),
+                        )
+                    }
                 }
             }
             BindingTargetKind::Module => {
@@ -502,12 +528,14 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                                 );
                             }
                         }
-                        (api.Module_BindNativeFunctions.unwrap())(
-                            env,
-                            module,
-                            functions.as_ptr(),
-                            functions.len(),
-                        )
+                        unsafe {
+                            (api.Module_BindNativeFunctions.unwrap())(
+                                env,
+                                module,
+                                functions.as_ptr(),
+                                functions.len(),
+                            )
+                        }
                     }
                 }
             }
@@ -573,4 +601,49 @@ pub fn clear_registrations() {
         .write()
         .expect("Failed to acquire write lock for PENDING_BINDINGS")
         .clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::ptr;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn descriptor_candidates_non_builtin_has_defmodule_fallback() {
+        let candidates = descriptor_candidates("a.b.C");
+        assert_eq!(
+            candidates,
+            vec!["a.b.C".to_string(), "@defModule.a.b.C".to_string()]
+        );
+    }
+
+    #[test]
+    fn descriptor_candidates_builtin_has_no_defmodule_fallback() {
+        let candidates = descriptor_candidates("std.core.String");
+        assert_eq!(candidates, vec!["std.core.String".to_string()]);
+    }
+
+    #[test]
+    fn queue_class_binding_sets_target_kind() {
+        let _guard = TEST_LOCK.lock().expect("lock test mutex");
+        clear_registrations();
+
+        let status = queue_class_binding("demo.Test", false, "m1", ":", ptr::null());
+        assert_eq!(status, sys::ani_status_ANI_OK);
+        let status = queue_class_binding("demo.Test", true, "m2", ":", ptr::null());
+        assert_eq!(status, sys::ani_status_ANI_OK);
+
+        let pending = PENDING_BINDINGS.read().expect("read pending");
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].target_kind, BindingTargetKind::ClassInstance);
+        assert_eq!(pending[1].target_kind, BindingTargetKind::ClassStatic);
+        assert_eq!(pending[0].descriptor, "demo.Test");
+        assert_eq!(pending[1].descriptor, "demo.Test");
+
+        drop(pending);
+        clear_registrations();
+    }
 }

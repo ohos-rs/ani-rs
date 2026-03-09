@@ -1,0 +1,86 @@
+//! Object model example.
+//!
+//! Covers strongly typed `#[ani(object)]` structs flowing through:
+//! - direct parameters / returns
+//! - `Either<T, String>`
+//! - `Result<T>`
+
+use ani::conversions::Either;
+use ani::prelude::*;
+use ani_derive::ani;
+
+#[ani(object)]
+pub struct UserProfile {
+    pub id: i32,
+    pub name: String,
+    pub active: bool,
+}
+
+#[ani]
+pub fn make_user_profile(id: i32, name: String, active: bool) -> UserProfile {
+    UserProfile { id, name, active }
+}
+
+#[ani]
+pub fn describe_user_profile(user: UserProfile) -> String {
+    let state = if user.active { "active" } else { "inactive" };
+    format!("{}:{}:{}", user.id, user.name, state)
+}
+
+#[ani]
+pub fn rename_user_profile(mut user: UserProfile, name: String) -> UserProfile {
+    user.name = name;
+    user
+}
+
+#[ani]
+pub fn choose_user_profile(flag: bool) -> Either<UserProfile, String> {
+    if flag {
+        Either::A(UserProfile {
+            id: 7,
+            name: "ani".to_string(),
+            active: true,
+        })
+    } else {
+        Either::B("no-user".to_string())
+    }
+}
+
+#[ani]
+pub fn user_profile_result(flag: bool) -> Result<UserProfile> {
+    if flag {
+        Ok(UserProfile {
+            id: 9,
+            name: "result".to_string(),
+            active: false,
+        })
+    } else {
+        Err(Error::new(Status::InvalidArgs, "user profile disabled"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_model_functions_compile() {
+        let user = make_user_profile(1, "ani".to_string(), true);
+        assert_eq!(user.id, 1);
+        assert_eq!(describe_user_profile(user), "1:ani:active");
+
+        let renamed = rename_user_profile(
+            UserProfile {
+                id: 2,
+                name: "old".to_string(),
+                active: false,
+            },
+            "new".to_string(),
+        );
+        assert_eq!(renamed.name, "new");
+
+        assert!(matches!(choose_user_profile(true), Either::A(_)));
+        assert!(user_profile_result(true).is_ok());
+        assert!(user_profile_result(false).is_err());
+    }
+}

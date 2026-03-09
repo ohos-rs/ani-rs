@@ -6,6 +6,7 @@
 native function bind_static_natives(cls: Object): void;
 
 
+
 loadLibrary("ani_example_class_bind_static_native");
 
 let __ani_fail_count: int = 0;

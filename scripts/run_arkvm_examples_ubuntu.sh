@@ -41,17 +41,21 @@ if [[ ! -d "$ark_src_root/static_core/plugins/ets/sdk/arkts" ]]; then
   exit 1
 fi
 
-mkdir -p "$repo_root/.cache/rustup" "$repo_root/.cache/cargo-home"
+host_rustup_cache="${ARKVM_RUSTUP_CACHE:-/tmp/ani-rs-arkvm-rustup}"
+host_cargo_home_cache="${ARKVM_CARGO_HOME_CACHE:-/tmp/ani-rs-arkvm-cargo-home}"
+mkdir -p "$host_rustup_cache" "$host_cargo_home_cache"
 
 echo "Running in docker image: $image"
 echo "Using ARKVM_DIR: $arkvm_dir"
 echo "Using ARK_SRC_ROOT: $ark_src_root"
+echo "Using ARKVM_RUSTUP_CACHE: $host_rustup_cache"
+echo "Using ARKVM_CARGO_HOME_CACHE: $host_cargo_home_cache"
 
 docker run --rm --platform linux/amd64 \
   -v "$repo_root":/work \
   -v "$ark_src_root":/arkcompiler_runtime_core:ro \
-  -v "$repo_root/.cache/rustup":/root/.rustup \
-  -v "$repo_root/.cache/cargo-home":/root/.cargo \
+  -v "$host_rustup_cache":/root/.rustup \
+  -v "$host_cargo_home_cache":/root/.cargo \
   -e ANI_TEST_MODULE_NAME="$arkvm_test_module_name" \
   -e ANI_DEBUG_REGISTER="${ANI_DEBUG_REGISTER:-0}" \
   -w /work \
@@ -120,7 +124,7 @@ for pkg in $pkgs; do
 done
 
 find /work/examples -path "*/target/ani-ets/*.d.ets" -delete || true
-./scripts/generate_arkvm_smoke_ets.sh
+bash ./scripts/generate_arkvm_smoke_ets.sh
 
 while IFS= read -r cargo_file; do
   [[ -z "$cargo_file" ]] && continue

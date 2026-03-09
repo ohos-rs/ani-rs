@@ -162,8 +162,8 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
 /// - `#[ani(class = "MyClass")]` - Bind as class instance method
 /// - `#[ani(class = "MyClass", static)]` - Bind as class static method
 /// - `#[ani(class = "MyClass", constructor)]` - Bind as constructor
-/// - `#[ani(getter = "propertyName")]` - Bind as property getter
-/// - `#[ani(setter = "propertyName")]` - Bind as property setter
+/// - `#[ani(getter = "propertyName")]` - Reserved (currently not implemented)
+/// - `#[ani(setter = "propertyName")]` - Reserved (currently not implemented)
 ///
 /// # Initialization Function
 ///
@@ -271,10 +271,7 @@ pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// #[derive(AniClass)]
 /// #[ani(class = "Person")]
 /// struct Person {
-///     #[ani(getter, setter)]
 ///     name: String,
-///     
-///     #[ani(getter)]
 ///     age: i32,
 /// }
 /// ```

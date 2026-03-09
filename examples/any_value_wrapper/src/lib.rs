@@ -6,14 +6,18 @@ use ani_derive::ani;
 #[ani]
 pub fn dynamic_call_with_fn_args(env: &Env<'_>, func: AniRef<'_>) -> Result<bool> {
     let any = AnyValue::from_borrowed_ref(&func);
-    let result = any.call(env, FnArgs((1_i32, 2_i32)))?;
+    let arg_a = env.create_string("left")?;
+    let arg_b = env.create_string("right")?;
+    let result = any.call(env, (arg_a, arg_b))?;
     Ok(!env.is_nullish(result.as_ref())?)
 }
 
 #[ani]
 pub fn dynamic_method_call(env: &Env<'_>, obj: AniRef<'_>) -> Result<bool> {
     let any = AnyValue::from_borrowed_ref(&obj);
-    let result = any.call_method(env, "next", (1_i32,))?;
+    let method = any.get_property(env, "next")?;
+    let arg = env.create_string("step")?;
+    let result = method.call(env, (arg,))?;
     Ok(!env.is_nullish(result.as_ref())?)
 }
 

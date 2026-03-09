@@ -18,6 +18,7 @@ native function iterator_reset(ptr: long, start: int): void;
 native function serialize(ptr: long): string;
 
 
+
 loadLibrary("ani_example_interface");
 
 let __ani_fail_count: int = 0;

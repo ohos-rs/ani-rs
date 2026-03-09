@@ -58,13 +58,10 @@
 //! }
 //! ```
 
-use std::ffi::CString;
 use std::fmt;
-use std::ptr;
 
 use crate::env::Env;
 use crate::sys;
-use crate::{ani_call, ani_call_ret_before_last, ani_call_ret_result}; // macros used in create_error_object / throw_into
 
 // ============================================================================
 // Status Code
@@ -491,14 +488,24 @@ impl<S: AsRef<str>> BusinessError<S> {
             return;
         }
         let env_ref = unsafe { Env::from_raw_unchecked(env) };
-        let has_error = ani_call_ret_result!(env_ref, ExistUnhandledError, sys::ani_boolean, 0)
-            .map(|r| r != 0)
-            .unwrap_or(false);
+        let fallback_message = format!("[{}] {}", self.0.status.as_ref(), self.0.reason);
+        let has_error =
+            crate::ani_call_ret_result!(env_ref, ExistUnhandledError, sys::ani_boolean, 0)
+                .map(|r| r != 0)
+                .unwrap_or(false);
         if has_error {
             return;
         }
         if let Some(error) = unsafe { self.create_error_object(env) } {
-            let _ = ani_call!(env_ref, ThrowError, error);
+            let _ = crate::ani_call!(env_ref, ThrowError, error);
+            return;
+        }
+        if let Ok(error_string) = env_ref.create_string(&fallback_message) {
+            let _ = crate::ani_call!(
+                env_ref,
+                ThrowError,
+                error_string.into_raw() as sys::ani_error
+            );
         }
     }
 
@@ -509,64 +516,50 @@ impl<S: AsRef<str>> BusinessError<S> {
     /// The env pointer must be valid.
     unsafe fn create_error_object(self, env: *mut sys::ani_env) -> Option<sys::ani_error> {
         let env_ref = unsafe { Env::from_raw_unchecked(env) };
+        let message = format!("[{}] {}", self.0.status.as_ref(), self.0.reason);
+        let code = match self.0.status.as_ref() {
+            "InvalidType" => 401,
+            "OutOfRange" => 10200001,
+            _ => 1,
+        };
 
-        let class_descriptor = CString::new("Lescompat/BusinessError;").ok()?;
-        let err_cls: sys::ani_class = ani_call_ret_result!(
-            env_ref,
-            FindClass,
-            sys::ani_class,
-            ptr::null_mut(),
-            class_descriptor.as_ptr()
-        )
-        .ok()?;
-        if err_cls.is_null() {
-            return None;
+        for (class_name, error_name) in [
+            ("@ohos.base.BusinessError", "BusinessError"),
+            ("escompat.Error", "Error"),
+        ] {
+            let err_cls = match env_ref.find_class(class_name) {
+                Ok(cls) => cls,
+                Err(_) => continue,
+            };
+            let err_ctor = match env_ref.find_constructor(&err_cls, ":") {
+                Ok(ctor) => ctor,
+                Err(_) => continue,
+            };
+            let err_obj = match env_ref.new_object(&err_cls, &err_ctor, &[]) {
+                Ok(obj) => obj,
+                Err(_) => continue,
+            };
+
+            let name = match env_ref.create_string(error_name) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let text = match env_ref.create_string(&message) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let name_ref =
+                unsafe { crate::types::AniRef::from_raw(name.into_raw() as sys::ani_ref) };
+            let text_ref =
+                unsafe { crate::types::AniRef::from_raw(text.into_raw() as sys::ani_ref) };
+
+            let _ = env_ref.set_property_by_name_ref(&err_obj, "name", &name_ref);
+            let _ = env_ref.set_property_by_name_ref(&err_obj, "message", &text_ref);
+            let _ = env_ref.set_property_by_name_int(&err_obj, "code", code);
+            return Some(err_obj.into_raw() as sys::ani_error);
         }
 
-        let ctor_name = CString::new("<ctor>").ok()?;
-        let err_ctor: sys::ani_method = ani_call_ret_result!(
-            env_ref,
-            Class_FindMethod,
-            sys::ani_method,
-            ptr::null_mut(),
-            err_cls,
-            ctor_name.as_ptr(),
-            ptr::null()
-        )
-        .ok()?;
-        if err_ctor.is_null() {
-            return None;
-        }
-
-        let message = self.0.reason.clone();
-        let msg_string: sys::ani_string = ani_call_ret_result!(
-            env_ref,
-            String_NewUTF8,
-            sys::ani_string,
-            ptr::null_mut(),
-            message.as_ptr() as *const i8,
-            message.len()
-        )
-        .ok()?;
-        if msg_string.is_null() {
-            return None;
-        }
-
-        let err_obj: sys::ani_object = ani_call_ret_before_last!(
-            env_ref,
-            Object_New,
-            sys::ani_object,
-            ptr::null_mut(),
-            err_cls,
-            err_ctor,
-            msg_string
-        )
-        .ok()?;
-        if err_obj.is_null() {
-            return None;
-        }
-
-        Some(err_obj as sys::ani_error)
+        None
     }
 }
 

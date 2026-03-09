@@ -376,12 +376,12 @@ impl<'env> Boxable<'env> for i32 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Int;"
+        "std.core.Int"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
         let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, "I:V")?;
+        let ctor = env.find_constructor(&class, "i:")?;
         let args = [ani_value_int(self)];
         env.new_object(&class, &ctor, &args[..])
     }
@@ -391,12 +391,12 @@ impl<'env> Boxable<'env> for i64 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Long;"
+        "std.core.Long"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
         let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, "J:V")?;
+        let ctor = env.find_constructor(&class, "l:")?;
         let args = [ani_value_long(self)];
         env.new_object(&class, &ctor, &args[..])
     }
@@ -406,12 +406,12 @@ impl<'env> Boxable<'env> for f64 {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Double;"
+        "std.core.Double"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
         let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, "D:V")?;
+        let ctor = env.find_constructor(&class, "d:")?;
         let args = [ani_value_double(self)];
         env.new_object(&class, &ctor, &args[..])
     }
@@ -421,12 +421,12 @@ impl<'env> Boxable<'env> for bool {
     type Boxed = AniObject<'env>;
 
     fn box_class_descriptor() -> &'static str {
-        "Lstd/core/Boolean;"
+        "std.core.Boolean"
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
         let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, "Z:V")?;
+        let ctor = env.find_constructor(&class, "z:")?;
         let args = [ani_value_boolean(self)];
         env.new_object(&class, &ctor, &args[..])
     }

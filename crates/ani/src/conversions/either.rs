@@ -129,14 +129,9 @@ macro_rules! either_n {
             type Input = sys::ani_object;
 
             fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-                if value.is_null() {
-                    return Err(Error::new(
-                        Status::InvalidArgs,
-                        concat!("Null object for ", stringify!($either_name))
-                    ));
-                }
-
-                // Try each variant in order - validation first, then conversion
+                // Try each variant in order - validation first, then conversion.
+                // This allows explicit `Null` / `Undefined` variants to participate
+                // instead of being rejected up front as a raw nullish reference.
                 $(
                     if $variant::validate(env, value) {
                         if let Ok(v) = $variant::from_ani_object(env, value) {
@@ -283,7 +278,7 @@ impl<'env> ValidateFromAni<'env> for String {
 
         let obj = unsafe { AniObject::from_raw(value) };
 
-        if let Ok(cls) = env.find_class("Lstd/core/String;") {
+        if let Ok(cls) = env.find_class("std.core.String") {
             if env.object_instance_of(&obj, &cls).unwrap_or(false) {
                 return true;
             }

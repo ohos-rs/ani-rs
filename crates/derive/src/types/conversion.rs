@@ -24,18 +24,22 @@ pub fn rust_type_to_ani_type(ty: &Type) -> TokenStream {
 // ============================================================================
 
 /// Generate parameter conversion code for function arguments
-pub fn generate_param_conversions(params: &[&FnArg]) -> TokenStream {
+pub fn generate_param_conversions(params: &[&FnArg], on_error_return: &TokenStream) -> TokenStream {
     let conversions: Vec<TokenStream> = params
         .iter()
         .enumerate()
-        .map(|(i, param)| generate_single_param_conversion(i, param))
+        .map(|(i, param)| generate_single_param_conversion(i, param, on_error_return))
         .collect();
 
     quote! { #(#conversions)* }
 }
 
 /// Generate conversion code for a single parameter
-fn generate_single_param_conversion(index: usize, param: &FnArg) -> TokenStream {
+fn generate_single_param_conversion(
+    index: usize,
+    param: &FnArg,
+    on_error_return: &TokenStream,
+) -> TokenStream {
     let FnArg::Typed(pat_type) = param else {
         return quote! {};
     };
@@ -45,7 +49,7 @@ fn generate_single_param_conversion(index: usize, param: &FnArg) -> TokenStream 
     let ty = &pat_type.ty;
     let ani_type = AniType::from_syn_type(ty);
 
-    generate_type_conversion(&param_name, &converted_name, ty, &ani_type)
+    generate_type_conversion(&param_name, &converted_name, ty, &ani_type, on_error_return)
 }
 
 /// Extract parameter name from pattern
@@ -63,45 +67,61 @@ fn generate_type_conversion(
     converted_name: &Ident,
     ty: &Type,
     ani_type: &AniType,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
     match ani_type {
         // Primitives - direct pass-through (except bool)
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
 
         // String types
-        AniType::String(s) => generate_string_type_conversion(param_name, converted_name, s),
+        AniType::String(s) => {
+            generate_string_type_conversion(param_name, converted_name, s, on_error_return)
+        }
 
-        // AniObject and handle-like types - use FromAni for strong typing
-        AniType::AniObject => generate_generic_from_ani_conversion(param_name, converted_name, ty),
+        // AniObject and nullish singleton handle-like types - use FromAni for strong typing
+        AniType::AniObject | AniType::Null | AniType::Undefined => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
+        }
 
-        // Option<T>
-        AniType::Wrapper(WrapperType::Option(inner)) => {
-            generate_option_conversion(param_name, converted_name, inner.as_ref())
+        // Option<T> - delegate to the typed runtime conversion instead of
+        // synthesizing partially-typed nullable handling in the macro.
+        AniType::Wrapper(WrapperType::Option(_)) => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
         }
 
         // Either types
-        AniType::Either(_) => generate_either_conversion(param_name, converted_name, ty),
+        AniType::Either(_) => {
+            generate_either_conversion(param_name, converted_name, ty, on_error_return)
+        }
 
         // Function types
-        AniType::Function(func_type) => {
-            generate_function_type_conversion(param_name, converted_name, ty, func_type)
-        }
+        AniType::Function(func_type) => generate_function_type_conversion(
+            param_name,
+            converted_name,
+            ty,
+            func_type,
+            on_error_return,
+        ),
 
         // Ref<T> types
         AniType::Wrapper(WrapperType::Ref(_)) => {
-            generate_ref_conversion(param_name, converted_name, ty)
+            generate_ref_conversion(param_name, converted_name, ty, on_error_return)
         }
 
         // ArrayBuffer / ArrayBufferSlice - from_ani(ani_arraybuffer)
         AniType::ArrayBuffer => {
-            generate_arraybuffer_param_conversion(param_name, converted_name, ty)
+            generate_arraybuffer_param_conversion(param_name, converted_name, ty, on_error_return)
         }
 
         // Record<string, V> - use FromAni on typed Rust container (e.g. HashMap<String, V>)
-        AniType::Record(_) => generate_generic_from_ani_conversion(param_name, converted_name, ty),
+        AniType::Record(_) => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
+        }
 
         // Unknown/custom types - fallback to FromAni
-        AniType::Unknown(_) => generate_generic_from_ani_conversion(param_name, converted_name, ty),
+        AniType::Unknown(_) => {
+            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
+        }
 
         // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
@@ -135,77 +155,31 @@ fn generate_string_type_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     string_type: &StringType,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     match string_type {
         StringType::String => quote! {
             let #converted_name = {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
                 let ani_str = ani::types::AniString::from_raw(#param_name);
-                env_wrapper.get_string(&ani_str).unwrap_or_default()
+                match env_wrapper.get_string(&ani_str) {
+                    Ok(value) => value,
+                    Err(e) => { #on_error }
+                }
             };
         },
         StringType::Str => quote! {
             let #converted_name = {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
                 let ani_str = ani::types::AniString::from_raw(#param_name);
-                env_wrapper.get_string(&ani_str).unwrap_or_default()
+                match env_wrapper.get_string(&ani_str) {
+                    Ok(value) => value,
+                    Err(e) => { #on_error }
+                }
             };
             let #converted_name = #converted_name.as_str();
         },
-    }
-}
-
-/// Generate Option<T> conversion code
-fn generate_option_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    inner_type: &AniType,
-) -> TokenStream {
-    match inner_type {
-        AniType::String(StringType::String) => quote! {
-            let #converted_name: Option<String> = {
-                if #param_name.is_null() {
-                    None
-                } else {
-                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                    let ani_str = ani::types::AniString::from_raw(#param_name);
-                    env_wrapper.get_string(&ani_str).ok()
-                }
-            };
-        },
-        AniType::Primitive(p) => generate_option_unbox_conversion(param_name, converted_name, p),
-        _ => quote! {
-            let #converted_name = {
-                if #param_name.is_null() {
-                    None
-                } else {
-                    Some(#param_name)
-                }
-            };
-        },
-    }
-}
-
-/// Generate Option<T> unbox conversion for primitive types
-fn generate_option_unbox_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    primitive: &PrimitiveType,
-) -> TokenStream {
-    let rust_type_str = primitive.rust_type_str();
-    let rust_type: syn::Type =
-        syn::parse_str(rust_type_str).unwrap_or_else(|_| syn::parse_quote!(i32));
-
-    quote! {
-        let #converted_name: Option<#rust_type> = {
-            if #param_name.is_null() {
-                None
-            } else {
-                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                let obj = ani::types::AniObject::from_raw(#param_name);
-                ani::conversions::Unboxable::unbox(&env_wrapper, &obj).ok()
-            }
-        };
     }
 }
 
@@ -214,12 +188,16 @@ fn generate_either_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     ty: &Type,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name)
-                .expect("Failed to convert Either type")
+            match ani::conversions::FromAni::from_ani(&env_wrapper, #param_name) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
         };
     }
 }
@@ -230,32 +208,55 @@ fn generate_function_type_conversion(
     converted_name: &Ident,
     ty: &Type,
     func_type: &FunctionType,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     match func_type {
         FunctionType::Function { .. } => quote! {
             let #converted_name: #ty = {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
-                    .expect("Failed to convert Function type")
+                match ani::conversions::FromAni::from_ani(
+                    &env_wrapper,
+                    #param_name as ani::sys::ani_fn_object,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => { #on_error }
+                }
             };
         },
         FunctionType::FunctionRef { .. } => quote! {
             let #converted_name: #ty = {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_fn_object)
-                    .expect("Failed to convert FunctionRef type")
+                match ani::conversions::FromAni::from_ani(
+                    &env_wrapper,
+                    #param_name as ani::sys::ani_fn_object,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => { #on_error }
+                }
             };
         },
     }
 }
 
 /// Generate Ref<T> type conversion code
-fn generate_ref_conversion(param_name: &Ident, converted_name: &Ident, ty: &Type) -> TokenStream {
+fn generate_ref_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+    on_error_return: &TokenStream,
+) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_object)
-                .expect("Failed to convert Ref type")
+            match ani::conversions::FromAni::from_ani(
+                &env_wrapper,
+                #param_name as ani::sys::ani_object,
+            ) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
         };
     }
 }
@@ -265,12 +266,19 @@ fn generate_arraybuffer_param_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     ty: &Type,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(&env_wrapper, #param_name as ani::sys::ani_arraybuffer)
-                .expect("Failed to convert ArrayBuffer type")
+            match ani::conversions::FromAni::from_ani(
+                &env_wrapper,
+                #param_name as ani::sys::ani_arraybuffer,
+            ) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
         };
     }
 }
@@ -280,16 +288,36 @@ fn generate_generic_from_ani_conversion(
     param_name: &Ident,
     converted_name: &Ident,
     ty: &Type,
+    on_error_return: &TokenStream,
 ) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            ani::conversions::FromAni::from_ani(
+            match ani::conversions::FromAni::from_ani(
                 &env_wrapper,
                 #param_name as <#ty as ani::conversions::FromAni<'_>>::Input,
-            )
-                .expect("Failed to convert ANI value")
+            ) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
         };
+    }
+}
+
+fn generate_param_conversion_error(on_error_return: &TokenStream) -> TokenStream {
+    quote! {
+        let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        #on_error_return
+    }
+}
+
+fn generate_return_conversion_error(on_error_return: TokenStream) -> TokenStream {
+    quote! {
+        let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        #on_error_return
     }
 }
 
@@ -330,13 +358,12 @@ fn generate_return_conversion_for_type(ani_type: &AniType, original_ty: &Type) -
 
 /// Generate return conversion for Result<PromiseRaw, E>
 fn generate_result_promise_return_conversion() -> TokenStream {
+    let on_error = generate_return_conversion_error(quote! { std::ptr::null_mut() });
     quote! {
         match result {
             Ok(promise) => promise.into_raw(),
             Err(e) => {
-                let biz_err: ::ani::error::BusinessError = e.into();
-                unsafe { biz_err.throw_into(env) };
-                std::ptr::null_mut()
+                #on_error
             }
         }
     }
@@ -344,6 +371,7 @@ fn generate_result_promise_return_conversion() -> TokenStream {
 
 /// Generate return conversion for simple types
 fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> TokenStream {
+    let on_null_error = generate_return_conversion_error(quote! { std::ptr::null_mut() });
     match ani_type {
         // Numeric primitives - direct return
         AniType::Primitive(p) => match p {
@@ -360,7 +388,7 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match env_wrapper.create_string(&result) {
                 Ok(s) => s.into_raw(),
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
             }
         },
 
@@ -372,7 +400,7 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
                 Ok(ab) => ab,
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
             }
         },
 
@@ -381,7 +409,15 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
                 Ok(obj) => obj,
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
+            }
+        },
+
+        AniType::Null | AniType::Undefined => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
+                Ok(obj) => obj,
+                Err(e) => { #on_null_error }
             }
         },
 
@@ -390,7 +426,7 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
                 Ok(obj) => obj.into_raw(),
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
             }
         },
 
@@ -418,7 +454,7 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
                     let env_wrapper = ani::env::Env::from_raw_unchecked(env);
                     match ani::conversions::ToAni::to_ani(result, &env_wrapper) {
                         Ok(obj) => obj,
-                        Err(_) => std::ptr::null_mut()
+                        Err(e) => { #on_null_error }
                     }
                 }
             } else {
@@ -430,12 +466,15 @@ fn generate_simple_return_conversion(ani_type: &AniType, original_ty: &Type) -> 
 
 /// Generate return conversion for Result<T, E>
 fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
+    let on_null_error = generate_return_conversion_error(quote! { std::ptr::null_mut() });
+    let on_default_error = generate_return_conversion_error(quote! { Default::default() });
+
     let ok_conversion = match ok_type {
         AniType::String(StringType::String) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match env_wrapper.create_string(&val) {
                 Ok(s) => s.into_raw(),
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
             }
         },
         AniType::Primitive(PrimitiveType::Bool) => quote! { if val { 1 } else { 0 } },
@@ -448,21 +487,28 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
                 Ok(ab) => ab,
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
             }
         },
         AniType::Record(_) => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
                 Ok(obj) => obj.into_raw(),
-                Err(_) => std::ptr::null_mut()
+                Err(e) => { #on_null_error }
+            }
+        },
+        AniType::Null | AniType::Undefined => quote! {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
+                Ok(v) => v,
+                Err(e) => { #on_null_error }
             }
         },
         _ => quote! {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);
             match ani::conversions::ToAni::to_ani(val, &env_wrapper) {
                 Ok(v) => v,
-                Err(_) => Default::default()
+                Err(e) => { #on_default_error }
             }
         },
     };
@@ -471,10 +517,86 @@ fn generate_result_return_conversion(ok_type: &AniType) -> TokenStream {
         match result {
             Ok(val) => { #ok_conversion },
             Err(e) => {
-                let biz_err: ::ani::error::BusinessError = e.into();
-                unsafe { biz_err.throw_into(env) };
-                Default::default()
+                #on_default_error
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+    use syn::parse_quote;
+
+    #[test]
+    fn param_conversion_either_uses_throw_not_expect() {
+        let arg: FnArg = parse_quote!(value: Either<String, i32>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains("expect"));
+    }
+
+    #[test]
+    fn param_conversion_unknown_uses_throw_not_expect() {
+        let arg: FnArg = parse_quote!(variable: AniVariable);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains("expect"));
+    }
+
+    #[test]
+    fn param_conversion_string_uses_throw_not_default() {
+        let arg: FnArg = parse_quote!(name: String);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains("unwrap_or_default"));
+    }
+
+    #[test]
+    fn param_conversion_option_unbox_uses_throw_not_ok() {
+        let arg: FnArg = parse_quote!(value: Option<i32>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains(".ok()"));
+    }
+
+    #[test]
+    fn param_conversion_option_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: Option<HashMap<String, i32>>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(
+            code.contains("Option < HashMap < String , i32 > > as ani :: conversions :: FromAni")
+        );
+        assert!(code.contains("throw_error"));
+    }
+
+    #[test]
+    fn return_conversion_string_throws_on_conversion_failure() {
+        let output: ReturnType = parse_quote!(-> String);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains("Err (_) => std :: ptr :: null_mut ()"));
+    }
+
+    #[test]
+    fn result_return_conversion_throws_on_ok_conversion_failure() {
+        let output: ReturnType = parse_quote!(-> Result<HashMap<String, i32>, ani::Error>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("throw_error"));
+        assert!(!code.contains("Err (_) => Default :: default ()"));
+    }
+
+    #[test]
+    fn explicit_nullish_param_conversion_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: Undefined);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("Undefined as ani :: conversions :: FromAni"));
     }
 }

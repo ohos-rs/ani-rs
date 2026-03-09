@@ -7,6 +7,7 @@ native function compare_references(lhs: Object, rhs: Object): boolean;
 native function use_reference_scope(local_ref: Object): void;
 
 
+
 loadLibrary("ani_example_reference_scope");
 
 let __ani_fail_count: int = 0;

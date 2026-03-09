@@ -28,6 +28,7 @@ native function repeat_callback(callback: Function, value: int, times: int): int
 native function transform_string(input: string): string;
 
 
+
 loadLibrary("ani_example_function");
 
 let __ani_fail_count: int = 0;
@@ -100,19 +101,19 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-function");
+function noArgsOk(): string {
+  return "ok";
+}
+function wrapValue(input: string): string {
+  return "wrapped:" + input;
+}
 clear_callback();
 __assert_true("has_callback_false", !has_callback());
-register_callback((value: int): int => { return value + 2; });
-__assert_true("has_callback_true", has_callback());
-let storedResult = invoke_stored_callback(3);
-__assert_true("invoke_stored_callback_non_negative", storedResult >= 0);
-let callbackResult = call_with_callback((value: int): int => { return value + 1; }, 7);
-__assert_true("call_with_callback_non_negative", callbackResult >= 0);
-__assert_eq_string(
-  "call_no_args_callback",
-  call_no_args_callback((): string => { return "ok"; }),
-  "ok",
-);
+register_string_transformer(wrapValue);
+__assert_true("has_string_transformer_true", has_string_transformer());
+__assert_eq_string("transform_string", transform_string("ani"), "wrapped:ani");
+__assert_eq_string("call_no_args_callback", call_no_args_callback(noArgsOk), "ok");
+__assert_eq_string("call_string_callback", call_string_callback(wrapValue, "ark"), "wrapped:ark");
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

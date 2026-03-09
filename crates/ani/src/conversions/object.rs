@@ -1,9 +1,9 @@
 //! Object Type Conversion
 //!
-//! Implements conversion between Rust custom structs and ANI object types
+//! Implements conversion between Rust custom structs and ANI object types.
 
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Status};
 use crate::sys;
 use crate::types::*;
 
@@ -79,6 +79,168 @@ macro_rules! impl_opaque_handle_conversion {
             }
         }
     };
+}
+
+// ============================================================================
+// Generic custom-object field access
+// ============================================================================
+
+/// Named field access used by `#[ani(object)]` generated structs.
+///
+/// `#[ani(object)]` follows nominal ArkTS class semantics. Field conversion is
+/// performed through ANI object field APIs instead of dynamic `Any` access.
+pub trait ObjectField<'env>: Sized {
+    /// Read a named field from an ANI object.
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self>;
+
+    /// Write a named field to an ANI object.
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()>;
+}
+
+trait IntoFieldRef<'env> {
+    fn into_field_ref(self) -> AniRef<'env>;
+}
+
+trait FromFieldRefInput<'env>: Sized {
+    fn from_field_ref(value: AniRef<'env>) -> Self;
+}
+
+impl<'env> IntoFieldRef<'env> for AniRef<'env> {
+    fn into_field_ref(self) -> AniRef<'env> {
+        self
+    }
+}
+
+impl<'env> IntoFieldRef<'env> for AniObject<'env> {
+    fn into_field_ref(self) -> AniRef<'env> {
+        unsafe { AniRef::from_raw(self.into_raw() as sys::ani_ref) }
+    }
+}
+
+impl<'env> IntoFieldRef<'env> for AniString<'env> {
+    fn into_field_ref(self) -> AniRef<'env> {
+        unsafe { AniRef::from_raw(self.into_raw() as sys::ani_ref) }
+    }
+}
+
+impl<'env> IntoFieldRef<'env> for sys::ani_ref {
+    fn into_field_ref(self) -> AniRef<'env> {
+        unsafe { AniRef::from_raw(self) }
+    }
+}
+
+impl<'env> FromFieldRefInput<'env> for AniRef<'env> {
+    fn from_field_ref(value: AniRef<'env>) -> Self {
+        value
+    }
+}
+
+impl<'env> FromFieldRefInput<'env> for AniObject<'env> {
+    fn from_field_ref(value: AniRef<'env>) -> Self {
+        unsafe { AniObject::from_raw(value.into_raw() as sys::ani_object) }
+    }
+}
+
+impl<'env> FromFieldRefInput<'env> for AniString<'env> {
+    fn from_field_ref(value: AniRef<'env>) -> Self {
+        unsafe { AniString::from_raw(value.into_raw() as sys::ani_string) }
+    }
+}
+
+impl<'env> FromFieldRefInput<'env> for sys::ani_ref {
+    fn from_field_ref(value: AniRef<'env>) -> Self {
+        value.into_raw()
+    }
+}
+
+macro_rules! impl_object_field_primitive {
+    ($ty:ty, $getter:ident, $setter:ident) => {
+        impl<'env> ObjectField<'env> for $ty {
+            fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+                env.$getter(obj, name)
+            }
+
+            fn set_named_field(
+                self,
+                env: &Env<'env>,
+                obj: &AniObject<'_>,
+                name: &str,
+            ) -> Result<()> {
+                env.$setter(obj, name, self)
+            }
+        }
+    };
+}
+
+impl_object_field_primitive!(bool, get_field_by_name_boolean, set_field_by_name_boolean);
+impl_object_field_primitive!(i8, get_field_by_name_byte, set_field_by_name_byte);
+impl_object_field_primitive!(i16, get_field_by_name_short, set_field_by_name_short);
+impl_object_field_primitive!(u16, get_field_by_name_char, set_field_by_name_char);
+impl_object_field_primitive!(i32, get_field_by_name_int, set_field_by_name_int);
+impl_object_field_primitive!(i64, get_field_by_name_long, set_field_by_name_long);
+impl_object_field_primitive!(f32, get_field_by_name_float, set_field_by_name_float);
+impl_object_field_primitive!(f64, get_field_by_name_double, set_field_by_name_double);
+
+impl<'env> ObjectField<'env> for u8 {
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i8::get_named_field(env, obj, name)? as u8)
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i8).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectField<'env> for u32 {
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i32::get_named_field(env, obj, name)? as u32)
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i32).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectField<'env> for u64 {
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i64::get_named_field(env, obj, name)? as u64)
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i64).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectField<'env> for char {
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = u16::get_named_field(env, obj, name)?;
+        char::from_u32(value as u32)
+            .ok_or_else(|| Error::new(Status::InvalidType, format!("Invalid char field: {name}")))
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as u16).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env, T> ObjectField<'env> for T
+where
+    T: ToAni<'env> + FromAni<'env>,
+    <T as ToAni<'env>>::Output: IntoFieldRef<'env>,
+    <T as FromAni<'env>>::Input: FromFieldRefInput<'env>,
+{
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = env.get_field_by_name_ref(obj, name)?;
+        T::from_ani(
+            env,
+            <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
+        )
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        let value = self.to_ani(env)?.into_field_ref();
+        env.set_field_by_name_ref(obj, name, &value)
+    }
 }
 
 // ============================================================================
@@ -360,7 +522,7 @@ impl<T> NativePointer<T> {
 impl<T> TypeInfo for NativePointer<T> {
     fn type_signature() -> &'static str {
         "J"
-    } // passed as long
+    }
     fn ani_c_type() -> &'static str {
         "ani_long"
     }

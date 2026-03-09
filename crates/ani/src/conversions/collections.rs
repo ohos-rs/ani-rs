@@ -102,8 +102,8 @@ where
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let record_class = env.find_class("Lstd/core/Record;")?;
-        let ctor = env.find_constructor(&record_class, ":V")?;
+        let record_class = env.find_class("std.core.Record")?;
+        let ctor = env.find_constructor(&record_class, ":")?;
         let record = env.new_object(&record_class, &ctor, &[])?;
         let record_ref = unsafe { AniRef::from_raw(record.as_raw() as sys::ani_ref) };
 
@@ -169,11 +169,11 @@ impl<'env> ToAni<'env> for HashSet<String> {
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let set_class = env.find_class("Lescompat/Set;")?;
-        let ctor = env.find_constructor(&set_class, ":V")?;
+        let set_class = env.find_class("escompat.Set")?;
+        let ctor = env.find_constructor(&set_class, ":")?;
         let set = env.new_object(&set_class, &ctor, &[])?;
 
-        let add_method = env.find_method(&set_class, "add", "Lstd/core/Object;:V")?;
+        let add_method = env.find_method(&set_class, "add", "C{std.core.Object}:")?;
 
         for item in self {
             let ani_item = env.create_string(&item)?;

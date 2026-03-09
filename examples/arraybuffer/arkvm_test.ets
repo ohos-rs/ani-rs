@@ -10,6 +10,7 @@ native function process_buffer(buf: ArrayBuffer): int;
 native function sum_bytes(buf: ArrayBuffer): long;
 
 
+
 loadLibrary("ani_example_arraybuffer");
 
 let __ani_fail_count: int = 0;

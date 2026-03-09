@@ -308,32 +308,32 @@ use crate::types::{AniObject, ani_value_boolean, ani_value_double, ani_value_int
 
 /// Create a boxed Int value
 fn create_boxed_int<'a>(env: &Env<'a>, value: i32) -> Result<AniObject<'a>> {
-    let int_class = env.find_class("Lstd/core/Int;")?;
-    let ctor = env.find_method(&int_class, "<ctor>", "I:V")?;
+    let int_class = env.find_class("std.core.Int")?;
+    let ctor = env.find_constructor(&int_class, "i:")?;
     let args = [ani_value_int(value)];
     env.new_object(&int_class, &ctor, &args)
 }
 
 /// Create a boxed Long value
 fn create_boxed_long<'a>(env: &Env<'a>, value: i64) -> Result<AniObject<'a>> {
-    let long_class = env.find_class("Lstd/core/Long;")?;
-    let ctor = env.find_method(&long_class, "<ctor>", "J:V")?;
+    let long_class = env.find_class("std.core.Long")?;
+    let ctor = env.find_constructor(&long_class, "l:")?;
     let args = [ani_value_long(value)];
     env.new_object(&long_class, &ctor, &args)
 }
 
 /// Create a boxed Double value
 fn create_boxed_double<'a>(env: &Env<'a>, value: f64) -> Result<AniObject<'a>> {
-    let double_class = env.find_class("Lstd/core/Double;")?;
-    let ctor = env.find_method(&double_class, "<ctor>", "D:V")?;
+    let double_class = env.find_class("std.core.Double")?;
+    let ctor = env.find_constructor(&double_class, "d:")?;
     let args = [ani_value_double(value)];
     env.new_object(&double_class, &ctor, &args)
 }
 
 /// Create a boxed Boolean value
 fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>> {
-    let boolean_class = env.find_class("Lstd/core/Boolean;")?;
-    let ctor = env.find_method(&boolean_class, "<ctor>", "Z:V")?;
+    let boolean_class = env.find_class("std.core.Boolean")?;
+    let ctor = env.find_constructor(&boolean_class, "z:")?;
     let args = [ani_value_boolean(value)];
     env.new_object(&boolean_class, &ctor, &args)
 }

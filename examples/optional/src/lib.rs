@@ -1,9 +1,11 @@
-//! Optional Parameter Example - Handling optional parameters
+//! Nullable Union Example - Handling `Option<T>` parameters
 //!
-//! Demonstrates how to handle ArkTS optional parameters (?)
-//! Uses generic Option<T> implementation, all types implementing ToAni/FromAni support Option
+//! Demonstrates how `Option<T>` is exported to ArkTS nullable unions (`T | null`).
+//! This is not the same as an optional parameter (`param?: T`) and does not imply
+//! that the argument may be omitted at the call site.
 //!
-//! Note: Optional primitive types are automatically boxed, e.g., int? -> Lstd/core/Int;
+//! Primitive `Option<T>` values use boxed ArkTS wrapper classes, for example
+//! `Option<i32>` becomes `Int | null`.
 
 use ani_derive::ani;
 
@@ -15,11 +17,11 @@ use ani_derive::ani;
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalInt(required: int, optional?: int): int;
+/// native function with_optional_int(required: int, optional: Int | null): int;
 /// ```
 ///
-/// Mangling: ILstd/core/Int;:I
-/// Option<i32> automatically handles boxed Int, None represents null
+/// Mangling: X{C{std.core.Int}C{std.core.Null}}:I
+/// `None` maps to `null`, and `Some(i32)` maps to boxed `Int`.
 #[ani]
 pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
     match optional {
@@ -32,10 +34,10 @@ pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalDouble(required: double, optional?: double): double;
+/// native function with_optional_double(required: double, optional: Double | null): double;
 /// ```
 ///
-/// Mangling: DLstd/core/Double;:D
+/// Mangling: DX{C{std.core.Double}C{std.core.Null}}:D
 #[ani]
 pub fn with_optional_double(required: f64, optional: Option<f64>) -> f64 {
     match optional {
@@ -48,10 +50,10 @@ pub fn with_optional_double(required: f64, optional: Option<f64>) -> f64 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalBoolean(value: int, flag?: boolean): int;
+/// native function with_optional_boolean(value: int, flag: Boolean | null): int;
 /// ```
 ///
-/// Mangling: ILstd/core/Boolean;:I
+/// Mangling: IX{C{std.core.Boolean}C{std.core.Null}}:I
 #[ani]
 pub fn with_optional_boolean(value: i32, flag: Option<bool>) -> i32 {
     match flag {
@@ -68,11 +70,11 @@ pub fn with_optional_boolean(value: i32, flag: Option<bool>) -> i32 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalString(required: string, optional?: string): string;
+/// native function with_optional_string(required: string, optional: String | null): string;
 /// ```
 ///
-/// Mangling: Lstd/core/String;Lstd/core/String;:Lstd/core/String;
-/// Reference type optional parameters are not boxed, null is passed directly
+/// Mangling: Lstd/core/String;X{C{std.core.String}C{std.core.Null}}:Lstd/core/String;
+/// Reference type nullable parameters are not boxed; `None` is passed as `null`.
 #[ani]
 pub fn with_optional_string(required: String, optional: Option<String>) -> String {
     match optional {
@@ -85,19 +87,19 @@ pub fn with_optional_string(required: String, optional: Option<String>) -> Strin
 // Multiple Optional Parameters
 // ============================================================================
 
-/// Handle multiple optional parameters
+/// Handle multiple nullable parameters
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withMultipleOptional(
+/// native function with_multiple_optional(
 ///     a: int,
-///     b?: int,
-///     c?: int,
-///     d?: int
+///     b: Int | null,
+///     c: Int | null,
+///     d: Int | null
 /// ): int;
 /// ```
 ///
-/// Mangling: ILstd/core/Int;Lstd/core/Int;Lstd/core/Int;:I
+/// Mangling: IX{C{std.core.Int}C{std.core.Null}}X{C{std.core.Int}C{std.core.Null}}X{C{std.core.Int}C{std.core.Null}}:I
 #[ani]
 pub fn with_multiple_optional(a: i32, b: Option<i32>, c: Option<i32>, d: Option<i32>) -> i32 {
     a + b.unwrap_or(0) + c.unwrap_or(0) + d.unwrap_or(0)
@@ -107,11 +109,11 @@ pub fn with_multiple_optional(a: i32, b: Option<i32>, c: Option<i32>, d: Option<
 // More Type Examples - Demonstrating generic support for other types
 // ============================================================================
 
-/// Handle optional long (i64) parameter
+/// Handle nullable long (i64) parameter
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalLong(required: long, optional?: long): long;
+/// native function with_optional_long(required: long, optional: Long | null): long;
 /// ```
 #[ani]
 pub fn with_optional_long(required: i64, optional: Option<i64>) -> i64 {
@@ -121,11 +123,11 @@ pub fn with_optional_long(required: i64, optional: Option<i64>) -> i64 {
     }
 }
 
-/// Handle optional float (f32) parameter
+/// Handle nullable float (f32) parameter
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withOptionalFloat(required: float, optional?: float): float;
+/// native function with_optional_float(required: float, optional: Float | null): float;
 /// ```
 #[ani]
 pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
@@ -139,22 +141,23 @@ pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
 // Simplified Version (using macro wrapper)
 // ============================================================================
 
-/// Simplified version using macro - parameter with default value
+/// Plain required parameters example
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function withDefault(value: int, multiplier: int = 1): int;
+/// native function with_default_simple(value: int, multiplier: int): int;
 /// ```
 ///
-/// Note: Parameters with default values are handled the same as optional parameters
+/// Default values are an ArkTS-side concern. The generated native declaration still
+/// uses required parameters unless a separate wrapper is written in ArkTS.
 #[ani]
 pub fn with_default_simple(value: i32, multiplier: i32) -> i32 {
     value * multiplier
 }
 
-/// Optional parameter count
+/// Nullable parameter count
 ///
-/// Count how many non-null optional parameters
+/// Placeholder helper used by smoke tests.
 #[ani]
 pub fn count_provided_args() -> i32 {
     // This function is for demonstration purposes only
