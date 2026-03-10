@@ -6,9 +6,18 @@
 class Widget {
   native constructor(name: string, count: int);
   native describe(): string;
-  native getCount(): int;
-  native getName(): string;
-  native setCount(count: int): void;
+  native get_count(): int;
+  get count(): int {
+    return this.get_count();
+  }
+  native get_name(): string;
+  get name(): string {
+    return this.get_name();
+  }
+  native set_count(count: int): void;
+  set count(count: int) {
+    this.set_count(count);
+  }
   static native sum(a: int, b: int): int;
 }
 
@@ -87,10 +96,10 @@ function __assert_throws(name: string, fn: () => void): void {
 
 console.log("[arkvm] smoke start: ani-example-impl-block");
 let widget = new Widget("impl", 2);
-__assert_eq_string("Widget.getName", widget.getName(), "impl");
-__assert_eq_int("Widget.getCount", widget.getCount(), 2);
-widget.setCount(5);
-__assert_eq_int("Widget.getCount_after_set", widget.getCount(), 5);
+__assert_eq_string("Widget.name", widget.name, "impl");
+__assert_eq_int("Widget.count", widget.count, 2);
+widget.count = 5;
+__assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(impl, 5)");
 __assert_eq_int("Widget.sum", Widget.sum(2, 4), 6);
 

@@ -4,15 +4,48 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Type};
+use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
 use crate::codegen::{RegisterTarget, generate_register_fn, generate_wrapper, has_this_injection};
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    EtsDeclKind, class_to_descriptor, current_module_name, emit_compile_ets_decl,
-    generate_ctor_ets_decl, generate_ctor_signature, generate_fn_ets_decl, generate_fn_signature,
+    EtsDeclKind, class_to_descriptor, current_module_name, emit_compile_ets_class_member,
+    emit_compile_ets_decl, emit_compile_ets_rendered_decl, function_requires_nullish_bridge,
+    generate_ctor_ets_decl, generate_ctor_signature, generate_fn_ets_binding,
+    generate_fn_signature, generate_getter_ets_decl, generate_setter_ets_decl,
     module_to_descriptor, namespace_to_descriptor, qualify_member_descriptor,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EtsBindingTarget {
+    pub kind: EtsDeclKind,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EtsBindingEmission {
+    Plain {
+        target: EtsBindingTarget,
+        signature: String,
+        is_static: bool,
+    },
+    Rendered {
+        target: EtsBindingTarget,
+        rendered: String,
+    },
+    ClassMember {
+        target: String,
+        rendered: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BindingPlan {
+    pub register_symbol_name: String,
+    pub signature: String,
+    pub register_target: RegisterTarget,
+    pub ets: EtsBindingEmission,
+}
 
 /// Expand `#[ani]` for functions
 pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
@@ -32,15 +65,6 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let func_name_str = func_name.to_string();
     let is_constructor = attrs.constructor;
     let is_class_method = attrs.class.is_some();
-
-    // Determine ArkTS function name.
-    // Keep Rust naming by default to avoid unexpected renaming in generated ETS.
-    let ets_name = attrs.name.clone().unwrap_or_else(|| func_name.to_string());
-    let register_symbol_name = if is_constructor {
-        "<ctor>".to_string()
-    } else {
-        ets_name.clone()
-    };
 
     // Check if function has self parameter (instance method)
     let has_self = func
@@ -65,36 +89,18 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     // by `should_skip_in_signature`.
     let skip_first = has_self;
 
-    // Generate signature
-    // Note: generate_fn_signature automatically skips injected parameters (Env, This, Class).
-    let signature = attrs.signature.clone().unwrap_or_else(|| {
-        if is_constructor {
-            generate_ctor_signature(&func.sig, skip_first)
-        } else {
-            generate_fn_signature(&func.sig, skip_first)
-        }
-    });
-    let ets_signature = if is_constructor {
-        generate_ctor_ets_decl(&func.sig, skip_first)
-    } else {
-        generate_fn_ets_decl(&func.sig, &ets_name, skip_first)
+    let binding = match resolve_binding_plan(
+        &attrs,
+        &func_name.to_string(),
+        &func.sig,
+        is_static,
+        is_constructor,
+        skip_first,
+    ) {
+        Ok(binding) => binding,
+        Err(err) => return err.to_compile_error(),
     };
-
-    let (ets_kind, ets_target) = if let Some(class) = attrs.class.as_deref() {
-        (EtsDeclKind::Class, class.to_string())
-    } else if let Some(namespace) = attrs.namespace.as_deref() {
-        (EtsDeclKind::Namespace, namespace.to_string())
-    } else if let Some(module) = attrs.module.as_deref() {
-        if module.is_empty() {
-            (EtsDeclKind::Global, String::new())
-        } else {
-            (EtsDeclKind::Namespace, module.to_string())
-        }
-    } else {
-        (EtsDeclKind::Global, String::new())
-    };
-
-    emit_compile_ets_decl(ets_kind, &ets_target, &ets_signature, is_static);
+    emit_binding_plan_ets(&binding);
 
     // Generate wrapper function name
     let wrapper_name = format_ident!("__ani_native_{}", func_name);
@@ -105,12 +111,11 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let wrapper = generate_wrapper(&func, &wrapper_name, is_class_method, is_static);
 
     // Generate registration function based on target
-    let register_target = resolve_register_target(&attrs, is_static);
     let register_fn = generate_register_fn(
         &register_name,
-        &register_target,
-        &register_symbol_name,
-        &signature,
+        &binding.register_target,
+        &binding.register_symbol_name,
+        &binding.signature,
         &wrapper_name,
     );
 
@@ -184,13 +189,6 @@ pub(crate) fn validate_unsupported_bind_attrs(
     attrs: &BindgenAttrs,
     func: &ItemFn,
 ) -> syn::Result<()> {
-    if attrs.getter.is_some() || attrs.setter.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "#[ani(getter)] / #[ani(setter)] are not implemented yet; use explicit native functions",
-        ));
-    }
-
     if attrs.is_async {
         return Err(syn::Error::new_spanned(
             &func.sig.ident,
@@ -201,7 +199,289 @@ pub(crate) fn validate_unsupported_bind_attrs(
     Ok(())
 }
 
-fn resolve_register_target(attrs: &BindgenAttrs, is_static: bool) -> RegisterTarget {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AccessorKind {
+    Getter,
+    Setter,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AccessorConfig {
+    pub kind: AccessorKind,
+    pub property_name: String,
+}
+
+pub(crate) fn resolve_accessor_config(
+    attrs: &BindgenAttrs,
+    rust_name: &str,
+    sig: &Signature,
+    is_static: bool,
+    is_constructor: bool,
+    skip_first: bool,
+) -> syn::Result<Option<AccessorConfig>> {
+    if attrs.getter.is_some() && attrs.setter.is_some() {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(getter)] and #[ani(setter)] cannot be combined on the same function",
+        ));
+    }
+
+    let (kind, explicit_name) = if let Some(name) = attrs.getter.as_ref() {
+        (AccessorKind::Getter, name.as_str())
+    } else if let Some(name) = attrs.setter.as_ref() {
+        (AccessorKind::Setter, name.as_str())
+    } else {
+        return Ok(None);
+    };
+
+    if attrs.class.is_none() || attrs.namespace.is_some() || attrs.module.is_some() {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(getter)] / #[ani(setter)] can only be used on instance methods bound to a class",
+        ));
+    }
+    if is_constructor {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(constructor)] cannot be combined with #[ani(getter)] / #[ani(setter)]",
+        ));
+    }
+    if is_static {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(getter)] / #[ani(setter)] do not support static methods",
+        ));
+    }
+
+    match kind {
+        AccessorKind::Getter => validate_getter_signature(sig, skip_first)?,
+        AccessorKind::Setter => validate_setter_signature(sig, skip_first)?,
+    }
+
+    let property_name = if explicit_name.trim().is_empty() {
+        infer_accessor_property_name(rust_name, kind)
+    } else {
+        explicit_name.trim().to_string()
+    };
+
+    Ok(Some(AccessorConfig {
+        kind,
+        property_name,
+    }))
+}
+
+pub(crate) fn resolve_binding_plan(
+    attrs: &BindgenAttrs,
+    rust_name: &str,
+    sig: &Signature,
+    is_static: bool,
+    is_constructor: bool,
+    skip_first: bool,
+) -> syn::Result<BindingPlan> {
+    let ets_name = attrs.name.clone().unwrap_or_else(|| rust_name.to_string());
+    let requires_nullish_bridge = function_requires_nullish_bridge(sig, skip_first);
+    if is_constructor && requires_nullish_bridge {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(constructor)] does not support nullish-exposed parameters yet; use explicit ArkTS wrappers instead",
+        ));
+    }
+
+    let register_symbol_name = if is_constructor {
+        "<ctor>".to_string()
+    } else if requires_nullish_bridge {
+        format!("__ani_native_{ets_name}")
+    } else {
+        ets_name.clone()
+    };
+
+    let accessor =
+        resolve_accessor_config(attrs, rust_name, sig, is_static, is_constructor, skip_first)?;
+
+    let signature = attrs.signature.clone().unwrap_or_else(|| {
+        if is_constructor {
+            generate_ctor_signature(sig, skip_first)
+        } else {
+            generate_fn_signature(sig, skip_first)
+        }
+    });
+    let ets_target = resolve_ets_binding_target(attrs);
+
+    let ets = if let Some(accessor) = &accessor {
+        EtsBindingEmission::ClassMember {
+            target: ets_target.target.clone(),
+            rendered: render_accessor_ets_decl(accessor, sig, &register_symbol_name, skip_first),
+        }
+    } else if is_constructor {
+        EtsBindingEmission::Plain {
+            target: ets_target,
+            signature: generate_ctor_ets_decl(sig, skip_first),
+            is_static,
+        }
+    } else {
+        EtsBindingEmission::Rendered {
+            target: ets_target.clone(),
+            rendered: generate_fn_ets_binding(
+                ets_target.kind,
+                sig,
+                &ets_name,
+                skip_first,
+                is_static,
+            ),
+        }
+    };
+
+    Ok(BindingPlan {
+        register_symbol_name,
+        signature,
+        register_target: resolve_register_target(attrs, is_static),
+        ets,
+    })
+}
+
+pub(crate) fn emit_binding_plan_ets(binding: &BindingPlan) {
+    match &binding.ets {
+        EtsBindingEmission::Plain {
+            target,
+            signature,
+            is_static,
+        } => emit_compile_ets_decl(target.kind, &target.target, signature, *is_static),
+        EtsBindingEmission::Rendered { target, rendered } => {
+            emit_compile_ets_rendered_decl(target.kind, &target.target, rendered)
+        }
+        EtsBindingEmission::ClassMember { target, rendered } => {
+            emit_compile_ets_class_member(target, rendered)
+        }
+    }
+}
+
+fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
+    if let Some(class) = attrs.class.as_deref() {
+        EtsBindingTarget {
+            kind: EtsDeclKind::Class,
+            target: class.to_string(),
+        }
+    } else if let Some(namespace) = attrs.namespace.as_deref() {
+        EtsBindingTarget {
+            kind: EtsDeclKind::Namespace,
+            target: namespace.to_string(),
+        }
+    } else if let Some(module) = attrs.module.as_deref() {
+        if module.is_empty() {
+            EtsBindingTarget {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+            }
+        } else {
+            EtsBindingTarget {
+                kind: EtsDeclKind::Namespace,
+                target: module.to_string(),
+            }
+        }
+    } else {
+        EtsBindingTarget {
+            kind: EtsDeclKind::Global,
+            target: String::new(),
+        }
+    }
+}
+
+fn render_accessor_ets_decl(
+    accessor: &AccessorConfig,
+    sig: &Signature,
+    backing_name: &str,
+    skip_first: bool,
+) -> String {
+    match accessor.kind {
+        AccessorKind::Getter => {
+            generate_getter_ets_decl(sig, &accessor.property_name, backing_name, skip_first)
+        }
+        AccessorKind::Setter => {
+            generate_setter_ets_decl(sig, &accessor.property_name, backing_name, skip_first)
+        }
+    }
+}
+
+fn validate_getter_signature(sig: &Signature, skip_first: bool) -> syn::Result<()> {
+    if exposed_arg_count(sig, skip_first) != 0 {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(getter)] must not expose any ArkTS parameters",
+        ));
+    }
+
+    match &sig.output {
+        ReturnType::Default => Err(syn::Error::new_spanned(
+            &sig.output,
+            "#[ani(getter)] must return a value or Result<T>",
+        )),
+        ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => {
+            Err(syn::Error::new_spanned(
+                &sig.output,
+                "#[ani(getter)] must return a value or Result<T>",
+            ))
+        }
+        ReturnType::Type(_, _) => Ok(()),
+    }
+}
+
+fn validate_setter_signature(sig: &Signature, skip_first: bool) -> syn::Result<()> {
+    if exposed_arg_count(sig, skip_first) != 1 {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[ani(setter)] must expose exactly one ArkTS parameter",
+        ));
+    }
+
+    match &sig.output {
+        ReturnType::Default => Ok(()),
+        ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => Ok(()),
+        _ => Err(syn::Error::new_spanned(
+            &sig.output,
+            "#[ani(setter)] return type must be `()` or `ani::error::Result<()>`",
+        )),
+    }
+}
+
+fn exposed_arg_count(sig: &Signature, skip_first: bool) -> usize {
+    sig.inputs
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .filter(|arg| !crate::codegen::should_skip_in_signature(arg))
+        .count()
+}
+
+fn infer_accessor_property_name(rust_name: &str, kind: AccessorKind) -> String {
+    let stripped = match kind {
+        AccessorKind::Getter => strip_accessor_prefix(rust_name, &["get_", "get"]),
+        AccessorKind::Setter => strip_accessor_prefix(rust_name, &["set_", "set"]),
+    };
+    stripped.unwrap_or_else(|| rust_name.to_string())
+}
+
+fn strip_accessor_prefix(name: &str, prefixes: &[&str]) -> Option<String> {
+    for prefix in prefixes {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if rest.is_empty() {
+                continue;
+            }
+            if *prefix == "get" || *prefix == "set" {
+                let mut chars = rest.chars();
+                let first = chars.next()?;
+                if !first.is_ascii_uppercase() {
+                    continue;
+                }
+                let mut property = first.to_ascii_lowercase().to_string();
+                property.push_str(chars.as_str());
+                return Some(property);
+            }
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+pub(crate) fn resolve_register_target(attrs: &BindgenAttrs, is_static: bool) -> RegisterTarget {
     let module_name = current_module_name();
 
     if let Some(class) = attrs.class.as_deref() {
@@ -228,7 +508,6 @@ fn resolve_register_target(attrs: &BindgenAttrs, is_static: bool) -> RegisterTar
         RegisterTarget::Module(descriptor)
     }
 }
-
 /// Expand `#[ani(init)]` for initialization functions
 pub fn expand_init(attrs: InitAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
     let init_signature = match validate_init_signature(&func) {
@@ -483,13 +762,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_getter_setter_attrs_for_now() {
+    fn binding_plan_rejects_nullish_constructor_params() {
         let attrs = BindgenAttrs {
+            constructor: true,
+            class: Some("Person".to_string()),
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn ctor(name: Option<String>)
+        };
+        assert!(resolve_binding_plan(&attrs, "ctor", &sig, false, true, false).is_err());
+    }
+
+    #[test]
+    fn getter_setter_attrs_are_not_rejected_by_unsupported_attr_validation() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
             getter: Some("value".to_string()),
             ..Default::default()
         };
         let func: ItemFn = parse_quote! { fn get_value() -> i32 { 1 } };
-        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
     }
 
     #[test]

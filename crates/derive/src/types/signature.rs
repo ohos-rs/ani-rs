@@ -302,12 +302,12 @@ mod tests {
 
     #[test]
     fn test_option_type_signature() {
-        // Option<T> is lowered to nullable union (T | null)
+        // Option<T> is lowered to nullable union (T | null) at the ANI binding layer
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Option<i32>)),
             "X{C{std.core.Int}C{std.core.Null}}"
         );
-        // Option<String> should use string | null union signature
+        // Option<String> should use string | null union signature at the binding layer
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Option<String>)),
             "X{C{std.core.String}C{std.core.Null}}"

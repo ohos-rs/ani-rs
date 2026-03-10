@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, check_status};
 use crate::sys;
 use crate::types::*;
 
@@ -95,6 +95,51 @@ impl<'env> RecordValue<'env> for AniObject<'env> {
     }
 }
 
+fn find_record_indexable_getter<'env>(env: &Env<'env>, class: &AniClass<'_>) -> Result<AniMethod> {
+    let raw = env.as_raw();
+    let mut method: sys::ani_method = std::ptr::null_mut();
+    let status = unsafe {
+        let api = &*(*raw);
+        (api.Class_FindIndexableGetter.unwrap())(raw, class.as_raw(), std::ptr::null(), &mut method)
+    };
+    check_status(status)?;
+    Ok(unsafe { AniMethod::from_raw(method) })
+}
+
+fn find_record_indexable_setter<'env>(env: &Env<'env>, class: &AniClass<'_>) -> Result<AniMethod> {
+    let raw = env.as_raw();
+    let mut method: sys::ani_method = std::ptr::null_mut();
+    let status = unsafe {
+        let api = &*(*raw);
+        (api.Class_FindIndexableSetter.unwrap())(raw, class.as_raw(), std::ptr::null(), &mut method)
+    };
+    check_status(status)?;
+    Ok(unsafe { AniMethod::from_raw(method) })
+}
+
+fn find_method_no_signature<'env>(
+    env: &Env<'env>,
+    class: &AniClass<'_>,
+    name: &str,
+) -> Result<AniMethod> {
+    let c_name = std::ffi::CString::new(name)
+        .map_err(|_| Error::new(crate::error::Status::Error, "Invalid method name"))?;
+    let raw = env.as_raw();
+    let mut method: sys::ani_method = std::ptr::null_mut();
+    let status = unsafe {
+        let api = &*(*raw);
+        (api.Class_FindMethod.unwrap())(
+            raw,
+            class.as_raw(),
+            c_name.as_ptr(),
+            std::ptr::null(),
+            &mut method,
+        )
+    };
+    check_status(status)?;
+    Ok(unsafe { AniMethod::from_raw(method) })
+}
+
 impl<'env, V> ToAni<'env> for HashMap<String, V>
 where
     V: RecordValue<'env>,
@@ -104,14 +149,18 @@ where
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let record_class = env.find_class("std.core.Record")?;
         let ctor = env.find_constructor(&record_class, ":")?;
+        let setter = find_record_indexable_setter(env, &record_class)?;
         let record = env.new_object(&record_class, &ctor, &[])?;
-        let record_ref = unsafe { AniRef::from_raw(record.as_raw() as sys::ani_ref) };
 
         for (key, value) in self {
             let ani_key = env.create_string(&key)?;
             let key_ref = unsafe { AniRef::from_raw(ani_key.as_raw() as sys::ani_ref) };
             let value_ref = value.to_record_ref(env)?;
-            env.any_set_by_value(&record_ref, &key_ref, &value_ref)?;
+            let args = [
+                ani_value_ref(key_ref.as_raw()),
+                ani_value_ref(value_ref.as_raw()),
+            ];
+            env.call_method_void(&record, &setter, &args)?;
         }
 
         Ok(record)
@@ -132,18 +181,29 @@ where
             ));
         }
 
-        let record_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
-        let keys_ref = env.any_call_method(&record_ref, "keys", &[])?;
+        let record = unsafe { AniObject::from_raw(value) };
+        let record_class = env.find_class("std.core.Record")?;
+        let getter = find_record_indexable_getter(env, &record_class)?;
+        let keys_method = find_method_no_signature(env, &record_class, "keys")?;
+        let keys_iter_ref = env.call_ref_method(&record, &keys_method, &[])?;
+        let keys_iter = unsafe { AniObject::from_raw(keys_iter_ref.as_raw() as sys::ani_object) };
+        let keys_iter_type = env.get_object_type(&keys_iter)?;
+        let keys_iter_class =
+            unsafe { AniClass::from_raw(keys_iter_type.as_raw() as sys::ani_class) };
+        let next_method = find_method_no_signature(env, &keys_iter_class, "next")?;
+        let mut out = HashMap::new();
 
-        // Record.keys() should return an array of keys.
-        let keys_array = unsafe { AniArray::from_raw(keys_ref.as_raw() as sys::ani_array) };
-        let len = env.get_array_length(&keys_array)?;
-        let mut out = HashMap::with_capacity(len);
+        loop {
+            let next_ref = env.call_ref_method(&keys_iter, &next_method, &[])?;
+            let next = unsafe { AniObject::from_raw(next_ref.as_raw() as sys::ani_object) };
+            if env.get_property_by_name_boolean(&next, "done")? {
+                break;
+            }
 
-        for i in 0..len {
-            let key_ref = env.get_array_element(&keys_array, i)?;
+            let key_ref = env.get_property_by_name_ref(&next, "value")?;
             let key = String::from_record_ref(env, &key_ref)?;
-            let value_ref = env.any_get_by_value(&record_ref, &key_ref)?;
+            let args = [ani_value_ref(key_ref.as_raw())];
+            let value_ref = env.call_ref_method(&record, &getter, &args)?;
             let value = V::from_record_ref(env, &value_ref)?;
             out.insert(key, value);
         }

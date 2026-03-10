@@ -5,19 +5,28 @@
 
 class Calculator {
   native add(a: int, b: int): int;
-  static native create(): long;
   native divide(a: double, b: double): double;
   native multiply(a: double, b: double): double;
   native subtract(a: int, b: int): int;
+  static native create(): long;
 }
 
 class Person {
   native constructor(name: string, age: int);
   native destroy(): void;
-  native getAge(): int;
-  native getName(): string;
   native greet(): string;
-  native setAge(age: int): void;
+  native person_get_age(): int;
+  get age(): int {
+    return this.person_get_age();
+  }
+  native person_get_name(): string;
+  get name(): string {
+    return this.person_get_name();
+  }
+  native person_set_age(age: int): void;
+  set age(age: int) {
+    this.person_set_age(age);
+  }
 }
 
 
@@ -98,10 +107,10 @@ let calcToken = Calculator.create();
 __assert_true("Calculator.create_handle", calcToken > 0);
 
 let person = new Person("Alice", 30);
-__assert_eq_string("Person.getName", person.getName(), "Alice");
-__assert_eq_int("Person.getAge", person.getAge(), 30);
-person.setAge(31);
-__assert_eq_int("Person.getAge_after_set", person.getAge(), 31);
+__assert_eq_string("Person.name", person.name, "Alice");
+__assert_eq_int("Person.age", person.age, 30);
+person.age = 31;
+__assert_eq_int("Person.age_after_set", person.age, 31);
 __assert_eq_string("Person.greet", person.greet(), "Hello, I'm Alice and I'm 31 years old!");
 person.destroy();
 

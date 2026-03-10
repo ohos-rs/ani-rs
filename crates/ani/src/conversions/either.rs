@@ -286,14 +286,14 @@ impl<'env> ValidateFromAni<'env> for String {
 
         // Primitive wrappers should not be treated as string union variants.
         for numeric_cls in [
-            "Lstd/core/Boolean;",
-            "Lstd/core/Byte;",
-            "Lstd/core/Short;",
-            "Lstd/core/Char;",
-            "Lstd/core/Int;",
-            "Lstd/core/Long;",
-            "Lstd/core/Float;",
-            "Lstd/core/Double;",
+            "std.core.Boolean",
+            "std.core.Byte",
+            "std.core.Short",
+            "std.core.Char",
+            "std.core.Int",
+            "std.core.Long",
+            "std.core.Float",
+            "std.core.Double",
         ] {
             if let Ok(cls) = env.find_class(numeric_cls) {
                 if env.object_instance_of(&obj, &cls).unwrap_or(false) {
@@ -323,14 +323,14 @@ macro_rules! impl_validate_for_boxed {
     };
 }
 
-impl_validate_for_boxed!(bool, "Lstd/core/Boolean;");
-impl_validate_for_boxed!(i8, "Lstd/core/Byte;");
-impl_validate_for_boxed!(i16, "Lstd/core/Short;");
-impl_validate_for_boxed!(u16, "Lstd/core/Char;");
-impl_validate_for_boxed!(i32, "Lstd/core/Int;");
-impl_validate_for_boxed!(i64, "Lstd/core/Long;");
-impl_validate_for_boxed!(f32, "Lstd/core/Float;");
-impl_validate_for_boxed!(f64, "Lstd/core/Double;");
+impl_validate_for_boxed!(bool, "std.core.Boolean");
+impl_validate_for_boxed!(i8, "std.core.Byte");
+impl_validate_for_boxed!(i16, "std.core.Short");
+impl_validate_for_boxed!(u16, "std.core.Char");
+impl_validate_for_boxed!(i32, "std.core.Int");
+impl_validate_for_boxed!(i64, "std.core.Long");
+impl_validate_for_boxed!(f32, "std.core.Float");
+impl_validate_for_boxed!(f64, "std.core.Double");
 
 // ============================================================================
 // String conversion for Either (not Boxable, needs manual impl)

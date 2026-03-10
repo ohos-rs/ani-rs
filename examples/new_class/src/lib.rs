@@ -84,7 +84,7 @@ pub fn person_new(name: String, age: i32) {
 }
 
 /// Get name
-#[ani(class = "Person", name = "getName")]
+#[ani(class = "Person", getter = "name")]
 pub fn person_get_name() -> String {
     person_name_store()
         .lock()
@@ -93,13 +93,13 @@ pub fn person_get_name() -> String {
 }
 
 /// Get age
-#[ani(class = "Person", name = "getAge")]
+#[ani(class = "Person", getter = "age")]
 pub fn person_get_age() -> i32 {
     PERSON_AGE.load(Ordering::SeqCst)
 }
 
 /// Set age
-#[ani(class = "Person", name = "setAge")]
+#[ani(class = "Person", setter = "age")]
 pub fn person_set_age(age: i32) {
     PERSON_AGE.store(age, Ordering::SeqCst);
 }

@@ -1,7 +1,7 @@
 //! Option Type Conversion
 //!
-//! Implements conversion between Rust Option types and ANI nullable types
-//! - Option<T> <-> nullable T (null | T)
+//! Implements conversion between Rust Option types and ANI nullish types
+//! - Option<T> <-> nullish T (null | undefined | T)
 //!
 //! In ANI, nullable values are represented as union object references at the
 //! ABI boundary. Even `Option<String>` and boxed primitive options flow through
@@ -33,69 +33,60 @@ impl<T: TypeInfo> TypeInfo for Option<T> {
 }
 
 // ============================================================================
-// Generic Option<T> for Boxable/Unboxable types (primitives)
+// Option<T> for boxed primitive values
 // ============================================================================
-
-/// Marker trait for primitive types that need boxing when used in Option
-pub trait OptionalPrimitive<'env>:
-    Boxable<'env, Boxed = AniObject<'env>> + Unboxable<'env>
-{
-}
-
-// Implement OptionalPrimitive for all types that are both Boxable and Unboxable
-impl<'env> OptionalPrimitive<'env> for bool {}
-impl<'env> OptionalPrimitive<'env> for i8 {}
-impl<'env> OptionalPrimitive<'env> for i16 {}
-impl<'env> OptionalPrimitive<'env> for u16 {}
-impl<'env> OptionalPrimitive<'env> for i32 {}
-impl<'env> OptionalPrimitive<'env> for i64 {}
-impl<'env> OptionalPrimitive<'env> for f32 {}
-impl<'env> OptionalPrimitive<'env> for f64 {}
 
 fn is_option_none_ref(env: &Env<'_>, value: sys::ani_object) -> bool {
     if value.is_null() {
         return true;
     }
     let value_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
-    env.is_null(&value_ref).unwrap_or(false)
+    env.is_nullish(&value_ref).unwrap_or(false)
 }
 
-impl<'env, T> ToAni<'env> for Option<T>
-where
-    T: OptionalPrimitive<'env>,
-{
-    type Output = sys::ani_object;
+macro_rules! impl_option_for_boxed_primitive {
+    ($ty:ty) => {
+        impl<'env> ToAni<'env> for Option<$ty> {
+            type Output = sys::ani_object;
 
-    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        match self {
-            Some(value) => {
-                let boxed = value.box_value(env)?;
-                Ok(boxed.into_raw())
+            fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+                match self {
+                    Some(value) => {
+                        let boxed = value.box_value(env)?;
+                        Ok(boxed.into_raw())
+                    }
+                    None => env.get_null_object(),
+                }
             }
-            None => env.get_null_object(),
         }
-    }
+
+        impl<'env> FromAni<'env> for Option<$ty> {
+            type Input = sys::ani_object;
+
+            fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+                if is_option_none_ref(env, value) {
+                    Ok(None)
+                } else {
+                    let obj = unsafe { AniObject::from_raw(value) };
+                    let unboxed = <$ty as Unboxable<'env>>::unbox(env, &obj)?;
+                    Ok(Some(unboxed))
+                }
+            }
+        }
+    };
 }
 
-impl<'env, T> FromAni<'env> for Option<T>
-where
-    T: OptionalPrimitive<'env>,
-{
-    type Input = sys::ani_object;
-
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if is_option_none_ref(env, value) {
-            Ok(None)
-        } else {
-            let obj = unsafe { AniObject::from_raw(value) };
-            let unboxed = T::unbox(env, &obj)?;
-            Ok(Some(unboxed))
-        }
-    }
-}
+impl_option_for_boxed_primitive!(bool);
+impl_option_for_boxed_primitive!(i8);
+impl_option_for_boxed_primitive!(i16);
+impl_option_for_boxed_primitive!(u16);
+impl_option_for_boxed_primitive!(i32);
+impl_option_for_boxed_primitive!(i64);
+impl_option_for_boxed_primitive!(f32);
+impl_option_for_boxed_primitive!(f64);
 
 // ============================================================================
-// Option<String> - strings can directly use null
+// Option<String> - strings can directly use nullish references
 // ============================================================================
 
 impl<'env> ToAni<'env> for Option<String> {
@@ -127,28 +118,45 @@ impl<'env> FromAni<'env> for Option<String> {
 }
 
 // ============================================================================
-// Option<AniObject> - objects can directly use null
+// Option<T> for object-backed ANI values
 // ============================================================================
 
-impl<'env> ToAni<'env> for Option<AniObject<'env>> {
+/// Marker trait for values that already cross the ANI boundary as `ani_object`.
+pub trait OptionalObjectValue<'env>:
+    ToAni<'env, Output = sys::ani_object> + FromAni<'env, Input = sys::ani_object>
+{
+}
+
+impl<'env, T> OptionalObjectValue<'env> for T where
+    T: ToAni<'env, Output = sys::ani_object> + FromAni<'env, Input = sys::ani_object>
+{
+}
+
+impl<'env, T> ToAni<'env> for Option<T>
+where
+    T: OptionalObjectValue<'env>,
+{
     type Output = sys::ani_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
-            Some(obj) => Ok(obj.as_raw()),
+            Some(value) => value.to_ani(env),
             None => env.get_null_object(),
         }
     }
 }
 
-impl<'env> FromAni<'env> for Option<AniObject<'env>> {
+impl<'env, T> FromAni<'env> for Option<T>
+where
+    T: OptionalObjectValue<'env>,
+{
     type Input = sys::ani_object;
 
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if is_option_none_ref(env, value) {
             Ok(None)
         } else {
-            Ok(Some(unsafe { AniObject::from_raw(value) }))
+            Ok(Some(T::from_ani(env, value)?))
         }
     }
 }

@@ -34,6 +34,40 @@ pub fn rename_user_profile(mut user: UserProfile, name: String) -> UserProfile {
 }
 
 #[ani]
+pub fn describe_optional_user_profile(user: Option<UserProfile>) -> String {
+    match user {
+        Some(user) => describe_user_profile(user),
+        None => "none".to_string(),
+    }
+}
+
+#[ani]
+pub fn maybe_user_profile(flag: bool) -> Option<UserProfile> {
+    if flag {
+        Some(UserProfile {
+            id: 11,
+            name: "maybe".to_string(),
+            active: true,
+        })
+    } else {
+        None
+    }
+}
+
+#[ani]
+pub fn maybe_user_profile_result(flag: bool) -> Result<Option<UserProfile>> {
+    if flag {
+        Ok(Some(UserProfile {
+            id: 12,
+            name: "result-option".to_string(),
+            active: false,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+#[ani]
 pub fn choose_user_profile(flag: bool) -> Either<UserProfile, String> {
     if flag {
         Either::A(UserProfile {
@@ -80,6 +114,11 @@ mod tests {
         assert_eq!(renamed.name, "new");
 
         assert!(matches!(choose_user_profile(true), Either::A(_)));
+        assert_eq!(describe_optional_user_profile(None), "none");
+        assert!(maybe_user_profile(true).is_some());
+        assert!(maybe_user_profile(false).is_none());
+        assert!(maybe_user_profile_result(true).unwrap().is_some());
+        assert!(maybe_user_profile_result(false).unwrap().is_none());
         assert!(user_profile_result(true).is_ok());
         assert!(user_profile_result(false).is_err());
     }

@@ -520,15 +520,6 @@ impl AniType {
             }
         }
     }
-
-    /// Generate the boxed type signature (for Option inner types)
-    pub fn to_boxed_signature(&self) -> String {
-        match self {
-            AniType::Primitive(p) => p.to_boxed_signature(),
-            _ => self.to_signature(),
-        }
-    }
-
     fn to_union_variant_signature(&self) -> String {
         match self {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
@@ -590,25 +581,6 @@ impl PrimitiveType {
             PrimitiveType::F64 => "D".to_string(),
         }
     }
-
-    /// Generate the boxed primitive type signature
-    pub fn to_boxed_signature(&self) -> String {
-        match self {
-            PrimitiveType::Bool => "Lstd/core/Boolean;".to_string(),
-            PrimitiveType::I8 => "Lstd/core/Byte;".to_string(),
-            PrimitiveType::I16 => "Lstd/core/Short;".to_string(),
-            PrimitiveType::I32 => "Lstd/core/Int;".to_string(),
-            PrimitiveType::I64 => "Lstd/core/Long;".to_string(),
-            PrimitiveType::F32 => "Lstd/core/Float;".to_string(),
-            PrimitiveType::F64 => "Lstd/core/Double;".to_string(),
-            // Unsigned types use the same boxed types
-            PrimitiveType::U8 => "Lstd/core/Byte;".to_string(),
-            PrimitiveType::U16 | PrimitiveType::Char => "Lstd/core/Char;".to_string(),
-            PrimitiveType::U32 => "Lstd/core/Int;".to_string(),
-            PrimitiveType::U64 => "Lstd/core/Long;".to_string(),
-        }
-    }
-
     fn to_new_primitive_signature(&self) -> &'static str {
         match self {
             PrimitiveType::Bool => "z",
@@ -632,24 +604,6 @@ impl PrimitiveType {
             PrimitiveType::I64 | PrimitiveType::U64 => "C{std.core.Long}",
             PrimitiveType::F32 => "C{std.core.Float}",
             PrimitiveType::F64 => "C{std.core.Double}",
-        }
-    }
-
-    /// Get the Rust type identifier for this primitive
-    pub fn rust_type_str(&self) -> &'static str {
-        match self {
-            PrimitiveType::Bool => "bool",
-            PrimitiveType::I8 => "i8",
-            PrimitiveType::U8 => "u8",
-            PrimitiveType::I16 => "i16",
-            PrimitiveType::U16 => "u16",
-            PrimitiveType::I32 => "i32",
-            PrimitiveType::U32 => "u32",
-            PrimitiveType::I64 => "i64",
-            PrimitiveType::U64 => "u64",
-            PrimitiveType::F32 => "f32",
-            PrimitiveType::F64 => "f64",
-            PrimitiveType::Char => "char",
         }
     }
 }

@@ -89,6 +89,25 @@ __assert_eq_string(
   handle_string_or_int_either(new String("ani")),
   "String: ani",
 );
+__assert_eq_string(
+  "handle_string_or_int_either_int",
+  handle_string_or_int_either(new Int(7)),
+  "Int: 7",
+);
+__assert_eq_string(
+  "handle_three_types_bool",
+  handle_three_types(new Boolean(true)),
+  "Boolean: true",
+);
+__assert_eq_string(
+  "handle_four_types_double",
+  handle_four_types(new Double(3.5)),
+  "Double: 3.5",
+);
+let eitherString = return_either(true) as String;
+__assert_eq_string("return_either_string", eitherString.toString(), "Hello from Either!");
+let eitherInt = return_either(false) as Int;
+__assert_eq_string("return_either_int", eitherInt.toString(), "42");
 __assert_eq_string("create_by_type_int", create_by_type(1, 9, "x"), "Int: 9");
 __assert_eq_int("get_type_code", get_type_code(2), 2);
 

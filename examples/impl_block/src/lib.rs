@@ -23,7 +23,7 @@ impl Widget {
         }
     }
 
-    #[ani(name = "getName")]
+    #[ani(getter)]
     pub fn get_name() -> String {
         widget_name_store()
             .lock()
@@ -31,12 +31,12 @@ impl Widget {
             .unwrap_or_default()
     }
 
-    #[ani(name = "getCount")]
+    #[ani(getter)]
     pub fn get_count() -> i32 {
         WIDGET_COUNT.load(Ordering::SeqCst)
     }
 
-    #[ani(name = "setCount")]
+    #[ani(setter)]
     pub fn set_count(count: i32) {
         WIDGET_COUNT.store(count, Ordering::SeqCst);
     }

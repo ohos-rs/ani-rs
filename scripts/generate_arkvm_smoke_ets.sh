@@ -354,10 +354,10 @@ let calcToken = __ANI_GENERATED__.Calculator.create();
 __assert_true("Calculator.create_handle", calcToken > 0);
 
 let person = new __ANI_GENERATED__.Person("Alice", 30);
-__assert_eq_string("Person.getName", person.getName(), "Alice");
-__assert_eq_int("Person.getAge", person.getAge(), 30);
-person.setAge(31);
-__assert_eq_int("Person.getAge_after_set", person.getAge(), 31);
+__assert_eq_string("Person.name", person.name, "Alice");
+__assert_eq_int("Person.age", person.age, 30);
+person.age = 31;
+__assert_eq_int("Person.age_after_set", person.age, 31);
 __assert_eq_string("Person.greet", person.greet(), "Hello, I'm Alice and I'm 31 years old!");
 person.destroy();
 ETS
@@ -365,10 +365,10 @@ ETS
     ani-example-impl-block)
       cat <<'ETS'
 let widget = new __ANI_GENERATED__.Widget("impl", 2);
-__assert_eq_string("Widget.getName", widget.getName(), "impl");
-__assert_eq_int("Widget.getCount", widget.getCount(), 2);
-widget.setCount(5);
-__assert_eq_int("Widget.getCount_after_set", widget.getCount(), 5);
+__assert_eq_string("Widget.name", widget.name, "impl");
+__assert_eq_int("Widget.count", widget.count, 2);
+widget.count = 5;
+__assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(impl, 5)");
 __assert_eq_int("Widget.sum", __ANI_GENERATED__.Widget.sum(2, 4), 6);
 ETS
@@ -386,7 +386,7 @@ __assert_eq_double("property_roundtrip_float", __ANI_GENERATED__.property_roundt
 ETS
       ;;
     ani-example-object-model)
-      cat <<'ETS'
+      cat <<ETS
 let madeUser = __ANI_GENERATED__.make_user_profile(3, "ark", true);
 __assert_eq_int("make_user_profile_id", madeUser.id, 3);
 __assert_eq_string("make_user_profile_name", madeUser.name, "ark");
@@ -412,6 +412,34 @@ __assert_eq_string("choose_user_profile_object_name", chooseOk.name, "ani");
 let chooseFallback = __ANI_GENERATED__.choose_user_profile(false) as String;
 __assert_eq_string("choose_user_profile_string", chooseFallback.toString(), "no-user");
 
+__assert_eq_string(
+  "describe_optional_user_profile_undefined",
+  __ANI_GENERATED__.describe_optional_user_profile(undefined),
+  "none",
+);
+__assert_eq_string(
+  "describe_optional_user_profile_null",
+  __ANI_GENERATED__.describe_optional_user_profile(null),
+  "none",
+);
+let maybeUser = __ANI_GENERATED__.maybe_user_profile(true);
+__assert_true("maybe_user_profile_some", maybeUser != undefined);
+let maybeUserObj = maybeUser as UserProfile;
+__assert_eq_int("maybe_user_profile_some_id", maybeUserObj.id, 11);
+__assert_eq_string("maybe_user_profile_some_name", maybeUserObj.name, "maybe");
+__assert_true("maybe_user_profile_none", __ANI_GENERATED__.maybe_user_profile(false) == undefined);
+__assert_eq_string(
+  "describe_optional_user_profile_roundtrip",
+  __ANI_GENERATED__.describe_optional_user_profile(maybeUser),
+  "11:maybe:active",
+);
+let maybeResult = __ANI_GENERATED__.maybe_user_profile_result(true);
+__assert_true("maybe_user_profile_result_some", maybeResult != undefined);
+let maybeResultObj = maybeResult as UserProfile;
+__assert_eq_int("maybe_user_profile_result_id", maybeResultObj.id, 12);
+__assert_eq_string("maybe_user_profile_result_name", maybeResultObj.name, "result-option");
+__assert_true("maybe_user_profile_result_none", __ANI_GENERATED__.maybe_user_profile_result(false) == undefined);
+
 let resultOk = __ANI_GENERATED__.user_profile_result(true);
 __assert_eq_int("user_profile_result_id", resultOk.id, 9);
 __assert_eq_string("user_profile_result_name", resultOk.name, "result");
@@ -421,6 +449,7 @@ __assert_throws("user_profile_result_error", (): void => {
 });
 ETS
       ;;
+
     ani-example-optional)
       cat <<'ETS'
 __assert_eq_int("with_default_simple", __ANI_GENERATED__.with_default_simple(3, 4), 12);
@@ -431,6 +460,14 @@ __assert_eq_double("with_optional_double_null", __ANI_GENERATED__.with_optional_
 __assert_eq_int("with_optional_boolean_null", __ANI_GENERATED__.with_optional_boolean(8, null), 8);
 __assert_eq_int("with_optional_boolean_true", __ANI_GENERATED__.with_optional_boolean(8, new Boolean(true)), 16);
 __assert_eq_int("with_multiple_optional_mixed", __ANI_GENERATED__.with_multiple_optional(1, new Int(2), null, new Int(4)), 7);
+__assert_eq_int("with_optional_int_undefined", __ANI_GENERATED__.with_optional_int(8, undefined), 8);
+__assert_eq_string("with_optional_string_undefined", __ANI_GENERATED__.with_optional_string("x", undefined), "x");
+let madeInt = __ANI_GENERATED__.make_optional_int(true);
+__assert_eq_int("make_optional_int_some_roundtrip", __ANI_GENERATED__.with_optional_int(3, madeInt), 10);
+__assert_true("make_optional_int_none", __ANI_GENERATED__.make_optional_int(false) == undefined);
+let madeString = __ANI_GENERATED__.make_optional_string(true);
+__assert_eq_string("make_optional_string_some_roundtrip", __ANI_GENERATED__.with_optional_string("x", madeString), "x ok");
+__assert_true("make_optional_string_none", __ANI_GENERATED__.make_optional_string(false) == undefined);
 __assert_eq_long("with_optional_long_null", __ANI_GENERATED__.with_optional_long(9, null), 9);
 __assert_eq_double("with_optional_float_null", __ANI_GENERATED__.with_optional_float(2.5, null), 2.5);
 __assert_eq_string("with_optional_string_some", __ANI_GENERATED__.with_optional_string("x", "y"), "x y");
@@ -446,6 +483,9 @@ __assert_eq_int("record_size", __ANI_GENERATED__.record_size(recordPtr), 2);
 __assert_eq_int("record_get", __ANI_GENERATED__.record_get(recordPtr, "a"), 1);
 __assert_true("record_has", __ANI_GENERATED__.record_has(recordPtr, "b"));
 __ANI_GENERATED__.destroy_record(recordPtr);
+
+let directRecord = __ANI_GENERATED__.create_record_direct();
+__assert_eq_int("record_sum_direct", __ANI_GENERATED__.record_sum(directRecord), 44);
 ETS
       ;;
     ani-example-reference)
@@ -537,6 +577,25 @@ __assert_eq_string(
   __ANI_GENERATED__.handle_string_or_int_either(new String("ani")),
   "String: ani",
 );
+__assert_eq_string(
+  "handle_string_or_int_either_int",
+  __ANI_GENERATED__.handle_string_or_int_either(new Int(7)),
+  "Int: 7",
+);
+__assert_eq_string(
+  "handle_three_types_bool",
+  __ANI_GENERATED__.handle_three_types(new Boolean(true)),
+  "Boolean: true",
+);
+__assert_eq_string(
+  "handle_four_types_double",
+  __ANI_GENERATED__.handle_four_types(new Double(3.5)),
+  "Double: 3.5",
+);
+let eitherString = __ANI_GENERATED__.return_either(true) as String;
+__assert_eq_string("return_either_string", eitherString.toString(), "Hello from Either!");
+let eitherInt = __ANI_GENERATED__.return_either(false) as Int;
+__assert_eq_string("return_either_int", eitherInt.toString(), "42");
 __assert_eq_string("create_by_type_int", __ANI_GENERATED__.create_by_type(1, 9, "x"), "Int: 9");
 __assert_eq_int("get_type_code", __ANI_GENERATED__.get_type_code(2), 2);
 ETS

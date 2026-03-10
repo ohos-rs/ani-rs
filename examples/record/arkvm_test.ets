@@ -103,6 +103,9 @@ __assert_eq_int("record_get", record_get(recordPtr, "a"), 1);
 __assert_true("record_has", record_has(recordPtr, "b"));
 destroy_record(recordPtr);
 
+let directRecord = create_record_direct();
+__assert_eq_int("record_sum_direct", record_sum(directRecord), 44);
+
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);
 }

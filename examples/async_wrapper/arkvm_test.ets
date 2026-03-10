@@ -5,8 +5,8 @@
 
 namespace example {
   class MyClass {
-    static native create(_name: string): long;
     native get_info(): string;
+    static native create(_name: string): long;
   }
 }
 

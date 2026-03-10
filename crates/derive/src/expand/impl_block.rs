@@ -6,14 +6,13 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, ReturnType};
 
-use crate::codegen::{RegisterTarget, generate_register_call, generate_wrapper_with_target};
+use crate::codegen::{generate_register_call, generate_wrapper_with_target};
 use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
-use crate::types::{
-    EtsDeclKind, current_module_name, emit_compile_ets_decl, generate_ctor_ets_decl,
-    generate_ctor_signature, generate_fn_ets_decl, generate_fn_signature,
-};
 
-use super::function::{validate_constructor_usage, validate_unsupported_bind_attrs};
+use super::function::{
+    emit_binding_plan_ets, resolve_binding_plan, validate_constructor_usage,
+    validate_unsupported_bind_attrs,
+};
 
 /// Expand `#[ani]` for impl blocks
 pub fn expand_impl(attrs: BindgenAttrs, impl_block: ItemImpl, prepare: TokenStream) -> TokenStream {
@@ -112,38 +111,22 @@ fn process_method(
     validate_constructor_usage(&merged_attrs, &method_fn)?;
 
     let method_name = &method.sig.ident;
-    let ets_name = merged_attrs
-        .name
-        .clone()
-        .unwrap_or_else(|| method_name.to_string());
     let is_constructor = merged_attrs.constructor;
     let is_static = if is_constructor {
         false
     } else {
         merged_attrs.is_static
     };
-    let register_symbol_name = if is_constructor {
-        "<ctor>".to_string()
-    } else {
-        ets_name.clone()
-    };
 
-    let signature = merged_attrs.signature.clone().unwrap_or_else(|| {
-        if is_constructor {
-            generate_ctor_signature(&method.sig, false)
-        } else {
-            generate_fn_signature(&method.sig, false)
-        }
-    });
-    let ets_signature = if is_constructor {
-        generate_ctor_ets_decl(&method.sig, false)
-    } else {
-        generate_fn_ets_decl(&method.sig, &ets_name, false)
-    };
-
-    if let Some(class_name) = merged_attrs.class.as_deref() {
-        emit_compile_ets_decl(EtsDeclKind::Class, class_name, &ets_signature, is_static);
-    }
+    let binding = resolve_binding_plan(
+        &merged_attrs,
+        &method_name.to_string(),
+        &method.sig,
+        is_static,
+        is_constructor,
+        false,
+    )?;
+    emit_binding_plan_ets(&binding);
 
     let wrapper_name = format_ident!("__ani_{}_{}", struct_name, method_name);
     let call_target = {
@@ -159,24 +142,10 @@ fn process_method(
         call_target,
     );
 
-    let class_name = merged_attrs
-        .class
-        .clone()
-        .unwrap_or_else(|| struct_name.to_string());
-    let module_name = current_module_name();
-    let descriptor = crate::types::class_to_descriptor(&crate::types::qualify_member_descriptor(
-        &class_name,
-        &module_name,
-    ));
-
-    let register_target = RegisterTarget::Class {
-        descriptor,
-        is_static,
-    };
     let register_call = generate_register_call(
-        &register_target,
-        &register_symbol_name,
-        &signature,
+        &binding.register_target,
+        &binding.register_symbol_name,
+        &binding.signature,
         quote! { #wrapper_name as *const std::os::raw::c_void },
     );
     let queue_entry = quote! {

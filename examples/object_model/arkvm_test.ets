@@ -9,6 +9,20 @@ class UserProfile {
   active: boolean = false;
 }
 
+native function __ani_native_describe_optional_user_profile(user: UserProfile | null): string;
+function describe_optional_user_profile(user: UserProfile | null | undefined): string {
+  return __ani_native_describe_optional_user_profile(user == undefined ? null : user);
+}
+native function __ani_native_maybe_user_profile(flag: boolean): UserProfile | null;
+function maybe_user_profile(flag: boolean): UserProfile | null | undefined {
+  let __ani_result = __ani_native_maybe_user_profile(flag);
+  return __ani_result == null ? undefined : __ani_result;
+}
+native function __ani_native_maybe_user_profile_result(flag: boolean): UserProfile | null;
+function maybe_user_profile_result(flag: boolean): UserProfile | null | undefined {
+  let __ani_result = __ani_native_maybe_user_profile_result(flag);
+  return __ani_result == null ? undefined : __ani_result;
+}
 native function choose_user_profile(flag: boolean): UserProfile | String;
 native function describe_user_profile(user: UserProfile): string;
 native function make_user_profile(id: int, name: string, active: boolean): UserProfile;
@@ -113,6 +127,34 @@ __assert_eq_int("choose_user_profile_object_id", chooseOk.id, 7);
 __assert_eq_string("choose_user_profile_object_name", chooseOk.name, "ani");
 let chooseFallback = choose_user_profile(false) as String;
 __assert_eq_string("choose_user_profile_string", chooseFallback.toString(), "no-user");
+
+__assert_eq_string(
+  "describe_optional_user_profile_undefined",
+  describe_optional_user_profile(undefined),
+  "none",
+);
+__assert_eq_string(
+  "describe_optional_user_profile_null",
+  describe_optional_user_profile(null),
+  "none",
+);
+let maybeUser = maybe_user_profile(true);
+__assert_true("maybe_user_profile_some", maybeUser != undefined);
+let maybeUserObj = maybeUser as UserProfile;
+__assert_eq_int("maybe_user_profile_some_id", maybeUserObj.id, 11);
+__assert_eq_string("maybe_user_profile_some_name", maybeUserObj.name, "maybe");
+__assert_true("maybe_user_profile_none", maybe_user_profile(false) == undefined);
+__assert_eq_string(
+  "describe_optional_user_profile_roundtrip",
+  describe_optional_user_profile(maybeUser),
+  "11:maybe:active",
+);
+let maybeResult = maybe_user_profile_result(true);
+__assert_true("maybe_user_profile_result_some", maybeResult != undefined);
+let maybeResultObj = maybeResult as UserProfile;
+__assert_eq_int("maybe_user_profile_result_id", maybeResultObj.id, 12);
+__assert_eq_string("maybe_user_profile_result_name", maybeResultObj.name, "result-option");
+__assert_true("maybe_user_profile_result_none", maybe_user_profile_result(false) == undefined);
 
 let resultOk = user_profile_result(true);
 __assert_eq_int("user_profile_result_id", resultOk.id, 9);

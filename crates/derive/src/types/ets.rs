@@ -25,8 +25,7 @@ pub enum EtsDeclKind {
 struct EtsDecl {
     kind: EtsDeclKind,
     target: String,
-    signature: String,
-    is_static: bool,
+    rendered: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -103,7 +102,7 @@ fn namespace_child_mut<'a>(
 #[derive(Default)]
 struct ClassNode {
     fields: Vec<String>,
-    methods: Vec<(bool, String)>,
+    members: Vec<String>,
 }
 
 #[derive(Default)]
@@ -114,15 +113,15 @@ struct NamespaceNode {
 }
 
 impl NamespaceNode {
-    fn insert_namespace_fn(&mut self, path: &str, signature: &str) {
+    fn insert_namespace_fn(&mut self, path: &str, rendered: &str) {
         let mut node = self;
         for seg in path.split('.').filter(|s| !s.is_empty()) {
             node = namespace_child_mut(&mut node.children, seg);
         }
-        node.functions.push(signature.to_string());
+        node.functions.push(rendered.to_string());
     }
 
-    fn insert_class_method(&mut self, path: &str, is_static: bool, signature: &str) {
+    fn insert_class_member(&mut self, path: &str, rendered: &str) {
         let mut parts = path
             .split('.')
             .filter(|s| !s.is_empty())
@@ -137,8 +136,8 @@ impl NamespaceNode {
         node.classes
             .entry(class_name)
             .or_default()
-            .methods
-            .push((is_static, signature.to_string()));
+            .members
+            .push(rendered.to_string());
     }
 
     fn insert_object_class(&mut self, path: &str, fields: &[String]) {
@@ -162,23 +161,27 @@ impl NamespaceNode {
     }
 }
 
+fn push_indented_block(out: &mut String, indent: usize, block: &str) {
+    let pad = " ".repeat(indent);
+    for line in block.lines() {
+        out.push_str(&pad);
+        out.push_str(line);
+        out.push('\n');
+    }
+}
+
 fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: &ClassNode) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}class {class_name} {{\n"));
 
-    let inner = " ".repeat(indent + 2);
     for field in &class.fields {
-        out.push_str(&format!("{inner}{field};\n"));
+        push_indented_block(out, indent + 2, &format!("{field};"));
     }
 
-    let mut methods = class.methods.clone();
-    methods.sort_by(|a, b| a.1.cmp(&b.1));
-    for (is_static, sig) in methods {
-        if is_static {
-            out.push_str(&format!("{inner}static native {sig};\n"));
-        } else {
-            out.push_str(&format!("{inner}native {sig};\n"));
-        }
+    let mut members = class.members.clone();
+    members.sort();
+    for member in members {
+        push_indented_block(out, indent + 2, &member);
     }
 
     out.push_str(&format!("{pad}}}\n"));
@@ -187,7 +190,6 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
 fn render_namespace(out: &mut String, indent: usize, name: &str, node: &NamespaceNode) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}namespace {name} {{\n"));
-    let inner = " ".repeat(indent + 2);
 
     for (class_name, class) in &node.classes {
         render_class_block(out, indent + 2, class_name, class);
@@ -195,8 +197,8 @@ fn render_namespace(out: &mut String, indent: usize, name: &str, node: &Namespac
 
     let mut fns = node.functions.clone();
     fns.sort();
-    for sig in fns {
-        out.push_str(&format!("{inner}native function {sig};\n"));
+    for function in fns {
+        push_indented_block(out, indent + 2, &function);
     }
 
     for (child, child_node) in &node.children {
@@ -226,11 +228,9 @@ fn render_decls(decls: &[EtsDecl], objects: &[EtsObjectDecl]) -> String {
 
     for decl in decls {
         match decl.kind {
-            EtsDeclKind::Global => globals.push(decl.signature.clone()),
-            EtsDeclKind::Namespace => root.insert_namespace_fn(&decl.target, &decl.signature),
-            EtsDeclKind::Class => {
-                root.insert_class_method(&decl.target, decl.is_static, &decl.signature)
-            }
+            EtsDeclKind::Global => globals.push(decl.rendered.clone()),
+            EtsDeclKind::Namespace => root.insert_namespace_fn(&decl.target, &decl.rendered),
+            EtsDeclKind::Class => root.insert_class_member(&decl.target, &decl.rendered),
         }
     }
 
@@ -249,8 +249,8 @@ fn render_decls(decls: &[EtsDecl], objects: &[EtsObjectDecl]) -> String {
 
     if !globals.is_empty() {
         section_break(&mut out, &mut has_content);
-        for sig in globals {
-            out.push_str(&format!("native function {sig};\n"));
+        for global in globals {
+            push_indented_block(&mut out, 0, &global);
         }
     }
 
@@ -270,7 +270,7 @@ fn write_ets_file(path: &PathBuf, file_state: &EtsFileState) {
     let _ = fs::write(path, content);
 }
 
-pub fn emit_compile_ets_decl(kind: EtsDeclKind, target: &str, signature: &str, is_static: bool) {
+pub fn emit_compile_ets_rendered_decl(kind: EtsDeclKind, target: &str, rendered: &str) {
     let Some(path) = output_path() else {
         return;
     };
@@ -282,13 +282,32 @@ pub fn emit_compile_ets_decl(kind: EtsDeclKind, target: &str, signature: &str, i
     let item = EtsDecl {
         kind,
         target: target.to_string(),
-        signature: signature.to_string(),
-        is_static,
+        rendered: rendered.to_string(),
     };
     if !file_state.decls.contains(&item) {
         file_state.decls.push(item);
     }
     write_ets_file(&path, file_state);
+}
+
+pub fn emit_compile_ets_decl(kind: EtsDeclKind, target: &str, signature: &str, is_static: bool) {
+    let rendered = match kind {
+        EtsDeclKind::Global | EtsDeclKind::Namespace => {
+            format!("native function {signature};")
+        }
+        EtsDeclKind::Class => {
+            if is_static {
+                format!("static native {signature};")
+            } else {
+                format!("native {signature};")
+            }
+        }
+    };
+    emit_compile_ets_rendered_decl(kind, target, &rendered);
+}
+
+pub fn emit_compile_ets_class_member(target: &str, rendered: &str) {
+    emit_compile_ets_rendered_decl(EtsDeclKind::Class, target, rendered);
 }
 
 pub fn emit_compile_ets_object(target: &str, fields: &[String]) {
@@ -325,7 +344,7 @@ fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
         AniType::String(StringType::String | StringType::Str) => "\"\"".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
-        AniType::Wrapper(WrapperType::Option(_)) => "null".to_string(),
+        AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Vec(_)) => "[] as ".to_string() + ets_type,
         AniType::Wrapper(WrapperType::Result(inner))
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
@@ -343,28 +362,32 @@ fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
         AniType::Unit => "undefined".to_string(),
     }
 }
-fn rust_type_to_ets(ty: &Type) -> String {
-    ani_type_to_ets(&AniType::from_syn_type(ty))
+fn ani_type_to_ets(ty: &AniType) -> String {
+    ani_type_to_ets_with_option_style(ty, OptionStyle::Nullish)
 }
 
-fn ani_type_to_ets(ty: &AniType) -> String {
+fn ani_type_to_ets_with_option_style(ty: &AniType, option_style: OptionStyle) -> String {
     match ty {
         AniType::Primitive(p) => primitive_to_ets(p).to_string(),
         AniType::String(StringType::String | StringType::Str) => "string".to_string(),
         AniType::Unit => "void".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
-        AniType::Wrapper(WrapperType::Option(inner)) => option_inner_to_ets(inner),
+        AniType::Wrapper(WrapperType::Option(inner)) => option_inner_to_ets(inner, option_style),
         AniType::Wrapper(WrapperType::Vec(inner)) => vec_inner_to_ets(inner),
-        AniType::Wrapper(WrapperType::Result(inner)) => ani_type_to_ets(inner),
-        AniType::Wrapper(WrapperType::Ref(inner)) => ani_type_to_ets(inner),
+        AniType::Wrapper(WrapperType::Result(inner)) => {
+            ani_type_to_ets_with_option_style(inner, option_style)
+        }
+        AniType::Wrapper(WrapperType::Ref(inner)) => {
+            ani_type_to_ets_with_option_style(inner, option_style)
+        }
         AniType::Function(_) => "Function".to_string(),
         AniType::FnArgs(_) => "Array<Object>".to_string(),
         AniType::Either(either) => {
             let variants = either
                 .types
                 .iter()
-                .map(|ty| ani_type_to_ets_union_variant(&AniType::from_syn_type(ty)))
+                .map(|ty| ani_type_to_ets_union_variant(&AniType::from_syn_type(ty), option_style))
                 .collect::<Vec<_>>();
             if variants.is_empty() {
                 "Object".to_string()
@@ -376,12 +399,15 @@ fn ani_type_to_ets(ty: &AniType) -> String {
             let inner = promise
                 .inner
                 .as_ref()
-                .map(|t| ani_type_to_ets(t))
+                .map(|t| ani_type_to_ets_with_option_style(t, option_style))
                 .unwrap_or_else(|| "void".to_string());
             format!("Promise<{}>", inner)
         }
         AniType::Record(record) => {
-            format!("Record<string, {}>", ani_type_to_ets(record.value.as_ref()))
+            format!(
+                "Record<string, {}>",
+                ani_type_to_ets_with_option_style(record.value.as_ref(), option_style)
+            )
         }
         AniType::AniObject => "Object".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
@@ -389,7 +415,7 @@ fn ani_type_to_ets(ty: &AniType) -> String {
             "[{}]",
             items
                 .iter()
-                .map(ani_type_to_ets)
+                .map(|item| ani_type_to_ets_with_option_style(item, option_style))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -407,26 +433,41 @@ fn unknown_type_to_ets(ty: &Type) -> Option<String> {
     }
 }
 
-fn option_inner_to_ets(inner: &AniType) -> String {
-    match inner {
-        AniType::Primitive(p) => format!("{} | null", boxed_primitive_to_ets(p)),
-        AniType::String(StringType::String | StringType::Str) => "String | null".to_string(),
-        _ => format!("{} | null", ani_type_to_ets(inner)),
+fn option_inner_to_ets(inner: &AniType, option_style: OptionStyle) -> String {
+    let inner = match inner {
+        AniType::Primitive(p) => boxed_primitive_to_ets(p).to_string(),
+        AniType::String(StringType::String | StringType::Str) => "String".to_string(),
+        _ => ani_type_to_ets_with_option_style(inner, option_style),
+    };
+    match option_style {
+        OptionStyle::NullOnly => format!("{} | null", inner),
+        OptionStyle::Nullish => format!("{} | null | undefined", inner),
     }
 }
 
-fn ani_type_to_ets_union_variant(ty: &AniType) -> String {
+fn ani_type_to_ets_union_variant(ty: &AniType, option_style: OptionStyle) -> String {
     match ty {
         AniType::Primitive(p) => boxed_primitive_to_ets(p).to_string(),
         AniType::String(StringType::String | StringType::Str) => "String".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
-        AniType::Wrapper(WrapperType::Option(inner)) => {
-            format!("{} | null", ani_type_to_ets_union_variant(inner))
-        }
+        AniType::Wrapper(WrapperType::Option(inner)) => match option_style {
+            OptionStyle::NullOnly => format!(
+                "{} | null",
+                ani_type_to_ets_union_variant(inner, option_style)
+            ),
+            OptionStyle::Nullish => {
+                format!(
+                    "{} | null | undefined",
+                    ani_type_to_ets_union_variant(inner, option_style)
+                )
+            }
+        },
         AniType::Wrapper(WrapperType::Result(inner))
-        | AniType::Wrapper(WrapperType::Ref(inner)) => ani_type_to_ets_union_variant(inner),
-        _ => ani_type_to_ets(ty),
+        | AniType::Wrapper(WrapperType::Ref(inner)) => {
+            ani_type_to_ets_union_variant(inner, option_style)
+        }
+        _ => ani_type_to_ets_with_option_style(ty, option_style),
     }
 }
 
@@ -644,11 +685,33 @@ fn sanitize_param_name(name: &str, idx: usize) -> String {
     name.to_string()
 }
 
-/// Generate ETS declaration signature string for a function.
-///
-/// Output example: `add(a: int, b: int): int`
-pub fn generate_fn_ets_decl(sig: &Signature, ets_name: &str, skip_first: bool) -> String {
-    let mut params: Vec<String> = Vec::new();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OptionStyle {
+    NullOnly,
+    Nullish,
+}
+
+#[derive(Clone, Debug)]
+struct ExposedParamSpec {
+    name: String,
+    public_ty: String,
+    native_ty: String,
+    requires_bridge: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ExposedReturnSpec {
+    public_ty: String,
+    native_ty: String,
+    requires_bridge: bool,
+}
+
+fn type_requires_nullish_bridge(public_ty: &str, native_ty: &str) -> bool {
+    public_ty != native_ty
+}
+
+fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<ExposedParamSpec> {
+    let mut params = Vec::new();
 
     for (idx, arg) in sig
         .inputs
@@ -663,43 +726,275 @@ pub fn generate_fn_ets_decl(sig: &Signature, ets_name: &str, skip_first: bool) -
                 _ => format!("arg{}", idx),
             };
             let name = sanitize_param_name(&name, idx);
-            let ty = rust_type_to_ets(&pat_type.ty);
-            params.push(format!("{name}: {ty}"));
+            let ani_type = AniType::from_syn_type(&pat_type.ty);
+            let public_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::Nullish);
+            let native_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::NullOnly);
+            params.push(ExposedParamSpec {
+                name,
+                requires_bridge: type_requires_nullish_bridge(&public_ty, &native_ty),
+                public_ty,
+                native_ty,
+            });
         }
     }
 
-    let ret = match &sig.output {
-        ReturnType::Default => "void".to_string(),
-        ReturnType::Type(_, ty) => rust_type_to_ets(ty),
+    params
+}
+
+fn collect_exposed_params(sig: &Signature, skip_first: bool) -> Vec<(String, String)> {
+    collect_exposed_param_specs(sig, skip_first)
+        .into_iter()
+        .map(|param| (param.name, param.public_ty))
+        .collect()
+}
+
+fn exposed_return_spec(sig: &Signature) -> ExposedReturnSpec {
+    match &sig.output {
+        ReturnType::Default => ExposedReturnSpec {
+            public_ty: "void".to_string(),
+            native_ty: "void".to_string(),
+            requires_bridge: false,
+        },
+        ReturnType::Type(_, ty) => {
+            let ani_type = AniType::from_syn_type(ty);
+            let public_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::Nullish);
+            let native_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::NullOnly);
+            ExposedReturnSpec {
+                requires_bridge: type_requires_nullish_bridge(&public_ty, &native_ty),
+                public_ty,
+                native_ty,
+            }
+        }
+    }
+}
+
+fn generate_fn_ets_decl_with_style(
+    sig: &Signature,
+    ets_name: &str,
+    skip_first: bool,
+    option_style: OptionStyle,
+) -> String {
+    let params = collect_exposed_param_specs(sig, skip_first)
+        .into_iter()
+        .map(|param| {
+            let ty = match option_style {
+                OptionStyle::NullOnly => param.native_ty,
+                OptionStyle::Nullish => param.public_ty,
+            };
+            format!("{}: {}", param.name, ty)
+        })
+        .collect::<Vec<_>>();
+    let ret_spec = exposed_return_spec(sig);
+    let ret = match option_style {
+        OptionStyle::NullOnly => ret_spec.native_ty,
+        OptionStyle::Nullish => ret_spec.public_ty,
+    };
+    format!("{ets_name}({}): {ret}", params.join(", "))
+}
+
+fn render_native_function_decl(kind: EtsDeclKind, signature: &str, is_static: bool) -> String {
+    match kind {
+        EtsDeclKind::Global | EtsDeclKind::Namespace => {
+            format!("native function {signature};")
+        }
+        EtsDeclKind::Class => {
+            if is_static {
+                format!("static native {signature};")
+            } else {
+                format!("native {signature};")
+            }
+        }
+    }
+}
+
+fn render_bridge_input_expr(param: &ExposedParamSpec) -> String {
+    if param.requires_bridge {
+        format!("{} == undefined ? null : {}", param.name, param.name)
+    } else {
+        param.name.clone()
+    }
+}
+
+fn render_bridge_output_body(call_expr: &str, ret_spec: &ExposedReturnSpec) -> String {
+    if ret_spec.public_ty == "void" {
+        format!("  {call_expr};")
+    } else if ret_spec.requires_bridge {
+        format!(
+            "  let __ani_result = {call_expr};
+  return __ani_result == null ? undefined : __ani_result;"
+        )
+    } else {
+        format!("  return {call_expr};")
+    }
+}
+
+fn render_nullish_bridge_binding(
+    kind: EtsDeclKind,
+    sig: &Signature,
+    ets_name: &str,
+    skip_first: bool,
+    is_static: bool,
+) -> String {
+    let native_name = format!("__ani_native_{ets_name}");
+    let native_signature =
+        generate_fn_ets_decl_with_style(sig, &native_name, skip_first, OptionStyle::NullOnly);
+    let public_signature = generate_fn_ets_decl(sig, ets_name, skip_first);
+    let params = collect_exposed_param_specs(sig, skip_first);
+    let ret_spec = exposed_return_spec(sig);
+
+    let call_args = params
+        .iter()
+        .map(render_bridge_input_expr)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let call_expr = match kind {
+        EtsDeclKind::Global | EtsDeclKind::Namespace => format!("{native_name}({call_args})"),
+        EtsDeclKind::Class => format!("this.{native_name}({call_args})"),
     };
 
-    format!("{ets_name}({}): {ret}", params.join(", "))
+    let body = render_bridge_output_body(&call_expr, &ret_spec);
+
+    let wrapper_decl = match kind {
+        EtsDeclKind::Global | EtsDeclKind::Namespace => {
+            format!(
+                "function {public_signature} {{
+{body}
+}}"
+            )
+        }
+        EtsDeclKind::Class => {
+            if is_static {
+                format!(
+                    "static {public_signature} {{
+{body}
+}}"
+                )
+            } else {
+                format!(
+                    "{public_signature} {{
+{body}
+}}"
+                )
+            }
+        }
+    };
+
+    format!(
+        "{}
+{}",
+        render_native_function_decl(kind, &native_signature, is_static),
+        wrapper_decl
+    )
+}
+
+pub fn function_requires_nullish_bridge(sig: &Signature, skip_first: bool) -> bool {
+    let params = collect_exposed_param_specs(sig, skip_first);
+    let ret = exposed_return_spec(sig);
+    params.iter().any(|param| param.requires_bridge) || ret.requires_bridge
+}
+
+pub fn generate_fn_ets_binding(
+    kind: EtsDeclKind,
+    sig: &Signature,
+    ets_name: &str,
+    skip_first: bool,
+    is_static: bool,
+) -> String {
+    if function_requires_nullish_bridge(sig, skip_first) {
+        render_nullish_bridge_binding(kind, sig, ets_name, skip_first, is_static)
+    } else {
+        let signature = generate_fn_ets_decl(sig, ets_name, skip_first);
+        render_native_function_decl(kind, &signature, is_static)
+    }
+}
+
+/// Generate ETS declaration signature string for a function.
+///
+/// Output example: `add(a: int, b: int): int`
+pub fn generate_fn_ets_decl(sig: &Signature, ets_name: &str, skip_first: bool) -> String {
+    generate_fn_ets_decl_with_style(sig, ets_name, skip_first, OptionStyle::Nullish)
+}
+
+pub fn generate_getter_ets_decl(
+    sig: &Signature,
+    property_name: &str,
+    backing_name: &str,
+    skip_first: bool,
+) -> String {
+    let params = collect_exposed_params(sig, skip_first);
+    debug_assert!(params.is_empty(), "getter should not expose parameters");
+    let ret_spec = exposed_return_spec(sig);
+
+    if ret_spec.requires_bridge {
+        format!(
+            "native {backing_name}(): {};
+get {property_name}(): {} {{
+  let __ani_result = this.{backing_name}();
+  return __ani_result == null ? undefined : __ani_result;
+}}",
+            ret_spec.native_ty, ret_spec.public_ty,
+        )
+    } else {
+        format!(
+            "native {backing_name}(): {};
+get {property_name}(): {} {{
+  return this.{backing_name}();
+}}",
+            ret_spec.public_ty, ret_spec.public_ty,
+        )
+    }
+}
+
+pub fn generate_setter_ets_decl(
+    sig: &Signature,
+    property_name: &str,
+    backing_name: &str,
+    skip_first: bool,
+) -> String {
+    let params = collect_exposed_param_specs(sig, skip_first);
+    debug_assert_eq!(
+        params.len(),
+        1,
+        "setter should expose exactly one parameter"
+    );
+    let param = params
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| ExposedParamSpec {
+            name: "value".to_string(),
+            public_ty: "Object".to_string(),
+            native_ty: "Object".to_string(),
+            requires_bridge: false,
+        });
+
+    if param.requires_bridge {
+        format!(
+            "native {backing_name}({}: {}): void;
+set {property_name}({}: {}) {{
+  this.{backing_name}({} == undefined ? null : {});
+}}",
+            param.name, param.native_ty, param.name, param.public_ty, param.name, param.name,
+        )
+    } else {
+        format!(
+            "native {backing_name}({}: {}): void;
+set {property_name}({}: {}) {{
+  this.{backing_name}({});
+}}",
+            param.name, param.public_ty, param.name, param.public_ty, param.name,
+        )
+    }
 }
 
 /// Generate ETS declaration signature string for a constructor.
 ///
 /// Output example: `constructor(name: string, age: int)`
 pub fn generate_ctor_ets_decl(sig: &Signature, skip_first: bool) -> String {
-    let mut params: Vec<String> = Vec::new();
-
-    for (idx, arg) in sig
-        .inputs
-        .iter()
-        .skip(if skip_first { 1 } else { 0 })
-        .filter(|arg| !should_skip_in_signature(arg))
-        .enumerate()
-    {
-        if let FnArg::Typed(pat_type) = arg {
-            let name = match pat_type.pat.as_ref() {
-                Pat::Ident(ident) => ident.ident.to_string(),
-                _ => format!("arg{}", idx),
-            };
-            let name = sanitize_param_name(&name, idx);
-            let ty = rust_type_to_ets(&pat_type.ty);
-            params.push(format!("{name}: {ty}"));
-        }
-    }
-
+    let params = collect_exposed_params(sig, skip_first)
+        .into_iter()
+        .map(|(name, ty)| format!("{name}: {ty}"))
+        .collect::<Vec<_>>();
     format!("constructor({})", params.join(", "))
 }
 
@@ -714,26 +1009,31 @@ mod tests {
             EtsDecl {
                 kind: EtsDeclKind::Global,
                 target: String::new(),
-                signature: "add(a: int, b: int): int".to_string(),
-                is_static: false,
+                rendered: "native function add(a: int, b: int): int;".to_string(),
             },
             EtsDecl {
                 kind: EtsDeclKind::Namespace,
                 target: "Math.Utils".to_string(),
-                signature: "sqrt(x: double): double".to_string(),
-                is_static: false,
+                rendered: "native function sqrt(x: double): double;".to_string(),
             },
             EtsDecl {
                 kind: EtsDeclKind::Class,
                 target: "example.Person".to_string(),
-                signature: "getName(): string".to_string(),
-                is_static: false,
+                rendered: "native getName(): string;".to_string(),
             },
             EtsDecl {
                 kind: EtsDeclKind::Class,
                 target: "example.Person".to_string(),
-                signature: "create(name: string): long".to_string(),
-                is_static: true,
+                rendered: "static native create(name: string): long;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Class,
+                target: "example.Person".to_string(),
+                rendered: "native person_get_age(): int;
+get age(): int {
+  return this.person_get_age();
+}"
+                .to_string(),
             },
         ];
         let objects = vec![
@@ -776,6 +1076,63 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_getter_ets_decl() {
+        let sig: Signature = syn::parse_quote! {
+            fn person_get_age() -> i32
+        };
+        assert_eq!(
+            generate_getter_ets_decl(&sig, "age", "person_get_age", false),
+            "native person_get_age(): int;
+get age(): int {
+  return this.person_get_age();
+}"
+        );
+    }
+
+    #[test]
+    fn test_generate_setter_ets_decl() {
+        let sig: Signature = syn::parse_quote! {
+            fn person_set_age(age: i32)
+        };
+        assert_eq!(
+            generate_setter_ets_decl(&sig, "age", "person_set_age", false),
+            "native person_set_age(age: int): void;
+set age(age: int) {
+  this.person_set_age(age);
+}"
+        );
+    }
+
+    #[test]
+    fn test_generate_getter_ets_decl_bridges_nullish_return() {
+        let sig: Signature = syn::parse_quote! {
+            fn person_get_name() -> Option<String>
+        };
+        assert_eq!(
+            generate_getter_ets_decl(&sig, "name", "__ani_native_person_get_name", false),
+            "native __ani_native_person_get_name(): String | null;
+get name(): String | null | undefined {
+  let __ani_result = this.__ani_native_person_get_name();
+  return __ani_result == null ? undefined : __ani_result;
+}"
+        );
+    }
+
+    #[test]
+    fn test_generate_setter_ets_decl_bridges_nullish_param() {
+        let sig: Signature = syn::parse_quote! {
+            fn person_set_name(name: Option<String>)
+        };
+        assert_eq!(
+            generate_setter_ets_decl(&sig, "name", "__ani_native_person_set_name", false),
+            "native __ani_native_person_set_name(name: String | null): void;
+set name(name: String | null | undefined) {
+  this.__ani_native_person_set_name(name == undefined ? null : name);
+}"
+        );
+    }
+
+    #[test]
     fn test_generate_fn_ets_decl_keeps_custom_object_types() {
         let sig: Signature = syn::parse_quote! {
             fn process_user(
@@ -786,7 +1143,7 @@ mod tests {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "process_user", false),
-            "process_user(user: models.UserInfo, maybe: models.UserInfo | null, list: Array<models.UserInfo>): models.UserInfo"
+            "process_user(user: models.UserInfo, maybe: models.UserInfo | null | undefined, list: Array<models.UserInfo>): models.UserInfo"
         );
     }
 
@@ -842,7 +1199,7 @@ mod tests {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "convert", false),
-            "convert(a: Int | null, b: Boolean | null, c: String | Int): String | Int"
+            "convert(a: Int | null | undefined, b: Boolean | null | undefined, c: String | Int): String | Int"
         );
     }
 
@@ -852,8 +1209,26 @@ mod tests {
             fn maybe_value(value: Option<i32>) -> Option<String>
         };
         let decl = generate_fn_ets_decl(&sig, "maybe_value", false);
-        assert_eq!(decl, "maybe_value(value: Int | null): String | null");
+        assert_eq!(
+            decl,
+            "maybe_value(value: Int | null | undefined): String | null | undefined"
+        );
         assert!(!decl.contains("?:"));
+    }
+
+    #[test]
+    fn test_generate_fn_ets_binding_bridges_nested_result_option_object() {
+        let sig: Signature = syn::parse_quote! {
+            fn maybe_user(flag: bool) -> Result<Option<crate::models::UserInfo>>
+        };
+        assert_eq!(
+            generate_fn_ets_binding(EtsDeclKind::Global, &sig, "maybe_user", false, true),
+            "native function __ani_native_maybe_user(flag: boolean): models.UserInfo | null;
+function maybe_user(flag: boolean): models.UserInfo | null | undefined {
+  let __ani_result = __ani_native_maybe_user(flag);
+  return __ani_result == null ? undefined : __ani_result;
+}"
+        );
     }
 
     #[test]
