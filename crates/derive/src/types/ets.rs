@@ -3,7 +3,7 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -12,7 +12,7 @@ use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::should_skip_in_signature;
 
-use super::ani_type::{AniType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias};
+use super::ani_type::{resolve_object_type_alias, AniType, PrimitiveType, StringType, WrapperType};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EtsDeclKind {
@@ -31,7 +31,7 @@ struct EtsDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct EtsObjectDecl {
     target: String,
-    fields: Vec<String>,
+    members: Vec<String>,
 }
 
 #[derive(Default)]
@@ -101,7 +101,6 @@ fn namespace_child_mut<'a>(
 
 #[derive(Default)]
 struct ClassNode {
-    fields: Vec<String>,
     members: Vec<String>,
 }
 
@@ -140,7 +139,7 @@ impl NamespaceNode {
             .push(rendered.to_string());
     }
 
-    fn insert_object_class(&mut self, path: &str, fields: &[String]) {
+    fn insert_object_class(&mut self, path: &str, members: &[String]) {
         let mut parts = path
             .split('.')
             .filter(|s| !s.is_empty())
@@ -153,9 +152,9 @@ impl NamespaceNode {
         }
 
         let class = node.classes.entry(class_name).or_default();
-        for field in fields {
-            if !class.fields.contains(field) {
-                class.fields.push(field.clone());
+        for member in members {
+            if !class.members.contains(member) {
+                class.members.push(member.clone());
             }
         }
     }
@@ -173,10 +172,6 @@ fn push_indented_block(out: &mut String, indent: usize, block: &str) {
 fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: &ClassNode) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}class {class_name} {{\n"));
-
-    for field in &class.fields {
-        push_indented_block(out, indent + 2, &format!("{field};"));
-    }
 
     let mut members = class.members.clone();
     members.sort();
@@ -223,7 +218,7 @@ fn render_decls(decls: &[EtsDecl], objects: &[EtsObjectDecl]) -> String {
     let mut root = NamespaceNode::default();
 
     for object in objects {
-        root.insert_object_class(&object.target, &object.fields);
+        root.insert_object_class(&object.target, &object.members);
     }
 
     for decl in decls {
@@ -310,7 +305,7 @@ pub fn emit_compile_ets_class_member(target: &str, rendered: &str) {
     emit_compile_ets_rendered_decl(EtsDeclKind::Class, target, rendered);
 }
 
-pub fn emit_compile_ets_object(target: &str, fields: &[String]) {
+pub fn emit_compile_ets_object(target: &str, members: &[String]) {
     let Some(path) = output_path() else {
         return;
     };
@@ -321,7 +316,7 @@ pub fn emit_compile_ets_object(target: &str, fields: &[String]) {
     let file_state = state.entry(path.clone()).or_default();
     let item = EtsObjectDecl {
         target: target.to_string(),
-        fields: fields.to_vec(),
+        members: members.to_vec(),
     };
     if !file_state.objects.contains(&item) {
         file_state.objects.push(item);
@@ -333,7 +328,33 @@ pub fn generate_object_field_ets_decl(name: &str, ty: &Type) -> String {
     let ani_type = AniType::from_syn_type(ty);
     let ets_type = ani_type_to_ets(&ani_type);
     let default_value = default_value_for_object_field(&ani_type, &ets_type);
-    format!("{name}: {ets_type} = {default_value}")
+    format!("{name}: {ets_type} = {default_value};")
+}
+
+pub fn generate_object_property_ets_decl(name: &str, ty: &Type) -> String {
+    let ani_type = AniType::from_syn_type(ty);
+    let ets_type = ani_type_to_ets(&ani_type);
+    let default_value = default_value_for_object_field(&ani_type, &ets_type);
+    let backing_name = format!("__ani_property_{}", sanitize_object_property_name(name));
+    format!(
+        "private {backing_name}: {ets_type} = {default_value};\nget {name}(): {ets_type} {{\n  return this.{backing_name};\n}}\nset {name}(value: {ets_type}) {{\n  this.{backing_name} = value;\n}}"
+    )
+}
+
+fn sanitize_object_property_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "value".to_string()
+    } else {
+        out
+    }
 }
 
 fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
@@ -920,26 +941,35 @@ pub fn generate_getter_ets_decl(
     sig: &Signature,
     property_name: &str,
     backing_name: &str,
+    owner_name: &str,
     skip_first: bool,
+    is_static: bool,
 ) -> String {
     let params = collect_exposed_params(sig, skip_first);
     debug_assert!(params.is_empty(), "getter should not expose parameters");
     let ret_spec = exposed_return_spec(sig);
 
+    let static_prefix = if is_static { "static " } else { "" };
+    let call_target = if is_static {
+        format!("{owner_name}.{backing_name}()")
+    } else {
+        format!("this.{backing_name}()")
+    };
+
     if ret_spec.requires_bridge {
         format!(
-            "native {backing_name}(): {};
-get {property_name}(): {} {{
-  let __ani_result = this.{backing_name}();
+            "{static_prefix}native {backing_name}(): {};
+{static_prefix}get {property_name}(): {} {{
+  let __ani_result = {call_target};
   return __ani_result == null ? undefined : __ani_result;
 }}",
             ret_spec.native_ty, ret_spec.public_ty,
         )
     } else {
         format!(
-            "native {backing_name}(): {};
-get {property_name}(): {} {{
-  return this.{backing_name}();
+            "{static_prefix}native {backing_name}(): {};
+{static_prefix}get {property_name}(): {} {{
+  return {call_target};
 }}",
             ret_spec.public_ty, ret_spec.public_ty,
         )
@@ -950,7 +980,9 @@ pub fn generate_setter_ets_decl(
     sig: &Signature,
     property_name: &str,
     backing_name: &str,
+    owner_name: &str,
     skip_first: bool,
+    is_static: bool,
 ) -> String {
     let params = collect_exposed_param_specs(sig, skip_first);
     debug_assert_eq!(
@@ -968,19 +1000,26 @@ pub fn generate_setter_ets_decl(
             requires_bridge: false,
         });
 
+    let static_prefix = if is_static { "static " } else { "" };
+    let call_target = if is_static {
+        format!("{owner_name}.{backing_name}")
+    } else {
+        format!("this.{backing_name}")
+    };
+
     if param.requires_bridge {
         format!(
-            "native {backing_name}({}: {}): void;
-set {property_name}({}: {}) {{
-  this.{backing_name}({} == undefined ? null : {});
+            "{static_prefix}native {backing_name}({}: {}): void;
+{static_prefix}set {property_name}({}: {}) {{
+  {call_target}({} == undefined ? null : {});
 }}",
             param.name, param.native_ty, param.name, param.public_ty, param.name, param.name,
         )
     } else {
         format!(
-            "native {backing_name}({}: {}): void;
-set {property_name}({}: {}) {{
-  this.{backing_name}({});
+            "{static_prefix}native {backing_name}({}: {}): void;
+{static_prefix}set {property_name}({}: {}) {{
+  {call_target}({});
 }}",
             param.name, param.public_ty, param.name, param.public_ty, param.name,
         )
@@ -1039,11 +1078,11 @@ get age(): int {
         let objects = vec![
             EtsObjectDecl {
                 target: "UserProfile".to_string(),
-                fields: vec!["id: int".to_string(), "name: string".to_string()],
+                members: vec!["id: int = 0;".to_string(), "name: string = "";".to_string()],
             },
             EtsObjectDecl {
                 target: "example.Person".to_string(),
-                fields: vec!["active: boolean".to_string()],
+                members: vec!["active: boolean = false;".to_string()],
             },
         ];
 
@@ -1053,13 +1092,13 @@ get age(): int {
         assert!(rendered.contains("loadLibrary(\""));
         assert!(rendered.contains("native function add(a: int, b: int): int;"));
         assert!(rendered.contains("class UserProfile {"));
-        assert!(rendered.contains("id: int;"));
-        assert!(rendered.contains("name: string;"));
+        assert!(rendered.contains("id: int = 0;"));
+        assert!(rendered.contains("name: string = "";"));
         assert!(rendered.contains("namespace Math {"));
         assert!(rendered.contains("native function sqrt(x: double): double;"));
         assert!(rendered.contains("namespace example {"));
         assert!(rendered.contains("class Person {"));
-        assert!(rendered.contains("active: boolean;"));
+        assert!(rendered.contains("active: boolean = false;"));
         assert!(rendered.contains("native getName(): string;"));
         assert!(rendered.contains("static native create(name: string): long;"));
     }
@@ -1081,7 +1120,7 @@ get age(): int {
             fn person_get_age() -> i32
         };
         assert_eq!(
-            generate_getter_ets_decl(&sig, "age", "person_get_age", false),
+            generate_getter_ets_decl(&sig, "age", "person_get_age", "Person", false, false),
             "native person_get_age(): int;
 get age(): int {
   return this.person_get_age();
@@ -1095,10 +1134,52 @@ get age(): int {
             fn person_set_age(age: i32)
         };
         assert_eq!(
-            generate_setter_ets_decl(&sig, "age", "person_set_age", false),
+            generate_setter_ets_decl(&sig, "age", "person_set_age", "Person", false, false),
             "native person_set_age(age: int): void;
 set age(age: int) {
   this.person_set_age(age);
+}"
+        );
+    }
+
+    #[test]
+    fn test_generate_static_getter_ets_decl() {
+        let sig: Signature = syn::parse_quote! {
+            fn widget_revision() -> i32
+        };
+        assert_eq!(
+            generate_getter_ets_decl(
+                &sig,
+                "revision",
+                "__ani_native_revision",
+                "Widget",
+                false,
+                true
+            ),
+            "static native __ani_native_revision(): int;
+static get revision(): int {
+  return Widget.__ani_native_revision();
+}"
+        );
+    }
+
+    #[test]
+    fn test_generate_static_setter_ets_decl() {
+        let sig: Signature = syn::parse_quote! {
+            fn widget_set_revision(value: i32)
+        };
+        assert_eq!(
+            generate_setter_ets_decl(
+                &sig,
+                "revision",
+                "__ani_native_set_revision",
+                "Widget",
+                false,
+                true
+            ),
+            "static native __ani_native_set_revision(value: int): void;
+static set revision(value: int) {
+  Widget.__ani_native_set_revision(value);
 }"
         );
     }
@@ -1109,7 +1190,14 @@ set age(age: int) {
             fn person_get_name() -> Option<String>
         };
         assert_eq!(
-            generate_getter_ets_decl(&sig, "name", "__ani_native_person_get_name", false),
+            generate_getter_ets_decl(
+                &sig,
+                "name",
+                "__ani_native_person_get_name",
+                "Person",
+                false,
+                false
+            ),
             "native __ani_native_person_get_name(): String | null;
 get name(): String | null | undefined {
   let __ani_result = this.__ani_native_person_get_name();
@@ -1124,7 +1212,14 @@ get name(): String | null | undefined {
             fn person_set_name(name: Option<String>)
         };
         assert_eq!(
-            generate_setter_ets_decl(&sig, "name", "__ani_native_person_set_name", false),
+            generate_setter_ets_decl(
+                &sig,
+                "name",
+                "__ani_native_person_set_name",
+                "Person",
+                false,
+                false
+            ),
             "native __ani_native_person_set_name(name: String | null): void;
 set name(name: String | null | undefined) {
   this.__ani_native_person_set_name(name == undefined ? null : name);

@@ -162,8 +162,8 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
 /// - `#[ani(class = "MyClass")]` - Bind as class instance method
 /// - `#[ani(class = "MyClass", static)]` - Bind as class static method
 /// - `#[ani(class = "MyClass", constructor)]` - Bind as constructor
-/// - `#[ani(getter = "propertyName")]` - Reserved (currently not implemented)
-/// - `#[ani(setter = "propertyName")]` - Reserved (currently not implemented)
+/// - `#[ani(getter = "propertyName")]` - Bind as class getter
+/// - `#[ani(setter = "propertyName")]` - Bind as class setter
 ///
 /// # Initialization Function
 ///
@@ -263,7 +263,11 @@ pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Derive macro to generate ANI class bindings for structs
+/// Derive macro to generate typed ANI object conversions for structs.
+///
+/// The derived type can flow through `#[ani]` bindings as a concrete ArkTS object
+/// instead of falling back to `Object`. It also emits the corresponding ETS class
+/// shape during compilation.
 ///
 /// # Examples
 ///
@@ -273,6 +277,11 @@ pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// struct Person {
 ///     name: String,
 ///     age: i32,
+/// }
+///
+/// #[ani]
+/// fn rename(person: Person, name: String) -> Person {
+///     Person { name, ..person }
 /// }
 /// ```
 #[proc_macro_derive(AniClass, attributes(ani))]

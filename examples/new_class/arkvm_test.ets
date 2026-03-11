@@ -12,21 +12,21 @@ class Calculator {
 }
 
 class Person {
+  native __ani_native_person_get_age(): int;
+  get age(): int {
+    return this.__ani_native_person_get_age();
+  }
+  native __ani_native_person_get_name(): string;
+  get name(): string {
+    return this.__ani_native_person_get_name();
+  }
+  native __ani_native_person_set_age(age: int): void;
+  set age(age: int) {
+    this.__ani_native_person_set_age(age);
+  }
   native constructor(name: string, age: int);
   native destroy(): void;
   native greet(): string;
-  native person_get_age(): int;
-  get age(): int {
-    return this.person_get_age();
-  }
-  native person_get_name(): string;
-  get name(): string {
-    return this.person_get_name();
-  }
-  native person_set_age(age: int): void;
-  set age(age: int) {
-    this.person_set_age(age);
-  }
 }
 
 

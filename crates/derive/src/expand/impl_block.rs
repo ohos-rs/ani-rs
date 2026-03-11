@@ -4,13 +4,17 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, ReturnType};
+use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Type};
 
-use crate::codegen::{generate_register_call, generate_wrapper_with_target};
-use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
+use crate::codegen::{emit_export_plan_ets, generate_register_call, generate_wrapper_with_target};
+use crate::parser::{parse_bindgen_attrs_from_attribute, BindgenAttrs};
+use crate::types::{
+    ani_type::resolve_object_type_fields, generate_param_conversions, generate_return_conversion,
+    rust_type_to_ani_type,
+};
 
 use super::function::{
-    emit_binding_plan_ets, resolve_binding_plan, validate_constructor_usage,
+    resolve_accessor_config, resolve_binding_plan, validate_constructor_usage,
     validate_unsupported_bind_attrs,
 };
 
@@ -95,16 +99,34 @@ struct ProcessedMethod {
     original_method: TokenStream,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MethodReceiver {
+    None,
+    Ref,
+    RefMut,
+}
+
+impl MethodReceiver {
+    fn has_receiver(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    fn is_mut(self) -> bool {
+        matches!(self, Self::RefMut)
+    }
+}
+
 fn process_method(
     impl_attrs: &BindgenAttrs,
     impl_block: &ItemImpl,
     struct_name: &str,
     method: &syn::ImplItemFn,
 ) -> syn::Result<ProcessedMethod> {
-    validate_receiver_free_method(method)?;
+    let receiver = analyze_method_receiver(method)?;
 
     let method_attrs = parse_method_bind_attrs(&method.attrs)?;
     let merged_attrs = merge_bindgen_attrs(impl_attrs, &method_attrs, struct_name);
+    validate_receiver_usage(method, &merged_attrs, receiver)?;
 
     let method_fn = to_item_fn(method);
     validate_unsupported_bind_attrs(&merged_attrs, &method_fn)?;
@@ -117,6 +139,20 @@ fn process_method(
     } else {
         merged_attrs.is_static
     };
+    let skip_first = receiver.has_receiver();
+
+    if let Some(accessor) = resolve_accessor_config(
+        &merged_attrs,
+        &method_name.to_string(),
+        &method.sig,
+        is_static,
+        is_constructor,
+        skip_first,
+    )? {
+        if !is_static {
+            validate_accessor_backing_field_conflict(struct_name, &accessor.property_name, method)?;
+        }
+    }
 
     let binding = resolve_binding_plan(
         &merged_attrs,
@@ -124,23 +160,32 @@ fn process_method(
         &method.sig,
         is_static,
         is_constructor,
-        false,
+        skip_first,
     )?;
-    emit_binding_plan_ets(&binding);
+    emit_export_plan_ets(&binding);
 
     let wrapper_name = format_ident!("__ani_{}_{}", struct_name, method_name);
-    let call_target = {
-        let self_ty = &impl_block.self_ty;
-        quote! { <#self_ty>::#method_name }
-    };
     let sanitized_method = sanitize_method(method);
-    let wrapper = generate_wrapper_with_target(
-        &to_item_fn(&sanitized_method),
-        &wrapper_name,
-        true,
-        is_static,
-        call_target,
-    );
+    let wrapper = if receiver.has_receiver() {
+        generate_receiver_wrapper(
+            &to_item_fn(&sanitized_method),
+            &wrapper_name,
+            &impl_block.self_ty,
+            receiver,
+        )
+    } else {
+        let call_target = {
+            let self_ty = &impl_block.self_ty;
+            quote! { <#self_ty>::#method_name }
+        };
+        generate_wrapper_with_target(
+            &to_item_fn(&sanitized_method),
+            &wrapper_name,
+            true,
+            is_static,
+            call_target,
+        )
+    };
 
     let register_call = generate_register_call(
         &binding.register_target,
@@ -162,6 +207,300 @@ fn process_method(
         queue_entry,
         original_method: quote! { #sanitized_method },
     })
+}
+
+fn generate_receiver_wrapper(
+    func: &ItemFn,
+    wrapper_name: &syn::Ident,
+    self_ty: &Type,
+    receiver: MethodReceiver,
+) -> TokenStream {
+    let return_type = &func.sig.output;
+    let wrapper_return = build_wrapper_return(return_type);
+    let param_error_return = build_param_error_return(return_type);
+    let regular_params: Vec<_> = func
+        .sig
+        .inputs
+        .iter()
+        .filter(|arg| matches!(classify_receiver_arg(arg), ReceiverArgKind::Regular))
+        .collect();
+    let conversions = generate_param_conversions(&regular_params, &param_error_return);
+    let wrapper_params = regular_wrapper_params(func);
+    let injected_env_bindings = generate_receiver_env_bindings(func);
+    let call_args = build_receiver_call_args(func);
+    let method_name = &func.sig.ident;
+    let receiver_load_error = generate_throw_error_and_return(&param_error_return);
+    let writeback = if receiver.is_mut() {
+        let writeback_error = generate_throw_error_and_return(&param_error_return);
+        quote! {
+            if let Err(e) = ani::conversions::WriteBackToAniObject::write_back_to_ani_object(
+                __ani_self,
+                &__ani_env,
+                &__ani_this,
+            ) {
+                #writeback_error
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let return_conversion = generate_return_conversion(return_type);
+
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
+        unsafe extern "C" fn #wrapper_name(
+            env: *mut ani::sys::ani_env,
+            this: ani::sys::ani_object
+            #(, #wrapper_params)*
+        ) #wrapper_return {
+            let __ani_env = ani::env::Env::from_raw_unchecked(env);
+            let __ani_this = ani::types::AniObject::from_raw(this);
+            let mut __ani_self: #self_ty = match ani::conversions::FromAni::from_ani(
+                &__ani_env,
+                this as <#self_ty as ani::conversions::FromAni<'_>>::Input,
+            ) {
+                Ok(value) => value,
+                Err(e) => {
+                    #receiver_load_error
+                }
+            };
+            #injected_env_bindings
+            #conversions
+            let result = __ani_self.#method_name(#(#call_args),*);
+            #writeback
+            #return_conversion
+        }
+    }
+}
+
+fn regular_wrapper_params(func: &ItemFn) -> Vec<TokenStream> {
+    let mut params = Vec::new();
+
+    for (i, param) in func
+        .sig
+        .inputs
+        .iter()
+        .filter(|arg| matches!(classify_receiver_arg(arg), ReceiverArgKind::Regular))
+        .enumerate()
+    {
+        if let FnArg::Typed(pat_type) = param {
+            let param_name = if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                pat_ident.ident.clone()
+            } else {
+                format_ident!("arg{}", i)
+            };
+            let ani_type = rust_type_to_ani_type(&pat_type.ty);
+            params.push(quote! { #param_name: #ani_type });
+        }
+    }
+
+    params
+}
+
+fn generate_receiver_env_bindings(func: &ItemFn) -> TokenStream {
+    let mut vars = Vec::new();
+
+    for arg in &func.sig.inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            let Pat::Ident(pat_ident) = &*pat_type.pat else {
+                continue;
+            };
+            let ident = &pat_ident.ident;
+            let binding_ident = format_ident!("__ani_injected_{}", ident);
+            if matches!(classify_receiver_arg(arg), ReceiverArgKind::InjectedEnv) {
+                let ty = &pat_type.ty;
+                let ty_str = quote!(#ty).to_string().replace(' ', "");
+                if ty_str.starts_with('&') {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_env;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = ani::env::Env::from_raw_unchecked(env);
+                    });
+                }
+            }
+        }
+    }
+
+    quote! { #(#vars)* }
+}
+
+fn build_receiver_call_args(func: &ItemFn) -> Vec<TokenStream> {
+    let mut args = Vec::new();
+
+    for arg in &func.sig.inputs {
+        match classify_receiver_arg(arg) {
+            ReceiverArgKind::Receiver => {}
+            ReceiverArgKind::InjectedEnv => {
+                if let FnArg::Typed(pat_type) = arg {
+                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let ident = format_ident!("__ani_injected_{}", pat_ident.ident);
+                        args.push(quote! { #ident });
+                    }
+                }
+            }
+            ReceiverArgKind::Regular => {
+                if let FnArg::Typed(pat_type) = arg {
+                    let param_name = if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        format_ident!("{}_converted", pat_ident.ident)
+                    } else {
+                        format_ident!("arg_converted")
+                    };
+                    args.push(quote! { #param_name });
+                }
+            }
+            ReceiverArgKind::InjectedThis | ReceiverArgKind::InjectedClass => {}
+        }
+    }
+
+    args
+}
+
+fn build_wrapper_return(return_type: &ReturnType) -> TokenStream {
+    match return_type {
+        ReturnType::Default => quote! {},
+        ReturnType::Type(_, ty) => {
+            let ani_type = rust_type_to_ani_type(ty);
+            quote! { -> #ani_type }
+        }
+    }
+}
+
+fn build_param_error_return(return_type: &ReturnType) -> TokenStream {
+    match return_type {
+        ReturnType::Default => quote! { return; },
+        ReturnType::Type(_, _) => quote! { return Default::default(); },
+    }
+}
+
+fn generate_throw_error_and_return(on_error_return: &TokenStream) -> TokenStream {
+    quote! {
+        let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        #on_error_return
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReceiverArgKind {
+    Receiver,
+    InjectedEnv,
+    InjectedThis,
+    InjectedClass,
+    Regular,
+}
+
+fn classify_receiver_arg(arg: &FnArg) -> ReceiverArgKind {
+    match arg {
+        FnArg::Receiver(_) => ReceiverArgKind::Receiver,
+        FnArg::Typed(pat_type) => {
+            let ty = &*pat_type.ty;
+            let name = get_param_name(arg);
+
+            if is_env_type(ty) {
+                return ReceiverArgKind::InjectedEnv;
+            }
+            if is_this_type(ty) {
+                return ReceiverArgKind::InjectedThis;
+            }
+            if let Some(name) = name.as_deref() {
+                if name == "this" && is_ani_object_type(ty) {
+                    return ReceiverArgKind::InjectedThis;
+                }
+                if (name == "class" || name == "_class") && is_class_type(ty) {
+                    return ReceiverArgKind::InjectedClass;
+                }
+            }
+
+            ReceiverArgKind::Regular
+        }
+    }
+}
+
+fn validate_receiver_usage(
+    method: &syn::ImplItemFn,
+    attrs: &BindgenAttrs,
+    receiver: MethodReceiver,
+) -> syn::Result<()> {
+    if !receiver.has_receiver() {
+        return Ok(());
+    }
+
+    if attrs.constructor {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "#[ani(constructor)] cannot use a Rust self receiver; initialize instance state via injected `this` instead",
+        ));
+    }
+
+    if attrs.is_static {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "#[ani(static)] cannot be combined with a Rust self receiver",
+        ));
+    }
+
+    for arg in &method.sig.inputs {
+        match classify_receiver_arg(arg) {
+            ReceiverArgKind::InjectedThis => {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    "Rust self receiver methods must not also request injected `this`; use `self` / `&mut self` only",
+                ));
+            }
+            ReceiverArgKind::InjectedClass => {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    "Rust self receiver methods must not request injected `class`",
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_accessor_backing_field_conflict(
+    struct_name: &str,
+    property_name: &str,
+    method: &syn::ImplItemFn,
+) -> syn::Result<()> {
+    let Some(fields) = resolve_object_type_fields(struct_name) else {
+        return Ok(());
+    };
+
+    if fields.iter().any(|field| field == property_name) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!(
+                "#[ani(getter)] / #[ani(setter)] property `{property_name}` conflicts with generated object backing field `{property_name}` on `{struct_name}`; use a distinct Rust backing field name such as `_{property_name}`"
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn analyze_method_receiver(method: &syn::ImplItemFn) -> syn::Result<MethodReceiver> {
+    let Some(receiver) = method.sig.receiver() else {
+        return Ok(MethodReceiver::None);
+    };
+
+    if receiver.reference.is_none() {
+        return Err(syn::Error::new_spanned(
+            receiver,
+            "#[ani] impl methods only support `&self` and `&mut self`; by-value `self` is not supported yet",
+        ));
+    }
+
+    if receiver.mutability.is_some() {
+        Ok(MethodReceiver::RefMut)
+    } else {
+        Ok(MethodReceiver::Ref)
+    }
 }
 
 fn extract_struct_name(impl_block: &ItemImpl) -> Result<String, TokenStream> {
@@ -231,22 +570,36 @@ fn to_item_fn(method: &syn::ImplItemFn) -> ItemFn {
     }
 }
 
-fn validate_receiver_free_method(method: &syn::ImplItemFn) -> syn::Result<()> {
-    if method
-        .sig
-        .inputs
-        .iter()
-        .any(|arg| matches!(arg, FnArg::Receiver(_)))
-    {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            "#[ani] impl methods do not support Rust self receivers yet; use associated functions with injected `this` instead",
-        ));
+fn get_param_name(arg: &FnArg) -> Option<String> {
+    if let FnArg::Typed(pat_type) = arg {
+        if let Pat::Ident(pat_ident) = &*pat_type.pat {
+            return Some(pat_ident.ident.to_string());
+        }
     }
-    if let ReturnType::Type(_, _) = &method.sig.output {
-        return Ok(());
-    }
-    Ok(())
+    None
+}
+
+fn is_env_type(ty: &Type) -> bool {
+    let type_str = quote!(#ty).to_string().replace(' ', "");
+    type_str.contains("Env<") || type_str == "Env" || type_str.starts_with("&Env")
+}
+
+fn is_this_type(ty: &Type) -> bool {
+    let type_str = quote!(#ty).to_string().replace(' ', "");
+    type_str.contains("This<")
+        || type_str.contains("This>")
+        || type_str == "This"
+        || type_str.starts_with("&This")
+}
+
+fn is_ani_object_type(ty: &Type) -> bool {
+    let type_str = quote!(#ty).to_string().replace(' ', "");
+    type_str.contains("AniObject") || type_str.starts_with("&AniObject")
+}
+
+fn is_class_type(ty: &Type) -> bool {
+    let type_str = quote!(#ty).to_string().replace(' ', "");
+    type_str.contains("AniClass") || type_str.starts_with("&AniClass")
 }
 
 #[cfg(test)]
@@ -283,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_expansion_rejects_receiver_methods() {
+    fn impl_expansion_supports_receiver_methods() {
         let attrs = BindgenAttrs {
             class: Some("Widget".to_string()),
             ..Default::default()
@@ -292,12 +645,63 @@ mod tests {
             impl Widget {
                 #[ani]
                 fn get_name(&self) -> String {
-                    "ok".to_string()
+                    self.name.clone()
+                }
+
+                #[ani]
+                fn bump(&mut self, delta: i32) -> i32 {
+                    self.count += delta;
+                    self.count
                 }
             }
         };
 
         let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
-        assert!(expanded.contains("do not support Rust self receivers yet"));
+        assert!(expanded.contains("FromAni :: from_ani"));
+        assert!(expanded.contains("__ani_self . get_name"));
+        assert!(expanded.contains("write_back_to_ani_object"));
+    }
+
+    #[test]
+    fn impl_expansion_rejects_by_value_self_methods() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            ..Default::default()
+        };
+        let impl_block: ItemImpl = parse_quote! {
+            impl Widget {
+                #[ani]
+                fn consume(self) -> String {
+                    self.name
+                }
+            }
+        };
+
+        let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
+        assert!(expanded.contains("only support `&self` and `&mut self`"));
+    }
+
+    #[test]
+    fn impl_expansion_rejects_accessor_backing_field_conflicts() {
+        crate::types::ani_type::register_object_type_fields(
+            "Widget",
+            &["count".to_string(), "name".to_string()],
+        );
+
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            ..Default::default()
+        };
+        let impl_block: ItemImpl = parse_quote! {
+            impl Widget {
+                #[ani(getter)]
+                fn get_count(&self) -> i32 {
+                    self.count
+                }
+            }
+        };
+
+        let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
+        assert!(expanded.contains("conflicts with generated object backing field `count`"));
     }
 }

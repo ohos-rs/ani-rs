@@ -35,26 +35,34 @@ pub struct InitRegisterEntry {
     pub callback: RegisterCallback,
 }
 
-/// Native binding target kind.
+/// Native binding target description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum BindingTargetKind {
+pub enum BindingTarget {
     /// Top-level module functions.
-    Module,
+    Module(&'static str),
     /// Namespace functions.
-    Namespace,
-    /// Instance methods on a class.
-    ClassInstance,
-    /// Static methods on a class.
-    ClassStatic,
+    Namespace(&'static str),
+    /// Class methods or accessors.
+    Class {
+        descriptor: &'static str,
+        is_static: bool,
+    },
+}
+
+impl BindingTarget {
+    fn descriptor(self) -> &'static str {
+        match self {
+            Self::Module(descriptor) | Self::Namespace(descriptor) => descriptor,
+            Self::Class { descriptor, .. } => descriptor,
+        }
+    }
 }
 
 /// Deferred binding entry collected during registration callbacks.
 #[derive(Clone, Copy)]
 pub struct PendingBindingEntry {
-    /// Binding destination category.
-    pub target_kind: BindingTargetKind,
-    /// Target descriptor (module / namespace / class descriptor).
-    pub descriptor: &'static str,
+    /// Binding destination.
+    pub target: BindingTarget,
     /// Pointer to static C string for function name.
     pub name: usize,
     /// Pointer to static C string for function signature.
@@ -107,16 +115,16 @@ pub fn register_init_callback(
         .push(entry);
 }
 
-fn queue_binding(
-    target_kind: BindingTargetKind,
-    descriptor: &'static str,
+/// Queue a native binding export.
+#[doc(hidden)]
+pub fn queue_binding(
+    target: BindingTarget,
     name: &'static str,
     signature: &'static str,
     pointer: *const c_void,
 ) -> sys::ani_status {
     let entry = PendingBindingEntry {
-        target_kind,
-        descriptor,
+        target,
         name: name.as_ptr() as usize,
         signature: signature.as_ptr() as usize,
         pointer: pointer as usize,
@@ -136,13 +144,7 @@ pub fn queue_module_binding(
     signature: &'static str,
     pointer: *const c_void,
 ) -> sys::ani_status {
-    queue_binding(
-        BindingTargetKind::Module,
-        descriptor,
-        name,
-        signature,
-        pointer,
-    )
+    queue_binding(BindingTarget::Module(descriptor), name, signature, pointer)
 }
 
 /// Queue a namespace native function binding.
@@ -154,8 +156,7 @@ pub fn queue_namespace_binding(
     pointer: *const c_void,
 ) -> sys::ani_status {
     queue_binding(
-        BindingTargetKind::Namespace,
-        descriptor,
+        BindingTarget::Namespace(descriptor),
         name,
         signature,
         pointer,
@@ -171,12 +172,15 @@ pub fn queue_class_binding(
     signature: &'static str,
     pointer: *const c_void,
 ) -> sys::ani_status {
-    let target_kind = if is_static {
-        BindingTargetKind::ClassStatic
-    } else {
-        BindingTargetKind::ClassInstance
-    };
-    queue_binding(target_kind, descriptor, name, signature, pointer)
+    queue_binding(
+        BindingTarget::Class {
+            descriptor,
+            is_static,
+        },
+        name,
+        signature,
+        pointer,
+    )
 }
 
 const DEFMODULE_PREFIX: &str = "@defModule.";
@@ -389,11 +393,10 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         .read()
         .expect("Failed to acquire read lock for PENDING_BINDINGS");
 
-    let mut grouped: BTreeMap<(BindingTargetKind, &'static str), Vec<sys::ani_native_function>> =
-        BTreeMap::new();
+    let mut grouped: BTreeMap<BindingTarget, Vec<sys::ani_native_function>> = BTreeMap::new();
     for entry in pending.iter() {
         grouped
-            .entry((entry.target_kind, entry.descriptor))
+            .entry(entry.target)
             .or_default()
             .push(sys::ani_native_function {
                 name: entry.name as *const c_char,
@@ -415,10 +418,11 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         // pointer to `ani_env`, whose first field points to API table.
         &*(*env)
     };
-    for ((target_kind, descriptor), functions) in grouped {
+    for (target, functions) in grouped {
         if debug {
             eprintln!(
-                "[ani] bind target={target_kind:?} descriptor={descriptor} count={}",
+                "[ani] bind target={target:?} descriptor={} count={}",
+                target.descriptor(),
                 functions.len()
             );
             for (idx, f) in functions.iter().enumerate() {
@@ -445,14 +449,26 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
             }
         }
 
-        let status = match target_kind {
-            BindingTargetKind::ClassInstance => {
+        let status = match target {
+            BindingTarget::Class {
+                descriptor,
+                is_static,
+            } => {
                 let (status, cls) =
                     unsafe { find_class_with_fallback(api, env, descriptor, debug) };
                 if status != sys::ani_status_ANI_OK {
                     status
                 } else if cls.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
+                } else if is_static {
+                    unsafe {
+                        (api.Class_BindStaticNativeMethods.unwrap())(
+                            env,
+                            cls,
+                            functions.as_ptr(),
+                            functions.len(),
+                        )
+                    }
                 } else {
                     unsafe {
                         (api.Class_BindNativeMethods.unwrap())(
@@ -464,25 +480,7 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     }
                 }
             }
-            BindingTargetKind::ClassStatic => {
-                let (status, cls) =
-                    unsafe { find_class_with_fallback(api, env, descriptor, debug) };
-                if status != sys::ani_status_ANI_OK {
-                    status
-                } else if cls.is_null() {
-                    sys::ani_status_ANI_NOT_FOUND
-                } else {
-                    unsafe {
-                        (api.Class_BindStaticNativeMethods.unwrap())(
-                            env,
-                            cls,
-                            functions.as_ptr(),
-                            functions.len(),
-                        )
-                    }
-                }
-            }
-            BindingTargetKind::Namespace => {
+            BindingTarget::Namespace(descriptor) => {
                 let (status, ns) =
                     unsafe { find_namespace_with_fallback(api, env, descriptor, debug) };
                 if status != sys::ani_status_ANI_OK {
@@ -500,7 +498,7 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     }
                 }
             }
-            BindingTargetKind::Module => {
+            BindingTarget::Module(descriptor) => {
                 if descriptor.is_empty() {
                     sys::ani_status_ANI_INVALID_ARGS
                 } else {
@@ -542,7 +540,7 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         };
 
         if debug {
-            eprintln!("[ani] bind done target={target_kind:?} status={status}");
+            eprintln!("[ani] bind done target={target:?} status={status}");
         }
 
         if status != sys::ani_status_ANI_OK {
@@ -631,17 +629,43 @@ mod tests {
         let _guard = TEST_LOCK.lock().expect("lock test mutex");
         clear_registrations();
 
-        let status = queue_class_binding("demo.Test", false, "m1", ":", ptr::null());
+        let status = queue_binding(
+            BindingTarget::Class {
+                descriptor: "demo.Test",
+                is_static: false,
+            },
+            "m1",
+            ":",
+            ptr::null(),
+        );
         assert_eq!(status, sys::ani_status_ANI_OK);
-        let status = queue_class_binding("demo.Test", true, "m2", ":", ptr::null());
+        let status = queue_binding(
+            BindingTarget::Class {
+                descriptor: "demo.Test",
+                is_static: true,
+            },
+            "m2",
+            ":",
+            ptr::null(),
+        );
         assert_eq!(status, sys::ani_status_ANI_OK);
 
         let pending = PENDING_BINDINGS.read().expect("read pending");
         assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].target_kind, BindingTargetKind::ClassInstance);
-        assert_eq!(pending[1].target_kind, BindingTargetKind::ClassStatic);
-        assert_eq!(pending[0].descriptor, "demo.Test");
-        assert_eq!(pending[1].descriptor, "demo.Test");
+        assert_eq!(
+            pending[0].target,
+            BindingTarget::Class {
+                descriptor: "demo.Test",
+                is_static: false
+            }
+        );
+        assert_eq!(
+            pending[1].target,
+            BindingTarget::Class {
+                descriptor: "demo.Test",
+                is_static: true
+            }
+        );
 
         drop(pending);
         clear_registrations();

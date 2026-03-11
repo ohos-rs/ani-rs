@@ -1,18 +1,21 @@
 //! Object model example.
 //!
-//! Covers strongly typed `#[ani(object)]` structs flowing through:
+//! Covers strongly typed derive-based ArkTS objects flowing through:
 //! - direct parameters / returns
 //! - `Either<T, String>`
 //! - `Result<T>`
 
 use ani::conversions::Either;
 use ani::prelude::*;
-use ani_derive::ani;
+use ani_derive::{ani, AniClass};
 
-#[ani(object)]
+#[derive(AniClass)]
+#[ani(class = "UserProfile")]
 pub struct UserProfile {
     pub id: i32,
+    #[ani(property)]
     pub name: String,
+    #[ani(property)]
     pub active: bool,
 }
 

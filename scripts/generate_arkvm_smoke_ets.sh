@@ -367,10 +367,49 @@ ETS
 let widget = new __ANI_GENERATED__.Widget("impl", 2);
 __assert_eq_string("Widget.name", widget.name, "impl");
 __assert_eq_int("Widget.count", widget.count, 2);
+__assert_eq_string("Widget.maybe_name_some", widget.maybe_name(true) as String, "impl");
+__assert_true("Widget.maybe_name_none", widget.maybe_name(false) == undefined);
+let widgetSnapshot = widget.snapshot();
+__assert_eq_string("Widget.snapshot_label", widgetSnapshot.label, "impl");
+__assert_eq_int("Widget.snapshot_total", widgetSnapshot.total, 2);
+let maybeSnapshot = widget.maybe_snapshot(true) as WidgetSnapshot;
+__assert_eq_string("Widget.maybe_snapshot_label", maybeSnapshot.label, "impl");
+__assert_true("Widget.maybe_snapshot_none", widget.maybe_snapshot(false) == undefined);
+let checkedSnapshot = widget.checked_snapshot(2);
+__assert_eq_int("Widget.checked_snapshot_total", checkedSnapshot.total, 2);
+__assert_throws("Widget.checked_snapshot_error", (): void => {
+  widget.checked_snapshot(3);
+});
+let maybeCheckedSnapshot = widget.maybe_checked_snapshot(true, 2) as WidgetSnapshot;
+__assert_eq_int("Widget.maybe_checked_snapshot_total", maybeCheckedSnapshot.total, 2);
+__assert_true("Widget.maybe_checked_snapshot_none", widget.maybe_checked_snapshot(false, 2) == undefined);
+__assert_throws("Widget.maybe_checked_snapshot_error", (): void => {
+  widget.maybe_checked_snapshot(true, 3);
+});
+let chooseSnapshot = widget.choose_snapshot(true) as WidgetSnapshot;
+__assert_eq_string("Widget.choose_snapshot_label", chooseSnapshot.label, "impl");
+let chooseText = widget.choose_snapshot(false) as String;
+__assert_eq_string("Widget.choose_snapshot_text", chooseText.toString(), "Widget(impl, 2)");
+let mergeInput = new WidgetSnapshot();
+mergeInput.label = "child";
+mergeInput.total = 5;
+__assert_eq_string("Widget.merge_snapshot_input_object", widget.merge_snapshot_input(mergeInput), "impl:child+7");
+__assert_eq_string("Widget.merge_snapshot_input_string", widget.merge_snapshot_input("plain"), "impl:plain");
+let previousName = widget.rename("renamed");
+__assert_eq_string("Widget.rename_previous", previousName as String, "impl");
+__assert_eq_string("Widget.name_after_rename", widget.name, "renamed");
+__assert_throws("Widget.rename_undefined", (): void => {
+  widget.rename(undefined);
+});
 widget.count = 5;
 __assert_eq_int("Widget.count_after_set", widget.count, 5);
-__assert_eq_string("Widget.describe", widget.describe(), "Widget(impl, 5)");
+__assert_eq_int("Widget.bump", widget.bump(3), 8);
+__assert_eq_int("Widget.count_after_bump", widget.count, 8);
+__assert_eq_string("Widget.describe", widget.describe(), "Widget(renamed, 8)");
 __assert_eq_int("Widget.sum", __ANI_GENERATED__.Widget.sum(2, 4), 6);
+__assert_eq_int("Widget.revision_initial", __ANI_GENERATED__.Widget.revision, 1);
+__ANI_GENERATED__.Widget.revision = 7;
+__assert_eq_int("Widget.revision_after_set", __ANI_GENERATED__.Widget.revision, 7);
 ETS
       ;;
     ani-example-object-typed)

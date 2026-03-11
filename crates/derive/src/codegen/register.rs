@@ -18,35 +18,31 @@ pub fn generate_register_call(
     signature: &str,
     wrapper_expr: TokenStream,
 ) -> TokenStream {
-    match target {
+    let target_expr = match target {
         RegisterTarget::Module(module_descriptor) => quote! {
-            ::ani::module_register::queue_module_binding(
-                #module_descriptor,
-                concat!(#func_name, "\0"),
-                concat!(#signature, "\0"),
-                #wrapper_expr,
-            )
+            ::ani::module_register::BindingTarget::Module(#module_descriptor)
         },
         RegisterTarget::Namespace(namespace_descriptor) => quote! {
-            ::ani::module_register::queue_namespace_binding(
-                #namespace_descriptor,
-                concat!(#func_name, "\0"),
-                concat!(#signature, "\0"),
-                #wrapper_expr,
-            )
+            ::ani::module_register::BindingTarget::Namespace(#namespace_descriptor)
         },
         RegisterTarget::Class {
             descriptor,
             is_static,
         } => quote! {
-            ::ani::module_register::queue_class_binding(
-                #descriptor,
-                #is_static,
-                concat!(#func_name, "\0"),
-                concat!(#signature, "\0"),
-                #wrapper_expr,
-            )
+            ::ani::module_register::BindingTarget::Class {
+                descriptor: #descriptor,
+                is_static: #is_static,
+            }
         },
+    };
+
+    quote! {
+        ::ani::module_register::queue_binding(
+            #target_expr,
+            concat!(#func_name, "\0"),
+            concat!(#signature, "\0"),
+            #wrapper_expr,
+        )
     }
 }
 

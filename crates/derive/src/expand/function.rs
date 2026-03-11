@@ -6,46 +6,17 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
-use crate::codegen::{RegisterTarget, generate_register_fn, generate_wrapper, has_this_injection};
+use crate::codegen::{
+    emit_export_plan_ets, generate_register_fn, generate_wrapper, has_this_injection,
+    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
+};
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    EtsDeclKind, class_to_descriptor, current_module_name, emit_compile_ets_class_member,
-    emit_compile_ets_decl, emit_compile_ets_rendered_decl, function_requires_nullish_bridge,
+    class_to_descriptor, current_module_name, function_requires_nullish_bridge,
     generate_ctor_ets_decl, generate_ctor_signature, generate_fn_ets_binding,
     generate_fn_signature, generate_getter_ets_decl, generate_setter_ets_decl,
-    module_to_descriptor, namespace_to_descriptor, qualify_member_descriptor,
+    module_to_descriptor, namespace_to_descriptor, qualify_member_descriptor, EtsDeclKind,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EtsBindingTarget {
-    pub kind: EtsDeclKind,
-    pub target: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EtsBindingEmission {
-    Plain {
-        target: EtsBindingTarget,
-        signature: String,
-        is_static: bool,
-    },
-    Rendered {
-        target: EtsBindingTarget,
-        rendered: String,
-    },
-    ClassMember {
-        target: String,
-        rendered: String,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BindingPlan {
-    pub register_symbol_name: String,
-    pub signature: String,
-    pub register_target: RegisterTarget,
-    pub ets: EtsBindingEmission,
-}
 
 /// Expand `#[ani]` for functions
 pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
@@ -100,7 +71,7 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
         Ok(binding) => binding,
         Err(err) => return err.to_compile_error(),
     };
-    emit_binding_plan_ets(&binding);
+    emit_export_plan_ets(&binding);
 
     // Generate wrapper function name
     let wrapper_name = format_ident!("__ani_native_{}", func_name);
@@ -237,7 +208,7 @@ pub(crate) fn resolve_accessor_config(
     if attrs.class.is_none() || attrs.namespace.is_some() || attrs.module.is_some() {
         return Err(syn::Error::new_spanned(
             sig,
-            "#[ani(getter)] / #[ani(setter)] can only be used on instance methods bound to a class",
+            "#[ani(getter)] / #[ani(setter)] can only be used on methods bound to a class",
         ));
     }
     if is_constructor {
@@ -246,13 +217,6 @@ pub(crate) fn resolve_accessor_config(
             "#[ani(constructor)] cannot be combined with #[ani(getter)] / #[ani(setter)]",
         ));
     }
-    if is_static {
-        return Err(syn::Error::new_spanned(
-            sig,
-            "#[ani(getter)] / #[ani(setter)] do not support static methods",
-        ));
-    }
-
     match kind {
         AccessorKind::Getter => validate_getter_signature(sig, skip_first)?,
         AccessorKind::Setter => validate_setter_signature(sig, skip_first)?,
@@ -277,7 +241,7 @@ pub(crate) fn resolve_binding_plan(
     is_static: bool,
     is_constructor: bool,
     skip_first: bool,
-) -> syn::Result<BindingPlan> {
+) -> syn::Result<ExportPlan> {
     let ets_name = attrs.name.clone().unwrap_or_else(|| rust_name.to_string());
     let requires_nullish_bridge = function_requires_nullish_bridge(sig, skip_first);
     if is_constructor && requires_nullish_bridge {
@@ -287,16 +251,16 @@ pub(crate) fn resolve_binding_plan(
         ));
     }
 
+    let accessor =
+        resolve_accessor_config(attrs, rust_name, sig, is_static, is_constructor, skip_first)?;
+
     let register_symbol_name = if is_constructor {
         "<ctor>".to_string()
-    } else if requires_nullish_bridge {
+    } else if accessor.is_some() || requires_nullish_bridge {
         format!("__ani_native_{ets_name}")
     } else {
         ets_name.clone()
     };
-
-    let accessor =
-        resolve_accessor_config(attrs, rust_name, sig, is_static, is_constructor, skip_first)?;
 
     let signature = attrs.signature.clone().unwrap_or_else(|| {
         if is_constructor {
@@ -310,7 +274,14 @@ pub(crate) fn resolve_binding_plan(
     let ets = if let Some(accessor) = &accessor {
         EtsBindingEmission::ClassMember {
             target: ets_target.target.clone(),
-            rendered: render_accessor_ets_decl(accessor, sig, &register_symbol_name, skip_first),
+            rendered: render_accessor_ets_decl(
+                accessor,
+                sig,
+                &ets_target.target,
+                &register_symbol_name,
+                skip_first,
+                is_static,
+            ),
         }
     } else if is_constructor {
         EtsBindingEmission::Plain {
@@ -331,28 +302,12 @@ pub(crate) fn resolve_binding_plan(
         }
     };
 
-    Ok(BindingPlan {
+    Ok(ExportPlan {
         register_symbol_name,
         signature,
         register_target: resolve_register_target(attrs, is_static),
         ets,
     })
-}
-
-pub(crate) fn emit_binding_plan_ets(binding: &BindingPlan) {
-    match &binding.ets {
-        EtsBindingEmission::Plain {
-            target,
-            signature,
-            is_static,
-        } => emit_compile_ets_decl(target.kind, &target.target, signature, *is_static),
-        EtsBindingEmission::Rendered { target, rendered } => {
-            emit_compile_ets_rendered_decl(target.kind, &target.target, rendered)
-        }
-        EtsBindingEmission::ClassMember { target, rendered } => {
-            emit_compile_ets_class_member(target, rendered)
-        }
-    }
 }
 
 fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
@@ -389,16 +344,29 @@ fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
 fn render_accessor_ets_decl(
     accessor: &AccessorConfig,
     sig: &Signature,
+    class_target: &str,
     backing_name: &str,
     skip_first: bool,
+    is_static: bool,
 ) -> String {
+    let owner_name = class_target.rsplit('.').next().unwrap_or(class_target);
     match accessor.kind {
-        AccessorKind::Getter => {
-            generate_getter_ets_decl(sig, &accessor.property_name, backing_name, skip_first)
-        }
-        AccessorKind::Setter => {
-            generate_setter_ets_decl(sig, &accessor.property_name, backing_name, skip_first)
-        }
+        AccessorKind::Getter => generate_getter_ets_decl(
+            sig,
+            &accessor.property_name,
+            backing_name,
+            owner_name,
+            skip_first,
+            is_static,
+        ),
+        AccessorKind::Setter => generate_setter_ets_decl(
+            sig,
+            &accessor.property_name,
+            backing_name,
+            owner_name,
+            skip_first,
+            is_static,
+        ),
     }
 }
 

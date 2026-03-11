@@ -5,8 +5,20 @@
 
 class UserProfile {
   id: int = 0;
-  name: string = "";
-  active: boolean = false;
+  private __ani_property_active: boolean = false;
+  get active(): boolean {
+    return this.__ani_property_active;
+  }
+  set active(value: boolean) {
+    this.__ani_property_active = value;
+  }
+  private __ani_property_name: string = "";
+  get name(): string {
+    return this.__ani_property_name;
+  }
+  set name(value: string) {
+    this.__ani_property_name = value;
+  }
 }
 
 native function __ani_native_describe_optional_user_profile(user: UserProfile | null): string;

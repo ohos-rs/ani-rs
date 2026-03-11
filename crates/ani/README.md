@@ -85,7 +85,7 @@ fn new(initial_value: i32) -> i64 {
 }
 ```
 
-### 4. Class Definition with Derive
+### 4. Typed Object Definition with Derive
 
 ```rust
 #[derive(AniClass)]
@@ -96,19 +96,12 @@ struct Person {
 }
 
 #[ani]
-impl Person {
-    #[ani(constructor)]
-    fn new(name: String, age: i32) -> Self {
-        Person { name, age }
-    }
-    
-    fn greet(&self) -> String {
-        format!("Hello, I'm {} and I'm {} years old", self.name, self.age)
-    }
+fn rename(person: Person, name: String) -> Person {
+    Person { name, ..person }
 }
 ```
 
-> Note: field-level `#[ani(getter)]` / `#[ani(setter)]` generation is reserved and not implemented yet.
+> Note: method-level `#[ani(getter)]` / `#[ani(setter)]` bindings are implemented for class methods, including static accessors. `#[derive(AniClass)]` and `#[ani(object)]` fields also support `#[ani(property)]` for property-based object access.
 
 ## Type Mappings
 

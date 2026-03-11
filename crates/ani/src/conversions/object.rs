@@ -97,6 +97,25 @@ pub trait ObjectField<'env>: Sized {
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()>;
 }
 
+/// Named property access used by `#[ani(object)]` field-level property metadata.
+pub trait ObjectProperty<'env>: Sized {
+    /// Read a named property from an ANI object.
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self>;
+
+    /// Write a named property to an ANI object.
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()>;
+}
+
+/// Persist a Rust object back into an existing ArkTS object instance.
+///
+/// This is used by `#[ani]` impl methods with `&mut self` receivers: the
+/// wrapper reconstructs a typed Rust value from `this`, invokes the Rust
+/// method, then writes the updated fields back to the original ArkTS object.
+pub trait WriteBackToAniObject<'env>: Sized {
+    /// Consume the Rust value and write its fields into `obj`.
+    fn write_back_to_ani_object(self, env: &Env<'env>, obj: &AniObject<'_>) -> Result<()>;
+}
+
 trait IntoFieldRef<'env> {
     fn into_field_ref(self) -> AniRef<'env>;
 }
@@ -153,11 +172,11 @@ impl<'env> FromFieldRefInput<'env> for sys::ani_ref {
     }
 }
 
-macro_rules! impl_object_field_primitive {
-    ($ty:ty, $getter:ident, $setter:ident) => {
+macro_rules! impl_object_member_primitive {
+    ($ty:ty, $field_getter:ident, $field_setter:ident, $property_getter:ident, $property_setter:ident) => {
         impl<'env> ObjectField<'env> for $ty {
             fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-                env.$getter(obj, name)
+                env.$field_getter(obj, name)
             }
 
             fn set_named_field(
@@ -166,20 +185,87 @@ macro_rules! impl_object_field_primitive {
                 obj: &AniObject<'_>,
                 name: &str,
             ) -> Result<()> {
-                env.$setter(obj, name, self)
+                env.$field_setter(obj, name, self)
+            }
+        }
+
+        impl<'env> ObjectProperty<'env> for $ty {
+            fn get_named_property(
+                env: &Env<'env>,
+                obj: &AniObject<'_>,
+                name: &str,
+            ) -> Result<Self> {
+                env.$property_getter(obj, name)
+            }
+
+            fn set_named_property(
+                self,
+                env: &Env<'env>,
+                obj: &AniObject<'_>,
+                name: &str,
+            ) -> Result<()> {
+                env.$property_setter(obj, name, self)
             }
         }
     };
 }
 
-impl_object_field_primitive!(bool, get_field_by_name_boolean, set_field_by_name_boolean);
-impl_object_field_primitive!(i8, get_field_by_name_byte, set_field_by_name_byte);
-impl_object_field_primitive!(i16, get_field_by_name_short, set_field_by_name_short);
-impl_object_field_primitive!(u16, get_field_by_name_char, set_field_by_name_char);
-impl_object_field_primitive!(i32, get_field_by_name_int, set_field_by_name_int);
-impl_object_field_primitive!(i64, get_field_by_name_long, set_field_by_name_long);
-impl_object_field_primitive!(f32, get_field_by_name_float, set_field_by_name_float);
-impl_object_field_primitive!(f64, get_field_by_name_double, set_field_by_name_double);
+impl_object_member_primitive!(
+    bool,
+    get_field_by_name_boolean,
+    set_field_by_name_boolean,
+    get_property_by_name_boolean,
+    set_property_by_name_boolean
+);
+impl_object_member_primitive!(
+    i8,
+    get_field_by_name_byte,
+    set_field_by_name_byte,
+    get_property_by_name_byte,
+    set_property_by_name_byte
+);
+impl_object_member_primitive!(
+    i16,
+    get_field_by_name_short,
+    set_field_by_name_short,
+    get_property_by_name_short,
+    set_property_by_name_short
+);
+impl_object_member_primitive!(
+    u16,
+    get_field_by_name_char,
+    set_field_by_name_char,
+    get_property_by_name_char,
+    set_property_by_name_char
+);
+impl_object_member_primitive!(
+    i32,
+    get_field_by_name_int,
+    set_field_by_name_int,
+    get_property_by_name_int,
+    set_property_by_name_int
+);
+impl_object_member_primitive!(
+    i64,
+    get_field_by_name_long,
+    set_field_by_name_long,
+    get_property_by_name_long,
+    set_property_by_name_long
+);
+impl_object_member_primitive!(
+    f32,
+    get_field_by_name_float,
+    set_field_by_name_float,
+    get_property_by_name_float,
+    set_property_by_name_float
+);
+impl_object_member_primitive!(
+    f64,
+    get_field_by_name_double,
+    set_field_by_name_double,
+    get_property_by_name_double,
+    set_property_by_name_double
+);
 
 impl<'env> ObjectField<'env> for u8 {
     fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
@@ -188,6 +274,16 @@ impl<'env> ObjectField<'env> for u8 {
 
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
         (self as i8).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectProperty<'env> for u8 {
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i8::get_named_property(env, obj, name)? as u8)
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i8).set_named_property(env, obj, name)
     }
 }
 
@@ -201,6 +297,16 @@ impl<'env> ObjectField<'env> for u32 {
     }
 }
 
+impl<'env> ObjectProperty<'env> for u32 {
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i32::get_named_property(env, obj, name)? as u32)
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i32).set_named_property(env, obj, name)
+    }
+}
+
 impl<'env> ObjectField<'env> for u64 {
     fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
         Ok(i64::get_named_field(env, obj, name)? as u64)
@@ -208,6 +314,16 @@ impl<'env> ObjectField<'env> for u64 {
 
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
         (self as i64).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectProperty<'env> for u64 {
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        Ok(i64::get_named_property(env, obj, name)? as u64)
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as i64).set_named_property(env, obj, name)
     }
 }
 
@@ -220,6 +336,22 @@ impl<'env> ObjectField<'env> for char {
 
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
         (self as u16).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectProperty<'env> for char {
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = u16::get_named_property(env, obj, name)?;
+        char::from_u32(value as u32).ok_or_else(|| {
+            Error::new(
+                Status::InvalidType,
+                format!("Invalid char property: {name}"),
+            )
+        })
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        (self as u16).set_named_property(env, obj, name)
     }
 }
 
@@ -240,6 +372,26 @@ where
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
         let value = self.to_ani(env)?.into_field_ref();
         env.set_field_by_name_ref(obj, name, &value)
+    }
+}
+
+impl<'env, T> ObjectProperty<'env> for T
+where
+    T: ToAni<'env> + FromAni<'env>,
+    <T as ToAni<'env>>::Output: IntoFieldRef<'env>,
+    <T as FromAni<'env>>::Input: FromFieldRefInput<'env>,
+{
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = env.get_property_by_name_ref(obj, name)?;
+        T::from_ani(
+            env,
+            <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
+        )
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        let value = self.to_ani(env)?.into_field_ref();
+        env.set_property_by_name_ref(obj, name, &value)
     }
 }
 

@@ -134,10 +134,29 @@ pub enum AniType {
     Unknown(Box<Type>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectMemberAccessKind {
+    Field,
+    Property,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectMemberDescriptor {
+    pub rust_name: String,
+    pub arkts_name: String,
+    pub access: ObjectMemberAccessKind,
+}
+
 static OBJECT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+static OBJECT_TYPE_MEMBERS: OnceLock<Mutex<BTreeMap<String, Vec<ObjectMemberDescriptor>>>> =
+    OnceLock::new();
 
 fn object_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
     OBJECT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn object_type_members() -> &'static Mutex<BTreeMap<String, Vec<ObjectMemberDescriptor>>> {
+    OBJECT_TYPE_MEMBERS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 fn normalize_object_alias_key(name: &str) -> String {
@@ -159,6 +178,56 @@ pub fn register_object_type_alias(rust_name: &str, arkts_name: &str) {
         .lock()
         .expect("failed to lock object type aliases")
         .insert(rust_name, arkts_name.to_string());
+}
+
+pub fn register_object_type_members(rust_name: &str, members: &[ObjectMemberDescriptor]) {
+    let rust_name = normalize_object_alias_key(rust_name);
+    if rust_name.is_empty() {
+        return;
+    }
+
+    object_type_members()
+        .lock()
+        .expect("failed to lock object type members")
+        .insert(rust_name, members.to_vec());
+}
+
+pub fn register_object_type_fields(rust_name: &str, fields: &[String]) {
+    let members = fields
+        .iter()
+        .map(|field| ObjectMemberDescriptor {
+            rust_name: field.clone(),
+            arkts_name: field.clone(),
+            access: ObjectMemberAccessKind::Field,
+        })
+        .collect::<Vec<_>>();
+    register_object_type_members(rust_name, &members);
+}
+
+pub fn resolve_object_type_members(name: &str) -> Option<Vec<ObjectMemberDescriptor>> {
+    let key = normalize_object_alias_key(name);
+    if key.is_empty() {
+        return None;
+    }
+
+    object_type_members()
+        .lock()
+        .expect("failed to lock object type members")
+        .get(&key)
+        .cloned()
+}
+
+pub fn resolve_object_type_member_names(name: &str) -> Option<Vec<String>> {
+    resolve_object_type_members(name).map(|members| {
+        members
+            .into_iter()
+            .map(|member| member.arkts_name)
+            .collect::<Vec<_>>()
+    })
+}
+
+pub fn resolve_object_type_fields(name: &str) -> Option<Vec<String>> {
+    resolve_object_type_member_names(name)
 }
 
 pub fn resolve_object_type_alias(name: &str) -> Option<String> {
