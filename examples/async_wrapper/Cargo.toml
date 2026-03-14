@@ -7,5 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-ani = { workspace = true }
+ani = { workspace = true, features = ["tokio_rt"] }
 ani-derive = { workspace = true }
+tokio = { version = "1", features = ["time"] }

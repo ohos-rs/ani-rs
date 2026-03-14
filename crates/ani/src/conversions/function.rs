@@ -632,12 +632,22 @@ where
 // TypeInfo Implementation
 // ============================================================================
 
-impl<Args, Return> TypeInfo for Function<'_, Args, Return> {
-    /// Get the ANI type signature for Function
-    ///
-    /// Function types are represented as `Lstd/core/Function;` in ANI
+fn function_type_signature_for_arity(arity: usize) -> &'static str {
+    let name = if arity <= 16 {
+        format!("Lstd/core/Function{arity};")
+    } else {
+        "Lstd/core/Function;".to_string()
+    };
+    Box::leak(name.into_boxed_str())
+}
+
+impl<Args, Return> TypeInfo for Function<'_, Args, Return>
+where
+    Args: ToAniArgs,
+{
+    /// Get the ANI type signature for Function.
     fn type_signature() -> &'static str {
-        "Lstd/core/Function;"
+        function_type_signature_for_arity(Args::args_count())
     }
 
     fn ani_c_type() -> &'static str {
@@ -645,9 +655,12 @@ impl<Args, Return> TypeInfo for Function<'_, Args, Return> {
     }
 }
 
-impl<Args, Return> TypeInfo for FunctionRef<Args, Return> {
+impl<Args, Return> TypeInfo for FunctionRef<Args, Return>
+where
+    Args: ToAniArgs,
+{
     fn type_signature() -> &'static str {
-        "Lstd/core/Function;"
+        function_type_signature_for_arity(Args::args_count())
     }
 
     fn ani_c_type() -> &'static str {
@@ -774,7 +787,7 @@ mod tests {
 
     #[test]
     fn test_function_type_info() {
-        assert_eq!(<Function<(), ()>>::type_signature(), "Lstd/core/Function;");
+        assert_eq!(<Function<(), ()>>::type_signature(), "Lstd/core/Function0;");
         assert_eq!(<Function<(i32,), String>>::ani_c_type(), "ani_fn_object");
     }
 

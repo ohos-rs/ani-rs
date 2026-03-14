@@ -366,21 +366,21 @@ mod tests {
         // Function<Args, Return> types
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Function<(), ()>)),
-            "Lstd/core/Function;"
+            "Lstd/core/Function0;"
         );
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Function<(i32,), String>)),
-            "Lstd/core/Function;"
+            "Lstd/core/Function1;"
         );
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Function<FnArgs<(i32, i32)>, i32>)),
-            "Lstd/core/Function;"
+            "Lstd/core/Function2;"
         );
 
         // FunctionRef types
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(FunctionRef<(i32,), String>)),
-            "Lstd/core/Function;"
+            "Lstd/core/Function1;"
         );
     }
 
@@ -400,7 +400,7 @@ mod tests {
     fn test_promise_type_signature() {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(PromiseRaw<String>)),
-            "Lstd/core/Object;"
+            "Lstd/core/Promise;"
         );
     }
 

@@ -10,7 +10,7 @@ pub struct Widget {
     pub _count: i32,
 }
 
-#[derive(AniClass)]
+#[derive(Debug, PartialEq, Eq, AniClass)]
 #[ani(class = "WidgetSnapshot")]
 pub struct WidgetSnapshot {
     pub label: String,

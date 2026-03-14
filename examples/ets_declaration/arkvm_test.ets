@@ -11,8 +11,8 @@ namespace AniMath {
 
 namespace example {
   class Person {
-    native get_name(): string;
     static native create(name: string): long;
+    native get_name(): string;
   }
 }
 

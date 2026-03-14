@@ -37,6 +37,15 @@ pub struct InitRegisterEntry {
 
 /// Native binding target description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ClassBindingScope {
+    /// Instance member binding.
+    Instance,
+    /// Static member binding.
+    Static,
+}
+
+/// Native binding target description.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum BindingTarget {
     /// Top-level module functions.
     Module(&'static str),
@@ -44,8 +53,10 @@ pub enum BindingTarget {
     Namespace(&'static str),
     /// Class methods or accessors.
     Class {
+        /// ANI class descriptor.
         descriptor: &'static str,
-        is_static: bool,
+        /// Class member scope.
+        scope: ClassBindingScope,
     },
 }
 
@@ -167,16 +178,13 @@ pub fn queue_namespace_binding(
 #[doc(hidden)]
 pub fn queue_class_binding(
     descriptor: &'static str,
-    is_static: bool,
+    scope: ClassBindingScope,
     name: &'static str,
     signature: &'static str,
     pointer: *const c_void,
 ) -> sys::ani_status {
     queue_binding(
-        BindingTarget::Class {
-            descriptor,
-            is_static,
-        },
+        BindingTarget::Class { descriptor, scope },
         name,
         signature,
         pointer,
@@ -192,6 +200,32 @@ fn is_builtin_descriptor(descriptor: &str) -> bool {
         || descriptor.starts_with("@")
 }
 
+fn test_module_override_name() -> Option<String> {
+    std::env::var("ANI_TEST_MODULE_NAME")
+        .ok()
+        .map(|value| value.trim().replace('-', "_"))
+        .filter(|value| !value.is_empty())
+}
+
+fn override_descriptor_for_test(descriptor: &str) -> Option<String> {
+    let override_name = test_module_override_name()?;
+    let trimmed = descriptor.trim();
+    if trimmed.is_empty()
+        || is_builtin_descriptor(trimmed)
+        || trimmed.starts_with(DEFMODULE_PREFIX)
+        || trimmed == override_name
+        || trimmed.starts_with(&format!("{override_name}."))
+    {
+        return None;
+    }
+
+    let suffix = trimmed
+        .split_once('.')
+        .map(|(_, rest)| format!(".{rest}"))
+        .unwrap_or_default();
+    Some(format!("{override_name}{suffix}"))
+}
+
 fn descriptor_candidates(descriptor: &str) -> Vec<String> {
     let trimmed = descriptor.trim();
     if trimmed.is_empty() {
@@ -199,6 +233,11 @@ fn descriptor_candidates(descriptor: &str) -> Vec<String> {
     }
 
     let mut out = Vec::new();
+    if let Some(override_descriptor) = override_descriptor_for_test(trimmed) {
+        out.push(override_descriptor.clone());
+        out.push(format!("{DEFMODULE_PREFIX}{override_descriptor}"));
+    }
+
     out.push(trimmed.to_string());
     if !is_builtin_descriptor(trimmed) && !trimmed.starts_with(DEFMODULE_PREFIX) {
         // Some test suites use @defModule-prefixed descriptors.
@@ -450,33 +489,31 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         }
 
         let status = match target {
-            BindingTarget::Class {
-                descriptor,
-                is_static,
-            } => {
+            BindingTarget::Class { descriptor, scope } => {
                 let (status, cls) =
                     unsafe { find_class_with_fallback(api, env, descriptor, debug) };
                 if status != sys::ani_status_ANI_OK {
                     status
                 } else if cls.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
-                } else if is_static {
-                    unsafe {
-                        (api.Class_BindStaticNativeMethods.unwrap())(
-                            env,
-                            cls,
-                            functions.as_ptr(),
-                            functions.len(),
-                        )
-                    }
                 } else {
-                    unsafe {
-                        (api.Class_BindNativeMethods.unwrap())(
-                            env,
-                            cls,
-                            functions.as_ptr(),
-                            functions.len(),
-                        )
+                    match scope {
+                        ClassBindingScope::Static => unsafe {
+                            (api.Class_BindStaticNativeMethods.unwrap())(
+                                env,
+                                cls,
+                                functions.as_ptr(),
+                                functions.len(),
+                            )
+                        },
+                        ClassBindingScope::Instance => unsafe {
+                            (api.Class_BindNativeMethods.unwrap())(
+                                env,
+                                cls,
+                                functions.as_ptr(),
+                                functions.len(),
+                            )
+                        },
                     }
                 }
             }
@@ -632,7 +669,7 @@ mod tests {
         let status = queue_binding(
             BindingTarget::Class {
                 descriptor: "demo.Test",
-                is_static: false,
+                scope: ClassBindingScope::Instance,
             },
             "m1",
             ":",
@@ -642,7 +679,7 @@ mod tests {
         let status = queue_binding(
             BindingTarget::Class {
                 descriptor: "demo.Test",
-                is_static: true,
+                scope: ClassBindingScope::Static,
             },
             "m2",
             ":",
@@ -656,14 +693,14 @@ mod tests {
             pending[0].target,
             BindingTarget::Class {
                 descriptor: "demo.Test",
-                is_static: false
+                scope: ClassBindingScope::Instance
             }
         );
         assert_eq!(
             pending[1].target,
             BindingTarget::Class {
                 descriptor: "demo.Test",
-                is_static: true
+                scope: ClassBindingScope::Static
             }
         );
 

@@ -5,8 +5,8 @@
 
 namespace example {
   class MyClass {
-    native get_info(): string;
     static native create(_name: string): long;
+    native get_info(): string;
   }
 }
 
@@ -21,6 +21,9 @@ native function promise_maybe_succeed(should_succeed: boolean, value: int): long
 native function promise_reject(message: string): long;
 native function promise_resolve_int(value: int): long;
 native function promise_resolve_string(value: string): long;
+native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
+native function tokio_fail(message: string): Promise<string>;
+native function tokio_fetch_text(url: string): Promise<string>;
 
 
 
@@ -96,11 +99,32 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-async-wrapper");
-__assert_eq_int("async_square", async_square(6), 36);
-let taskId = async_compute_start(5);
-__assert_true("async_compute_start_non_negative", taskId >= 0);
-__assert_bool("async_check_status_type", async_check_status(taskId));
-__assert_true("batch_compute_non_negative", batch_compute(3) >= 0);
+function main(): void {
+  console.log("[arkvm] smoke start: ani-example-async-wrapper");
+  __assert_eq_int("async_square", async_square(6), 36);
+  let taskId = async_compute_start(5);
+  __assert_true("async_compute_start_non_negative", taskId >= 0);
+  __assert_bool("async_check_status_type", async_check_status(taskId));
+  __assert_true("batch_compute_non_negative", batch_compute(3) >= 0);
+  let promisedSquare: int = waitForCompletion(() => tokio_delayed_square(7, 10));
+  __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  let promisedText: string = waitForCompletion(() => tokio_fetch_text("ani://tokio"));
+  __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
+  let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await tokio_fail("boom");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("tokio_fail", tokioRejected);
+
+  if (__ani_fail_count > 0) {
+    throw new Error("arkvm assertions failed: " + __ani_fail_count);
+  }
+  console.log("[arkvm] smoke done: ani-example-async-wrapper");
+}
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

@@ -2,20 +2,25 @@
 //!
 //! Expands `#[ani]` macro for impl blocks.
 
+use std::collections::BTreeMap;
+
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Type};
 
-use crate::codegen::{emit_export_plan_ets, generate_register_call, generate_wrapper_with_target};
-use crate::parser::{parse_bindgen_attrs_from_attribute, BindgenAttrs};
+use crate::codegen::{
+    ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, emit_export_plan_ets,
+    generate_register_call, generate_wrapper_with_target,
+};
+use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
 use crate::types::{
     ani_type::resolve_object_type_fields, generate_param_conversions, generate_return_conversion,
     rust_type_to_ani_type,
 };
 
 use super::function::{
-    resolve_accessor_config, resolve_binding_plan, validate_constructor_usage,
-    validate_unsupported_bind_attrs,
+    BindingResolveInput, CallableKind, class_wrapper_binding_kind, resolve_accessor_config,
+    resolve_binding_plan, validate_constructor_usage, validate_unsupported_bind_attrs,
 };
 
 /// Expand `#[ani]` for impl blocks
@@ -29,6 +34,8 @@ pub fn expand_impl(attrs: BindgenAttrs, impl_block: ItemImpl, prepare: TokenStre
     let mut queue_entries = Vec::new();
     let mut original_items = Vec::new();
     let mut errors = Vec::new();
+    let mut property_slots: BTreeMap<(String, ClassMemberScope, String), ClassPropertyDescriptor> =
+        BTreeMap::new();
 
     for item in &impl_block.items {
         match item {
@@ -40,6 +47,15 @@ pub fn expand_impl(attrs: BindgenAttrs, impl_block: ItemImpl, prepare: TokenStre
 
                 match process_method(&attrs, &impl_block, &struct_name, method) {
                     Ok(processed) => {
+                        if let Err(err) = validate_property_slot_conflict(
+                            &mut property_slots,
+                            processed.class_descriptor.as_ref(),
+                            method,
+                        ) {
+                            errors.push(err.to_compile_error());
+                            original_items.push(processed.original_method);
+                            continue;
+                        }
                         wrappers.push(processed.wrapper);
                         queue_entries.push(processed.queue_entry);
                         original_items.push(processed.original_method);
@@ -97,6 +113,7 @@ struct ProcessedMethod {
     wrapper: TokenStream,
     queue_entry: TokenStream,
     original_method: TokenStream,
+    class_descriptor: Option<ClassDescriptorMember>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,23 +150,27 @@ fn process_method(
     validate_constructor_usage(&merged_attrs, &method_fn)?;
 
     let method_name = &method.sig.ident;
-    let is_constructor = merged_attrs.constructor;
-    let is_static = if is_constructor {
-        false
-    } else {
-        merged_attrs.is_static
+    let binding_input = BindingResolveInput {
+        callable_kind: if merged_attrs.constructor {
+            CallableKind::Constructor
+        } else {
+            CallableKind::Function
+        },
+        wrapper_binding_kind: class_wrapper_binding_kind(if merged_attrs.constructor {
+            false
+        } else {
+            merged_attrs.is_static
+        }),
+        skip_first_arg: receiver.has_receiver(),
     };
-    let skip_first = receiver.has_receiver();
 
     if let Some(accessor) = resolve_accessor_config(
         &merged_attrs,
         &method_name.to_string(),
         &method.sig,
-        is_static,
-        is_constructor,
-        skip_first,
+        binding_input,
     )? {
-        if !is_static {
+        if !binding_input.is_static() {
             validate_accessor_backing_field_conflict(struct_name, &accessor.property_name, method)?;
         }
     }
@@ -158,9 +179,7 @@ fn process_method(
         &merged_attrs,
         &method_name.to_string(),
         &method.sig,
-        is_static,
-        is_constructor,
-        skip_first,
+        binding_input,
     )?;
     emit_export_plan_ets(&binding);
 
@@ -181,8 +200,7 @@ fn process_method(
         generate_wrapper_with_target(
             &to_item_fn(&sanitized_method),
             &wrapper_name,
-            true,
-            is_static,
+            binding_input.wrapper_binding_kind,
             call_target,
         )
     };
@@ -206,7 +224,34 @@ fn process_method(
         wrapper,
         queue_entry,
         original_method: quote! { #sanitized_method },
+        class_descriptor: binding.class_descriptor.clone(),
     })
+}
+
+fn validate_property_slot_conflict(
+    property_slots: &mut BTreeMap<(String, ClassMemberScope, String), ClassPropertyDescriptor>,
+    class_descriptor: Option<&ClassDescriptorMember>,
+    method: &syn::ImplItemFn,
+) -> syn::Result<()> {
+    let Some(ClassDescriptorMember::Property(property_descriptor)) = class_descriptor else {
+        return Ok(());
+    };
+
+    let key = (
+        property_descriptor.owner.clone(),
+        property_descriptor.scope,
+        property_descriptor.public_name.clone(),
+    );
+
+    if let Some(existing) = property_slots.get_mut(&key) {
+        if let Err(message) = existing.merge(property_descriptor) {
+            return Err(syn::Error::new_spanned(&method.sig.ident, message));
+        }
+        return Ok(());
+    }
+
+    property_slots.insert(key, property_descriptor.clone());
+    Ok(())
 }
 
 fn generate_receiver_wrapper(
@@ -629,7 +674,10 @@ mod tests {
 
         let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
         assert!(expanded.contains("register_module_export"));
-        assert!(expanded.contains("queue_class_binding"));
+        assert!(expanded.contains("queue_binding"));
+        assert!(expanded.contains("BindingTarget :: Class"));
+        assert!(expanded.contains("ClassBindingScope :: Instance"));
+        assert!(expanded.contains("ClassBindingScope :: Static"));
         assert!(expanded.contains("get_name"));
         assert!(expanded.contains("sum"));
         assert!(expanded.contains("ii:i"));
@@ -684,16 +732,16 @@ mod tests {
     #[test]
     fn impl_expansion_rejects_accessor_backing_field_conflicts() {
         crate::types::ani_type::register_object_type_fields(
-            "Widget",
+            "ConflictWidget",
             &["count".to_string(), "name".to_string()],
         );
 
         let attrs = BindgenAttrs {
-            class: Some("Widget".to_string()),
+            class: Some("ConflictWidget".to_string()),
             ..Default::default()
         };
         let impl_block: ItemImpl = parse_quote! {
-            impl Widget {
+            impl ConflictWidget {
                 #[ani(getter)]
                 fn get_count(&self) -> i32 {
                     self.count
@@ -703,5 +751,59 @@ mod tests {
 
         let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
         assert!(expanded.contains("conflicts with generated object backing field `count`"));
+    }
+
+    #[test]
+    fn impl_expansion_allows_getter_setter_pair_for_same_property() {
+        let attrs = BindgenAttrs {
+            class: Some("PairWidget".to_string()),
+            ..Default::default()
+        };
+        let impl_block: ItemImpl = parse_quote! {
+            impl PairWidget {
+                #[ani(getter = "count")]
+                fn get_count(&self) -> i32 {
+                    self.count
+                }
+
+                #[ani(setter = "count")]
+                fn set_count(&mut self, value: i32) {
+                    self.count = value;
+                }
+            }
+        };
+
+        let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
+        assert!(expanded.contains("__ani_native_get_count"));
+        assert!(expanded.contains("__ani_native_set_count"));
+        assert!(!expanded.contains("compile_error"));
+    }
+
+    #[test]
+    fn impl_expansion_rejects_duplicate_property_getters() {
+        let attrs = BindgenAttrs {
+            class: Some("DuplicateGetterWidget".to_string()),
+            ..Default::default()
+        };
+        let impl_block: ItemImpl = parse_quote! {
+            impl DuplicateGetterWidget {
+                #[ani(getter = "count")]
+                fn get_count(&self) -> i32 {
+                    self.count
+                }
+
+                #[ani(getter = "count")]
+                fn read_count(&self) -> i32 {
+                    self.count
+                }
+            }
+        };
+
+        let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
+        assert!(expanded.contains("compile_error"));
+        assert!(expanded.contains("duplicate"));
+        assert!(expanded.contains("getter"));
+        assert!(expanded.contains("count"));
+        assert!(expanded.contains("DuplicateGetterWidget"));
     }
 }

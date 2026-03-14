@@ -192,6 +192,7 @@ pub fn register_object_type_members(rust_name: &str, members: &[ObjectMemberDesc
         .insert(rust_name, members.to_vec());
 }
 
+#[allow(dead_code)]
 pub fn register_object_type_fields(rust_name: &str, fields: &[String]) {
     let members = fields
         .iter()
@@ -540,6 +541,44 @@ impl WrapperType {
 // ANI Signature Generation
 // ============================================================================
 
+fn function_arity_from_type(ty: &Type) -> usize {
+    match ty {
+        Type::Tuple(tuple) => tuple.elems.len(),
+        Type::Path(TypePath { path, .. }) => {
+            let Some(segment) = path.segments.last() else {
+                return 1;
+            };
+            if segment.ident != "FnArgs" {
+                return 1;
+            }
+            match &segment.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .find_map(|arg| match arg {
+                        GenericArgument::Type(inner) => Some(function_arity_from_type(inner)),
+                        _ => None,
+                    })
+                    .unwrap_or(1),
+                _ => 1,
+            }
+        }
+        _ => 1,
+    }
+}
+
+fn function_signature_name(function: &FunctionType) -> String {
+    let args = match function {
+        FunctionType::Function { args, .. } | FunctionType::FunctionRef { args, .. } => args,
+    };
+    let arity = function_arity_from_type(args);
+    if arity <= 16 {
+        format!("std.core.Function{arity}")
+    } else {
+        "std.core.Function".to_string()
+    }
+}
+
 impl AniType {
     /// Generate the ANI type signature string
     pub fn to_signature(&self) -> String {
@@ -550,7 +589,9 @@ impl AniType {
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::Wrapper(w) => w.to_signature(),
-            AniType::Function(_) => "Lstd/core/Function;".to_string(),
+            AniType::Function(function) => {
+                format!("L{};", function_signature_name(function).replace('.', "/"))
+            }
             AniType::FnArgs(fn_args) => {
                 // FnArgs<(A, B, ...)> generates signature for each element
                 fn_args
@@ -572,7 +613,7 @@ impl AniType {
                     format!("X{{{variants}}}")
                 }
             }
-            AniType::Promise(_) => "Lstd/core/Object;".to_string(),
+            AniType::Promise(_) => "Lstd/core/Promise;".to_string(),
             AniType::Record(_) => "Lstd/core/Record;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
@@ -598,7 +639,7 @@ impl AniType {
             AniType::AniObject => "C{std.core.Object}".to_string(),
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
-            AniType::Function(_) => "C{std.core.Function}".to_string(),
+            AniType::Function(function) => format!("C{{{}}}", function_signature_name(function)),
             AniType::Wrapper(WrapperType::Vec(inner)) => {
                 format!("A{{{}}}", inner.to_fixed_array_elem_signature())
             }
@@ -618,7 +659,7 @@ impl AniType {
                     format!("X{{{variants}}}")
                 }
             }
-            AniType::Promise(_) => "C{std.core.Object}".to_string(),
+            AniType::Promise(_) => "C{std.core.Promise}".to_string(),
             AniType::FnArgs(_) | AniType::Tuple(_) | AniType::Unit => {
                 "C{std.core.Object}".to_string()
             }
@@ -911,9 +952,10 @@ fn is_path_ident(type_path: &TypePath, ident: &str) -> bool {
 /// Extract the first generic type argument
 fn extract_first_generic_type(args: &PathArguments) -> Option<Type> {
     if let PathArguments::AngleBracketed(angle_args) = args {
-        if let Some(GenericArgument::Type(ty)) = angle_args.args.first() {
-            return Some(ty.clone());
-        }
+        return angle_args.args.iter().find_map(|arg| match arg {
+            GenericArgument::Type(ty) => Some(ty.clone()),
+            _ => None,
+        });
     }
     None
 }

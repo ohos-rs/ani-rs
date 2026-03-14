@@ -88,7 +88,10 @@ mod expand;
 mod parser;
 mod types;
 
-use expand::{expand_class_derive, expand_function, expand_impl, expand_init, expand_struct};
+use expand::{
+    expand_class_derive, expand_enum_derive, expand_function, expand_impl, expand_init,
+    expand_struct,
+};
 use parser::{AniAttrs, AniMacroKind, BindgenAttrs, InitAttrs};
 
 /// Tracks whether this is the first #[ani] macro invocation in the crate
@@ -288,4 +291,11 @@ pub fn ani(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn derive_ani_class(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     expand_class_derive(input).into()
+}
+
+/// Derive macro to generate ANI enum metadata and enum-item conversions for unit enums.
+#[proc_macro_derive(AniEnum, attributes(ani))]
+pub fn derive_ani_enum(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_enum_derive(input).into()
 }

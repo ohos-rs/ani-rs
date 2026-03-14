@@ -41,10 +41,11 @@
 use std::marker::PhantomData;
 use std::ptr;
 
+use crate::bindgen_runtime::ToAni;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniObject, AniRef, AniResolver};
+use crate::types::{AniObject, AniRef, AniResolver, AniString};
 use crate::{ani_call, ani_call_2ret};
 
 /// Raw Promise value in ANI
@@ -67,12 +68,12 @@ use crate::{ani_call, ani_call_2ret};
 /// let promise = PromiseRaw::reject(&env, "error message")?;
 /// ```
 #[repr(transparent)]
-pub struct PromiseRaw<'env> {
+pub struct PromiseRaw<'env, T = ()> {
     inner: sys::ani_object,
-    _marker: PhantomData<&'env ()>,
+    _marker: PhantomData<(&'env (), T)>,
 }
 
-impl<'env> PromiseRaw<'env> {
+impl<'env, T> PromiseRaw<'env, T> {
     /// Create a new PromiseRaw from raw ani_object
     ///
     /// # Safety
@@ -102,6 +103,31 @@ impl<'env> PromiseRaw<'env> {
     #[inline]
     pub fn into_object(self) -> AniObject<'env> {
         unsafe { AniObject::from_raw(self.inner) }
+    }
+
+    /// Cast the Promise phantom payload type without changing the underlying value.
+    #[inline]
+    pub fn cast<U>(self) -> PromiseRaw<'env, U> {
+        PromiseRaw {
+            inner: self.inner,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Rebind the phantom environment lifetime without changing the underlying value.
+    #[inline]
+    pub fn with_lifetime<'other>(self) -> PromiseRaw<'other, T> {
+        PromiseRaw {
+            inner: self.inner,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Convenience helper for exported functions that only need to hand the promise
+    /// back to ArkTS and do not retain any Rust-side borrow relationship.
+    #[inline]
+    pub fn into_static(self) -> PromiseRaw<'static, T> {
+        self.with_lifetime()
     }
 
     /// Create a new Promise and immediately resolve it with the given value
@@ -184,14 +210,9 @@ impl<'env> PromiseRaw<'env> {
         )
         .map_err(|_| Error::new(Status::GenericFailure, "Failed to create promise"))?;
 
-        let error_str = env.create_string(error.as_ref())?;
-        ani_call!(
-            env,
-            PromiseResolver_Reject,
-            resolver,
-            error_str.as_raw() as sys::ani_error
-        )
-        .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))?;
+        let error_obj = create_promise_error(env, error.as_ref())?;
+        ani_call!(env, PromiseResolver_Reject, resolver, error_obj.as_raw())
+            .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))?;
 
         Ok(Self {
             inner: promise,
@@ -268,10 +289,59 @@ pub struct Deferred {
     resolver: AniResolver,
 }
 
+/// Value that can resolve an ANI Promise.
+pub trait PromiseValue<'env>: Sized {
+    /// Convert the Rust value into a reference value that ANI Promise APIs accept.
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>>;
+}
+
 // Deferred can be sent across threads
 // But resolving/rejecting requires a valid env for the current thread
 unsafe impl Send for Deferred {}
 unsafe impl Sync for Deferred {}
+
+macro_rules! impl_boxed_promise_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl<'env> PromiseValue<'env> for $ty {
+                fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+                    let boxed = <Self as crate::conversions::Boxable<'env>>::box_value(self, env)?;
+                    Ok(boxed.into())
+                }
+            }
+        )+
+    };
+}
+
+impl_boxed_promise_value!(bool, i8, i16, u16, char, i32, i64, f32, f64);
+
+impl<'env> PromiseValue<'env> for String {
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = env.create_string(&self)?;
+        Ok(value.into())
+    }
+}
+
+impl<'env> PromiseValue<'env> for AniString<'env> {
+    fn into_promise_ref(self, _env: &Env<'env>) -> Result<AniRef<'env>> {
+        Ok(self.into())
+    }
+}
+
+impl<'env> PromiseValue<'env> for AniRef<'env> {
+    fn into_promise_ref(self, _env: &Env<'env>) -> Result<AniRef<'env>> {
+        Ok(self)
+    }
+}
+
+impl<'env, T> PromiseValue<'env> for T
+where
+    T: ToAni<'env, Output = sys::ani_object>,
+{
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        Ok(unsafe { AniRef::from_raw(self.to_ani(env)? as sys::ani_ref) })
+    }
+}
 
 impl Deferred {
     /// Resolve the Promise with a value
@@ -315,6 +385,15 @@ impl Deferred {
         self.resolve(env, &ani_str.into())
     }
 
+    /// Resolve the Promise with any supported Rust value.
+    pub fn resolve_value<'env, T>(self, env: &Env<'env>, value: T) -> Result<()>
+    where
+        T: PromiseValue<'env>,
+    {
+        let value_ref = value.into_promise_ref(env)?;
+        self.resolve(env, &value_ref)
+    }
+
     /// Reject the Promise with an error message
     ///
     /// After calling this method, the Deferred is consumed and the resolver
@@ -325,12 +404,12 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `error` - The error message
     pub fn reject(self, env: &Env<'_>, error: impl AsRef<str>) -> Result<()> {
-        let error_str = env.create_string(error.as_ref())?;
+        let error_obj = create_promise_error(env, error.as_ref())?;
         ani_call!(
             env,
             PromiseResolver_Reject,
             self.resolver.as_raw(),
-            error_str.as_raw() as sys::ani_error
+            error_obj.as_raw()
         )
         .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))
     }
@@ -371,14 +450,14 @@ impl Deferred {
 // Type Conversions
 // ============================================================================
 
-impl<'env> From<PromiseRaw<'env>> for AniObject<'env> {
-    fn from(promise: PromiseRaw<'env>) -> Self {
+impl<'env, T> From<PromiseRaw<'env, T>> for AniObject<'env> {
+    fn from(promise: PromiseRaw<'env, T>) -> Self {
         unsafe { AniObject::from_raw(promise.inner) }
     }
 }
 
-impl<'env> From<PromiseRaw<'env>> for sys::ani_object {
-    fn from(promise: PromiseRaw<'env>) -> Self {
+impl<'env, T> From<PromiseRaw<'env, T>> for sys::ani_object {
+    fn from(promise: PromiseRaw<'env, T>) -> Self {
         promise.inner
     }
 }
@@ -436,6 +515,23 @@ fn create_boxed_double<'a>(env: &Env<'a>, value: f64) -> Result<AniObject<'a>> {
 
 /// Create a boxed Boolean value
 #[allow(dead_code)]
+fn create_promise_error<'a>(env: &Env<'a>, message: &str) -> Result<crate::types::AniError<'a>> {
+    let err_cls = env
+        .find_class("escompat.Error")
+        .or_else(|_| env.find_class("@ohos.base.BusinessError"))?;
+    let err_ctor = env.find_constructor(&err_cls, ":")?;
+    let err_obj = env.new_object(&err_cls, &err_ctor, &[])?;
+
+    let name = env.create_string("Error")?;
+    let text = env.create_string(message)?;
+    let name_ref = unsafe { AniRef::from_raw(name.into_raw() as sys::ani_ref) };
+    let text_ref = unsafe { AniRef::from_raw(text.into_raw() as sys::ani_ref) };
+    let _ = env.set_property_by_name_ref(&err_obj, "name", &name_ref);
+    let _ = env.set_property_by_name_ref(&err_obj, "message", &text_ref);
+
+    Ok(unsafe { crate::types::AniError::from_raw(err_obj.into_raw() as sys::ani_error) })
+}
+
 fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>> {
     use crate::types::ani_value_boolean;
 

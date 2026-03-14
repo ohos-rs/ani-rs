@@ -19,7 +19,7 @@ use syn::{FnArg, ItemFn, Pat, ReturnType, Type};
 use crate::types::{generate_param_conversions, generate_return_conversion, rust_type_to_ani_type};
 
 /// Type of injected parameter
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InjectedParamKind {
     Env,
     This,
@@ -27,20 +27,43 @@ pub enum InjectedParamKind {
 }
 
 /// Represents a function parameter's classification
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
     SelfReceiver,
     Injected(InjectedParamKind),
     Regular,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapperBindingKind {
+    Global,
+    ClassInstance,
+    ClassStatic,
+}
+
+impl WrapperBindingKind {
+    pub(crate) fn is_class(self) -> bool {
+        !matches!(self, Self::Global)
+    }
+
+    pub(crate) fn is_static(self) -> bool {
+        matches!(self, Self::ClassStatic)
+    }
+}
+
+struct WrapperParam<'a> {
+    arg: &'a FnArg,
+    kind: ParamKind,
+    ident: Option<&'a Ident>,
+}
+
 fn is_env_type(ty: &Type) -> bool {
-    let type_str = quote!(#ty).to_string().replace(" ", "");
+    let type_str = quote!(#ty).to_string().replace(' ', "");
     type_str.contains("Env<") || type_str == "Env" || type_str.starts_with("&Env")
 }
 
 fn is_this_type(ty: &Type) -> bool {
-    let type_str = quote!(#ty).to_string().replace(" ", "");
+    let type_str = quote!(#ty).to_string().replace(' ', "");
     type_str.contains("This<")
         || type_str.contains("This>")
         || type_str == "This"
@@ -48,12 +71,12 @@ fn is_this_type(ty: &Type) -> bool {
 }
 
 fn is_ani_object_type(ty: &Type) -> bool {
-    let type_str = quote!(#ty).to_string().replace(" ", "");
+    let type_str = quote!(#ty).to_string().replace(' ', "");
     type_str.contains("AniObject") || type_str.starts_with("&AniObject")
 }
 
 fn is_class_type(ty: &Type) -> bool {
-    let type_str = quote!(#ty).to_string().replace(" ", "");
+    let type_str = quote!(#ty).to_string().replace(' ', "");
     type_str.contains("AniClass") || type_str.starts_with("&AniClass")
 }
 
@@ -69,17 +92,11 @@ fn classify_param(arg: &FnArg, param_name: Option<&str>) -> ParamKind {
             if is_this_type(ty) {
                 return ParamKind::Injected(InjectedParamKind::This);
             }
-            if is_class_type(ty) {
-                if let Some(name) = param_name {
-                    if name == "class" || name == "_class" {
-                        return ParamKind::Injected(InjectedParamKind::Class);
-                    }
-                }
+            if is_class_type(ty) && matches!(param_name, Some("class") | Some("_class")) {
+                return ParamKind::Injected(InjectedParamKind::Class);
             }
-            if let Some(name) = param_name {
-                if name == "this" && is_ani_object_type(ty) {
-                    return ParamKind::Injected(InjectedParamKind::This);
-                }
+            if matches!(param_name, Some("this")) && is_ani_object_type(ty) {
+                return ParamKind::Injected(InjectedParamKind::This);
             }
 
             ParamKind::Regular
@@ -96,77 +113,79 @@ fn get_param_name(arg: &FnArg) -> Option<String> {
     None
 }
 
+fn classify_sig_param(arg: &FnArg) -> ParamKind {
+    let name = get_param_name(arg);
+    classify_param(arg, name.as_deref())
+}
+
 fn injected_binding_ident(ident: &Ident) -> Ident {
     format_ident!("__ani_injected_{}", ident)
 }
 
-struct InjectionInfo {
-    has_env: bool,
-    has_this: bool,
-    has_class: bool,
+fn analyze_wrapper_params(func: &ItemFn) -> Vec<WrapperParam<'_>> {
+    func.sig
+        .inputs
+        .iter()
+        .map(|arg| match arg {
+            FnArg::Receiver(_) => WrapperParam {
+                arg,
+                kind: ParamKind::SelfReceiver,
+                ident: None,
+            },
+            FnArg::Typed(pat_type) => {
+                let ident = match &*pat_type.pat {
+                    Pat::Ident(pat_ident) => Some(&pat_ident.ident),
+                    _ => None,
+                };
+                let name = ident.map(|ident| ident.to_string());
+                WrapperParam {
+                    arg,
+                    kind: classify_param(arg, name.as_deref()),
+                    ident,
+                }
+            }
+        })
+        .collect()
 }
 
-fn analyze_injections(func: &ItemFn) -> InjectionInfo {
-    let mut info = InjectionInfo {
-        has_env: false,
-        has_this: false,
-        has_class: false,
-    };
+fn has_injected_param(params: &[WrapperParam<'_>], kind: InjectedParamKind) -> bool {
+    params
+        .iter()
+        .any(|param| matches!(param.kind, ParamKind::Injected(param_kind) if param_kind == kind))
+}
 
-    for arg in &func.sig.inputs {
-        let name = get_param_name(arg);
-        match classify_param(arg, name.as_deref()) {
-            ParamKind::Injected(InjectedParamKind::Env) => info.has_env = true,
-            ParamKind::Injected(InjectedParamKind::This) => info.has_this = true,
-            ParamKind::Injected(InjectedParamKind::Class) => info.has_class = true,
-            _ => {}
-        }
-    }
-
-    info
+fn ty_is_ref(ty: &Type) -> bool {
+    quote!(#ty).to_string().replace(' ', "").starts_with('&')
 }
 
 pub fn generate_wrapper(
     func: &ItemFn,
     wrapper_name: &Ident,
-    is_class_method: bool,
-    is_static: bool,
+    binding_kind: WrapperBindingKind,
 ) -> TokenStream {
     let func_name = &func.sig.ident;
-    generate_wrapper_with_target(
-        func,
-        wrapper_name,
-        is_class_method,
-        is_static,
-        quote! { #func_name },
-    )
+    generate_wrapper_with_target(func, wrapper_name, binding_kind, quote! { #func_name })
 }
 
 pub fn generate_wrapper_with_target(
     func: &ItemFn,
     wrapper_name: &Ident,
-    is_class_method: bool,
-    is_static: bool,
+    binding_kind: WrapperBindingKind,
     call_target: TokenStream,
 ) -> TokenStream {
     let return_type = &func.sig.output;
-    let injections = analyze_injections(func);
-    let wrapper_params = build_wrapper_params(func, is_class_method, is_static);
-
-    let regular_params: Vec<_> = func
-        .sig
-        .inputs
+    let params = analyze_wrapper_params(func);
+    let wrapper_params = build_wrapper_params(&params, binding_kind);
+    let regular_params = params
         .iter()
-        .filter(|arg| {
-            let name = get_param_name(arg);
-            matches!(classify_param(arg, name.as_deref()), ParamKind::Regular)
-        })
-        .collect();
+        .filter(|param| param.kind == ParamKind::Regular)
+        .map(|param| param.arg)
+        .collect::<Vec<_>>();
 
     let param_error_return = build_param_error_return(return_type);
     let conversions = generate_param_conversions(&regular_params, &param_error_return);
-    let injected_vars = generate_injected_vars(func, &injections, is_class_method);
-    let call_args = build_call_args_with_injections(func, &injections);
+    let injected_vars = generate_injected_vars(&params, binding_kind);
+    let call_args = build_call_args(&params);
     let func_call = quote! {
         let result = #call_target(#(#call_args),*);
     };
@@ -186,170 +205,129 @@ pub fn generate_wrapper_with_target(
 }
 
 fn generate_injected_vars(
-    func: &ItemFn,
-    injections: &InjectionInfo,
-    is_class_method: bool,
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
 ) -> TokenStream {
     let mut vars = Vec::new();
 
-    if injections.has_env {
+    if has_injected_param(params, InjectedParamKind::Env) {
         vars.push(quote! {
             let __ani_env = ani::env::Env::from_raw_unchecked(env);
         });
     }
 
-    if injections.has_this && is_class_method {
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
         vars.push(quote! {
             let __ani_this = ani::types::AniObject::from_raw(this);
         });
     }
 
-    if injections.has_class && is_class_method {
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
         vars.push(quote! {
             let __ani_class = ani::types::AniClass::from_raw(_class);
         });
     }
 
-    for arg in &func.sig.inputs {
-        let name = get_param_name(arg);
-        if let FnArg::Typed(pat_type) = arg {
-            let Pat::Ident(pat_ident) = &*pat_type.pat else {
-                continue;
-            };
-            let ident = &pat_ident.ident;
-            let binding_ident = injected_binding_ident(ident);
-            match classify_param(arg, name.as_deref()) {
-                ParamKind::Injected(InjectedParamKind::Env) => {
-                    let ty = &pat_type.ty;
-                    let ty_str = quote!(#ty).to_string().replace(" ", "");
-                    if ty_str.starts_with('&') {
-                        vars.push(quote! {
-                            let #binding_ident = &__ani_env;
-                        });
-                    } else {
-                        vars.push(quote! {
-                            let #binding_ident = __ani_env;
-                        });
-                    }
+    for param in params {
+        let FnArg::Typed(pat_type) = param.arg else {
+            continue;
+        };
+        let Some(ident) = param.ident else {
+            continue;
+        };
+        let binding_ident = injected_binding_ident(ident);
+
+        match param.kind {
+            ParamKind::Injected(InjectedParamKind::Env) => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_env;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_env;
+                    });
                 }
-                ParamKind::Injected(InjectedParamKind::This) if is_class_method => {
-                    let ty = &pat_type.ty;
-                    let ty_str = quote!(#ty).to_string().replace(" ", "");
-                    if ty_str.starts_with('&') {
-                        vars.push(quote! {
-                            let #binding_ident = &__ani_this;
-                        });
-                    } else {
-                        vars.push(quote! {
-                            let #binding_ident = __ani_this;
-                        });
-                    }
-                }
-                ParamKind::Injected(InjectedParamKind::Class) if is_class_method => {
-                    let ty = &pat_type.ty;
-                    let ty_str = quote!(#ty).to_string().replace(" ", "");
-                    if ty_str.starts_with('&') {
-                        vars.push(quote! {
-                            let #binding_ident = &__ani_class;
-                        });
-                    } else {
-                        vars.push(quote! {
-                            let #binding_ident = __ani_class;
-                        });
-                    }
-                }
-                _ => {}
             }
+            ParamKind::Injected(InjectedParamKind::This) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_this;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_this;
+                    });
+                }
+            }
+            ParamKind::Injected(InjectedParamKind::Class) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_class;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_class;
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
     quote! { #(#vars)* }
 }
 
-fn build_wrapper_params(func: &ItemFn, is_class_method: bool, is_static: bool) -> Vec<TokenStream> {
-    let mut params = vec![quote! { env: *mut ani::sys::ani_env }];
+fn build_wrapper_params(
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
+) -> Vec<TokenStream> {
+    let mut wrapper_params = vec![quote! { env: *mut ani::sys::ani_env }];
 
-    if is_class_method {
-        if is_static {
-            params.push(quote! { _class: ani::sys::ani_class });
+    if binding_kind.is_class() {
+        if binding_kind.is_static() {
+            wrapper_params.push(quote! { _class: ani::sys::ani_class });
         } else {
-            params.push(quote! { this: ani::sys::ani_object });
+            wrapper_params.push(quote! { this: ani::sys::ani_object });
         }
     }
 
-    for (i, param) in func
-        .sig
-        .inputs
+    for (i, param) in params
         .iter()
-        .filter(|arg| {
-            let name = get_param_name(arg);
-            matches!(classify_param(arg, name.as_deref()), ParamKind::Regular)
-        })
+        .filter(|param| param.kind == ParamKind::Regular)
         .enumerate()
     {
-        if let FnArg::Typed(pat_type) = param {
-            let param_name = if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                pat_ident.ident.clone()
-            } else {
-                format_ident!("arg{}", i)
-            };
-
+        if let FnArg::Typed(pat_type) = param.arg {
+            let param_name = param
+                .ident
+                .cloned()
+                .unwrap_or_else(|| format_ident!("arg{}", i));
             let ani_type = rust_type_to_ani_type(&pat_type.ty);
-            params.push(quote! { #param_name: #ani_type });
+            wrapper_params.push(quote! { #param_name: #ani_type });
         }
     }
 
-    params
+    wrapper_params
 }
 
-fn build_call_args_with_injections(func: &ItemFn, injections: &InjectionInfo) -> Vec<TokenStream> {
+fn build_call_args(params: &[WrapperParam<'_>]) -> Vec<TokenStream> {
     let mut args = Vec::new();
 
-    for arg in &func.sig.inputs {
-        let name = get_param_name(arg);
-        match classify_param(arg, name.as_deref()) {
+    for param in params {
+        match param.kind {
             ParamKind::SelfReceiver => {}
-            ParamKind::Injected(kind) => match kind {
-                InjectedParamKind::Env => {
-                    if injections.has_env {
-                        if let FnArg::Typed(pat_type) = arg {
-                            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                                let ident = injected_binding_ident(&pat_ident.ident);
-                                args.push(quote! { #ident });
-                            }
-                        }
-                    }
+            ParamKind::Injected(_) => {
+                if let Some(ident) = param.ident {
+                    let ident = injected_binding_ident(ident);
+                    args.push(quote! { #ident });
                 }
-                InjectedParamKind::This => {
-                    if injections.has_this {
-                        if let FnArg::Typed(pat_type) = arg {
-                            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                                let ident = injected_binding_ident(&pat_ident.ident);
-                                args.push(quote! { #ident });
-                            }
-                        }
-                    }
-                }
-                InjectedParamKind::Class => {
-                    if injections.has_class {
-                        if let FnArg::Typed(pat_type) = arg {
-                            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                                let ident = injected_binding_ident(&pat_ident.ident);
-                                args.push(quote! { #ident });
-                            }
-                        }
-                    }
-                }
-            },
+            }
             ParamKind::Regular => {
-                if let FnArg::Typed(pat_type) = arg {
-                    let param_name = if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                        format_ident!("{}_converted", pat_ident.ident)
-                    } else {
-                        format_ident!("arg_converted")
-                    };
-                    args.push(quote! { #param_name });
-                }
+                let param_name = param
+                    .ident
+                    .map(|ident| format_ident!("{}_converted", ident))
+                    .unwrap_or_else(|| format_ident!("arg_converted"));
+                args.push(quote! { #param_name });
             }
         }
     }
@@ -375,16 +353,11 @@ fn build_param_error_return(return_type: &ReturnType) -> TokenStream {
 }
 
 pub fn should_skip_in_signature(arg: &FnArg) -> bool {
-    let name = get_param_name(arg);
-    !matches!(classify_param(arg, name.as_deref()), ParamKind::Regular)
+    classify_sig_param(arg) != ParamKind::Regular
 }
 
 pub fn has_this_injection(func: &ItemFn) -> bool {
-    func.sig.inputs.iter().any(|arg| {
-        let name = get_param_name(arg);
-        matches!(
-            classify_param(arg, name.as_deref()),
-            ParamKind::Injected(InjectedParamKind::This)
-        )
-    })
+    analyze_wrapper_params(func)
+        .iter()
+        .any(|param| param.kind == ParamKind::Injected(InjectedParamKind::This))
 }

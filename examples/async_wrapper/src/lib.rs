@@ -48,25 +48,25 @@ pub fn batch_compute(count: i32) -> i64 {
 
 #[ani]
 pub fn promise_resolve_int(env: &Env<'_>, value: i32) -> Result<i64> {
-    let promise = PromiseRaw::resolve_int(env, value)?.into_object();
+    let promise = PromiseRaw::<i32>::resolve_int(env, value)?.into_object();
     Ok(promise.as_raw() as i64)
 }
 
 #[ani]
 pub fn promise_resolve_string(env: &Env<'_>, value: String) -> Result<i64> {
-    let promise = PromiseRaw::resolve_string(env, &value)?.into_object();
+    let promise = PromiseRaw::<String>::resolve_string(env, &value)?.into_object();
     Ok(promise.as_raw() as i64)
 }
 
 #[ani]
 pub fn promise_reject(env: &Env<'_>, message: String) -> Result<i64> {
-    let promise = PromiseRaw::reject(env, &message)?.into_object();
+    let promise = PromiseRaw::<()>::reject(env, &message)?.into_object();
     Ok(promise.as_raw() as i64)
 }
 
 #[ani]
 pub fn promise_delayed(env: &Env<'_>, delay_ms: i32, value: String) -> Result<i64> {
-    let (deferred, promise) = PromiseRaw::deferred(env)?;
+    let (deferred, promise) = PromiseRaw::<String>::deferred(env)?;
 
     if delay_ms > 0 {
         thread::sleep(Duration::from_millis(delay_ms as u64));
@@ -78,7 +78,7 @@ pub fn promise_delayed(env: &Env<'_>, delay_ms: i32, value: String) -> Result<i6
 
 #[ani]
 pub fn promise_maybe_succeed(env: &Env<'_>, should_succeed: bool, value: i32) -> Result<i64> {
-    let (deferred, promise) = PromiseRaw::deferred(env)?;
+    let (deferred, promise) = PromiseRaw::<i32>::deferred(env)?;
 
     if should_succeed {
         deferred.resolve_int(env, value)?;
@@ -99,4 +99,37 @@ pub fn get_info(_env: &Env<'_>, this: &AniObject<'_>) -> String {
 pub fn create(env: &Env<'_>, _name: String) -> Result<i64> {
     let raw = env.get_undefined_object()?;
     Ok(raw as i64)
+}
+
+#[ani]
+pub fn tokio_delayed_square(
+    env: &Env<'_>,
+    input: i32,
+    delay_ms: i32,
+) -> Result<PromiseRaw<'static, i32>> {
+    ani::tokio::spawn_future(env, async move {
+        if delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+        }
+        Ok(input * input)
+    })
+    .map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn tokio_fetch_text(env: &Env<'_>, url: String) -> Result<PromiseRaw<'static, String>> {
+    ani::tokio::spawn_future(env, async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(fetch_data(&url))
+    })
+    .map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn tokio_fail(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, String>> {
+    ani::tokio::spawn_future(env, async move {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        Err(Error::new(Status::InvalidArgs, message))
+    })
+    .map(PromiseRaw::into_static)
 }

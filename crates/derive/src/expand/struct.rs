@@ -7,18 +7,18 @@ use std::collections::BTreeSet;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    punctuated::Punctuated, Data, DeriveInput, Field, Fields, FieldsNamed, Generics, Ident,
-    ItemStruct, Token,
+    Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics, Ident, ItemStruct, Lit,
+    Token, Variant, punctuated::Punctuated,
 };
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    register_object_type_alias, register_object_type_members, ObjectMemberAccessKind,
-    ObjectMemberDescriptor,
+    ObjectMemberAccessKind, ObjectMemberDescriptor, register_object_type_alias,
+    register_object_type_members,
 };
 use crate::types::{
-    current_module_name, emit_compile_ets_object, generate_object_field_ets_decl,
-    generate_object_property_ets_decl, qualify_member_descriptor,
+    EtsDeclKind, current_module_name, emit_compile_ets_object, emit_compile_ets_rendered_decl,
+    generate_object_field_ets_decl, generate_object_property_ets_decl, qualify_member_descriptor,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +33,7 @@ struct ObjectFieldSpec {
     arkts_name: String,
     ty: syn::Type,
     access: ObjectAccessKind,
+    emit_private: bool,
 }
 
 #[derive(Default)]
@@ -40,6 +41,13 @@ struct ObjectFieldAttrs {
     name: Option<String>,
     property: bool,
     property_name: Option<String>,
+}
+
+#[derive(Clone)]
+struct EnumVariantSpec {
+    rust_ident: Ident,
+    arkts_name: String,
+    discriminant: i32,
 }
 
 /// Expand `#[ani]` for structs
@@ -285,7 +293,9 @@ fn emit_object_decl(class_name: &str, fields: &[ObjectFieldSpec]) {
     let object_field_decls = fields
         .iter()
         .map(|field| match field.access {
-            ObjectAccessKind::Field => generate_object_field_ets_decl(&field.arkts_name, &field.ty),
+            ObjectAccessKind::Field => {
+                generate_object_field_ets_decl(&field.arkts_name, &field.ty, field.emit_private)
+            }
             ObjectAccessKind::Property => {
                 generate_object_property_ets_decl(&field.arkts_name, &field.ty)
             }
@@ -318,7 +328,11 @@ fn collect_object_field_specs(fields: &FieldsNamed) -> syn::Result<Vec<ObjectFie
                 format!("duplicate ArkTS object member name `{arkts_name}`"),
             ));
         }
+        let rust_name = rust_ident.to_string();
         out.push(ObjectFieldSpec {
+            emit_private: matches!(access, ObjectAccessKind::Field)
+                && rust_name.starts_with('_')
+                && arkts_name == rust_name,
             rust_ident,
             arkts_name,
             ty: field.ty.clone(),
@@ -413,7 +427,7 @@ fn object_descriptor_signature(qualified_name: &str) -> String {
     }
 }
 
-fn derive_object_name(input: &DeriveInput) -> syn::Result<String> {
+fn derive_named_type_name(input: &DeriveInput) -> syn::Result<String> {
     for attr in &input.attrs {
         if !attr.path().is_ident("ani") {
             continue;
@@ -424,6 +438,9 @@ fn derive_object_name(input: &DeriveInput) -> syn::Result<String> {
             return Ok(name);
         }
         if let Some(name) = parsed.class {
+            return Ok(name);
+        }
+        if let Some(name) = parsed.name {
             return Ok(name);
         }
     }
@@ -454,13 +471,241 @@ pub fn expand_class_derive(input: DeriveInput) -> TokenStream {
         Err(err) => return err.to_compile_error(),
     };
 
-    let class_name = match derive_object_name(&input) {
+    let class_name = match derive_named_type_name(&input) {
         Ok(name) => name,
         Err(err) => return err.to_compile_error(),
     };
 
     let name = &input.ident;
     expand_object_type_impls(name, &class_name, fields)
+}
+
+fn validate_enum_derive_input(input: &DeriveInput) -> syn::Result<&syn::DataEnum> {
+    let Data::Enum(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            input,
+            "#[derive(AniEnum)] can only be applied to enums",
+        ));
+    };
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "#[derive(AniEnum)] does not support generic enums yet",
+        ));
+    }
+
+    Ok(data)
+}
+
+fn parse_enum_variant_arkts_name(variant: &Variant) -> syn::Result<Option<String>> {
+    for attr in &variant.attrs {
+        if !attr.path().is_ident("ani") {
+            continue;
+        }
+
+        let parsed = attr.parse_args::<AniAttrs>()?;
+        if let Some(name) = parsed.name {
+            return Ok(Some(name));
+        }
+    }
+
+    Ok(None)
+}
+
+fn parse_enum_discriminant(expr: &Expr) -> syn::Result<i32> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(value),
+            ..
+        }) => value.base10_parse::<i32>(),
+        Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Int(value),
+                ..
+            }) = unary.expr.as_ref()
+            {
+                Ok(-value.base10_parse::<i32>()?)
+            } else {
+                Err(syn::Error::new_spanned(
+                    expr,
+                    "#[derive(AniEnum)] only supports integer literal discriminants",
+                ))
+            }
+        }
+        _ => Err(syn::Error::new_spanned(
+            expr,
+            "#[derive(AniEnum)] only supports integer literal discriminants",
+        )),
+    }
+}
+
+fn collect_enum_variant_specs(data: &syn::DataEnum) -> syn::Result<Vec<EnumVariantSpec>> {
+    let mut specs = Vec::new();
+    let mut next_discriminant = 0_i32;
+
+    for variant in &data.variants {
+        if !matches!(variant.fields, Fields::Unit) {
+            return Err(syn::Error::new_spanned(
+                &variant.fields,
+                "#[derive(AniEnum)] currently only supports unit variants",
+            ));
+        }
+
+        let discriminant = if let Some((_, expr)) = &variant.discriminant {
+            parse_enum_discriminant(expr)?
+        } else {
+            next_discriminant
+        };
+        next_discriminant = discriminant.checked_add(1).ok_or_else(|| {
+            syn::Error::new_spanned(
+                variant,
+                "#[derive(AniEnum)] discriminant overflow while deriving ANI enum",
+            )
+        })?;
+
+        let arkts_name =
+            parse_enum_variant_arkts_name(variant)?.unwrap_or_else(|| variant.ident.to_string());
+        specs.push(EnumVariantSpec {
+            rust_ident: variant.ident.clone(),
+            arkts_name,
+            discriminant,
+        });
+    }
+
+    Ok(specs)
+}
+
+fn render_enum_decl(enum_name: &str, variants: &[EnumVariantSpec]) -> String {
+    let members = variants
+        .iter()
+        .map(|variant| format!("  {} = {}", variant.arkts_name, variant.discriminant))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("enum {enum_name} {{\n{members}\n}}")
+}
+
+fn emit_enum_decl(qualified_name: &str, variants: &[EnumVariantSpec]) {
+    let mut parts = qualified_name
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let enum_name = parts.pop().unwrap_or(qualified_name);
+    let rendered = render_enum_decl(enum_name, variants);
+
+    if parts.is_empty() {
+        emit_compile_ets_rendered_decl(EtsDeclKind::Global, "", &rendered);
+    } else {
+        emit_compile_ets_rendered_decl(EtsDeclKind::Namespace, &parts.join("."), &rendered);
+    }
+}
+
+fn expand_enum_type_impls(
+    enum_name: &Ident,
+    qualified_name: &str,
+    variants: &[EnumVariantSpec],
+) -> TokenStream {
+    register_object_type_alias(&enum_name.to_string(), qualified_name);
+    emit_enum_decl(qualified_name, variants);
+
+    let descriptor = object_descriptor_signature(&qualify_member_descriptor(
+        qualified_name,
+        &current_module_name(),
+    ));
+    let descriptor_lit = syn::LitStr::new(&descriptor, Span::call_site());
+    let qualified_name_lit = syn::LitStr::new(qualified_name, Span::call_site());
+
+    let to_ani_arms = variants.iter().map(|variant| {
+        let rust_ident = &variant.rust_ident;
+        let arkts_name = syn::LitStr::new(&variant.arkts_name, Span::call_site());
+        quote! { Self::#rust_ident => #arkts_name }
+    });
+    let from_ani_arms = variants.iter().map(|variant| {
+        let rust_ident = &variant.rust_ident;
+        let arkts_name = syn::LitStr::new(&variant.arkts_name, Span::call_site());
+        quote! { #arkts_name => Ok(Self::#rust_ident) }
+    });
+
+    quote! {
+        impl #enum_name {
+            /// ANI enum descriptor usable with `Env::find_enum`.
+            pub const fn enum_descriptor() -> &'static str {
+                #descriptor_lit
+            }
+
+            /// Qualified ArkTS enum name.
+            pub const fn arkts_name() -> &'static str {
+                #qualified_name_lit
+            }
+        }
+
+        impl ani::conversions::TypeInfo for #enum_name {
+            fn type_signature() -> &'static str {
+                Self::enum_descriptor()
+            }
+
+            fn ani_c_type() -> &'static str {
+                "ani_enum_item"
+            }
+        }
+
+        impl<'env> ani::conversions::ToAni<'env> for #enum_name {
+            type Output = ani::sys::ani_enum_item;
+
+            fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
+                let enm = env.find_enum(Self::arkts_name())?;
+                let item_name = match self {
+                    #(#to_ani_arms,)*
+                };
+                let item = env.get_enum_item_by_name(&enm, item_name)?;
+                Ok(item.into_raw())
+            }
+        }
+
+        impl<'env> ani::conversions::FromAni<'env> for #enum_name {
+            type Input = ani::sys::ani_enum_item;
+
+            fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
+                if value.is_null() {
+                    return Err(ani::error::Error::new(
+                        ani::error::Status::InvalidArgs,
+                        format!("Null pointer: {}", stringify!(#enum_name)),
+                    ));
+                }
+
+                let item = ani::conversions::EnumItem::from_handle(unsafe {
+                    ani::types::AniEnumItem::from_raw(value)
+                });
+                let name = item.name(env)?;
+                match name.as_str() {
+                    #(#from_ani_arms,)*
+                    _ => Err(ani::error::Error::new(
+                        ani::error::Status::InvalidType,
+                        format!("Unknown enum item `{}` for {}", name, stringify!(#enum_name)),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Expand AniEnum derive macro
+pub fn expand_enum_derive(input: DeriveInput) -> TokenStream {
+    let data = match validate_enum_derive_input(&input) {
+        Ok(data) => data,
+        Err(err) => return err.to_compile_error(),
+    };
+
+    let enum_name = match derive_named_type_name(&input) {
+        Ok(name) => name,
+        Err(err) => return err.to_compile_error(),
+    };
+    let variants = match collect_enum_variant_specs(data) {
+        Ok(variants) => variants,
+        Err(err) => return err.to_compile_error(),
+    };
+
+    expand_enum_type_impls(&input.ident, &enum_name, &variants)
 }
 
 #[cfg(test)]
@@ -480,7 +725,9 @@ mod tests {
         };
 
         let expanded = expand_class_derive(input).to_string();
-        assert!(expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile"));
+        assert!(
+            expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile")
+        );
         assert!(expanded.contains("pub const fn arkts_name () -> & 'static str"));
         assert!(expanded.contains("models.ExplicitDerivedProfile"));
         assert!(expanded.contains(
@@ -524,11 +771,76 @@ mod tests {
     }
 
     #[test]
+    fn derive_ani_class_keeps_underscore_backing_fields_for_runtime() {
+        let input: DeriveInput = parse_quote! {
+            #[derive(AniClass)]
+            struct BackingObject {
+                _name: String,
+                value: i32,
+            }
+        };
+
+        let expanded = expand_class_derive(input).to_string();
+        assert!(expanded.contains("get_named_field"));
+        assert!(expanded.contains("set_named_field"));
+        assert!(expanded.contains("_name"));
+    }
+
+    #[test]
     fn derive_ani_class_rejects_tuple_structs() {
         let input: DeriveInput = parse_quote! {
             struct TupleUser(i32, String);
         };
         let expanded = expand_class_derive(input).to_string();
         assert!(expanded.contains("currently only supports structs with named fields"));
+    }
+
+    #[test]
+    fn derive_ani_enum_emits_type_info_and_conversion_impls() {
+        let input: DeriveInput = parse_quote! {
+            #[derive(AniEnum)]
+            #[ani(name = "models.Status")]
+            enum Status {
+                Idle,
+                Running = 4,
+                Stopped,
+            }
+        };
+
+        let expanded = expand_enum_derive(input).to_string();
+        assert!(expanded.contains("impl ani :: conversions :: TypeInfo for Status"));
+        assert!(expanded.contains("pub const fn enum_descriptor () -> & 'static str"));
+        assert!(expanded.contains("pub const fn arkts_name () -> & 'static str"));
+        assert!(expanded.contains("ani_enum_item"));
+        assert!(expanded.contains("env . find_enum (Self :: arkts_name ())"));
+        assert!(expanded.contains("env . get_enum_item_by_name (& enm , item_name)"));
+        assert!(expanded.contains("models.Status"));
+    }
+
+    #[test]
+    fn derive_ani_enum_supports_variant_name_override() {
+        let input: DeriveInput = parse_quote! {
+            #[derive(AniEnum)]
+            enum Outcome {
+                #[ani(name = "Ok")]
+                Success,
+                Failure,
+            }
+        };
+
+        let expanded = expand_enum_derive(input).to_string();
+        assert!(expanded.contains("\"Ok\" => Ok (Self :: Success)"));
+        assert!(expanded.contains("Self :: Success => \"Ok\""));
+    }
+
+    #[test]
+    fn derive_ani_enum_rejects_non_unit_variants() {
+        let input: DeriveInput = parse_quote! {
+            enum BadEnum {
+                Value(i32),
+            }
+        };
+        let expanded = expand_enum_derive(input).to_string();
+        assert!(expanded.contains("currently only supports unit variants"));
     }
 }

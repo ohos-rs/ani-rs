@@ -97,6 +97,7 @@ cat > "$arkts_cfg" <<EOF
     "paths": {
       "std": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/std"],
       "escompat": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/escompat"],
+      "arkruntime": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/arkruntime"],
       "api": ["/arkcompiler_runtime_core/static_core/plugins/ets/sdk/api"],
       "arkts": ["/arkcompiler_runtime_core/static_core/plugins/ets/sdk/arkts"]
     }
@@ -114,6 +115,7 @@ pkgs="$(rg -n "^name[[:space:]]*=" examples/*/Cargo.toml | sed -E "s/.*\"([^\"]+
 
 for pkg in $pkgs; do
   echo "[build] $pkg"
+  cargo clean -p "$pkg" >/tmp/"${pkg}".clean.log 2>&1 || true
   if cargo build -p "$pkg" >/tmp/"${pkg}".build.log 2>&1; then
     echo "BUILD_OK: $pkg" >> "$report_file"
   else

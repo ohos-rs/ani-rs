@@ -5,11 +5,16 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 
+use super::export::ClassMemberScope;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisterTarget {
     Module(String),
     Namespace(String),
-    Class { descriptor: String, is_static: bool },
+    Class {
+        descriptor: String,
+        scope: ClassMemberScope,
+    },
 }
 
 pub fn generate_register_call(
@@ -25,15 +30,22 @@ pub fn generate_register_call(
         RegisterTarget::Namespace(namespace_descriptor) => quote! {
             ::ani::module_register::BindingTarget::Namespace(#namespace_descriptor)
         },
-        RegisterTarget::Class {
-            descriptor,
-            is_static,
-        } => quote! {
-            ::ani::module_register::BindingTarget::Class {
-                descriptor: #descriptor,
-                is_static: #is_static,
+        RegisterTarget::Class { descriptor, scope } => {
+            let scope_expr = match scope {
+                ClassMemberScope::Instance => {
+                    quote! { ::ani::module_register::ClassBindingScope::Instance }
+                }
+                ClassMemberScope::Static => {
+                    quote! { ::ani::module_register::ClassBindingScope::Static }
+                }
+            };
+            quote! {
+                ::ani::module_register::BindingTarget::Class {
+                    descriptor: #descriptor,
+                    scope: #scope_expr,
+                }
             }
-        },
+        }
     };
 
     quote! {

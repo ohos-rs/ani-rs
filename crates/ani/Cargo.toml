@@ -12,6 +12,8 @@ categories = ["api-bindings", "development-tools::ffi"]
 default = []
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
+# Enable tokio-based Promise helpers
+tokio_rt = ["dep:tokio"]
 
 [dependencies]
 ani-sys = { path = "../sys" }
@@ -19,5 +21,6 @@ ctor = "0.6"
 
 # Optional dependencies
 anyhow = { version = "1", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]

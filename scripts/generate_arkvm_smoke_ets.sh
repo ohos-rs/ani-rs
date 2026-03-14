@@ -96,11 +96,32 @@ ETS
       ;;
     ani-example-async-wrapper)
       cat <<'ETS'
-__assert_eq_int("async_square", __ANI_GENERATED__.async_square(6), 36);
-let taskId = __ANI_GENERATED__.async_compute_start(5);
-__assert_true("async_compute_start_non_negative", taskId >= 0);
-__assert_bool("async_check_status_type", __ANI_GENERATED__.async_check_status(taskId));
-__assert_true("batch_compute_non_negative", __ANI_GENERATED__.batch_compute(3) >= 0);
+function main(): void {
+  console.log("[arkvm] smoke start: ani-example-async-wrapper");
+  __assert_eq_int("async_square", __ANI_GENERATED__.async_square(6), 36);
+  let taskId = __ANI_GENERATED__.async_compute_start(5);
+  __assert_true("async_compute_start_non_negative", taskId >= 0);
+  __assert_bool("async_check_status_type", __ANI_GENERATED__.async_check_status(taskId));
+  __assert_true("batch_compute_non_negative", __ANI_GENERATED__.batch_compute(3) >= 0);
+  let promisedSquare: int = waitForCompletion(() => __ANI_GENERATED__.tokio_delayed_square(7, 10));
+  __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  let promisedText: string = waitForCompletion(() => __ANI_GENERATED__.tokio_fetch_text("ani://tokio"));
+  __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
+  let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.tokio_fail("boom");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("tokio_fail", tokioRejected);
+
+  if (__ani_fail_count > 0) {
+    throw new Error("arkvm assertions failed: " + __ani_fail_count);
+  }
+  console.log("[arkvm] smoke done: ani-example-async-wrapper");
+}
 ETS
       ;;
     ani-example-bigint)
@@ -348,6 +369,32 @@ __assert_eq_long("factorial", __ANI_GENERATED__.factorial(5), 120);
 __assert_true("is_prime_17", __ANI_GENERATED__.is_prime(17));
 ETS
       ;;
+    ani-example-constructor-nullish)
+      cat <<'ETS'
+let noneUser = new __ANI_GENERATED__.Person(undefined);
+__assert_eq_string("ctor_none", noneUser.name, "anonymous");
+noneUser.rename("bridge");
+__assert_eq_string("rename_some", noneUser.name, "bridge");
+noneUser.rename(undefined);
+__assert_eq_string("rename_none", noneUser.name, "anonymous");
+let someUser = new __ANI_GENERATED__.Person("ark");
+__assert_eq_string("ctor_some", someUser.name, "ark");
+ETS
+      ;;
+    ani-example-constructor-overload)
+      cat <<'ETS'
+let pair = new __ANI_GENERATED__.Measure(2, 3);
+__assert_eq_string("Measure.kind_pair", pair.kind, "pair");
+__assert_eq_int("Measure.total_pair", pair.total, 5);
+__assert_eq_string("Measure.describe_pair", pair.describe(), "pair:5");
+
+let named = new __ANI_GENERATED__.Measure("named", 4);
+__assert_eq_string("Measure.kind_named", named.kind, "named");
+__assert_eq_int("Measure.total_named", named.total, 4);
+__assert_eq_string("Measure.describe_named", named.describe(), "named:4");
+ETS
+      ;;
+
     ani-example-new-class)
       cat <<'ETS'
 let calcToken = __ANI_GENERATED__.Calculator.create();

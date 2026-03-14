@@ -7,16 +7,81 @@ use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
 use crate::codegen::{
+    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope,
+    ClassPropertyAccessorDescriptor, ClassPropertyDescriptor, ClassRegisterDescriptor,
+    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget, WrapperBindingKind,
     emit_export_plan_ets, generate_register_fn, generate_wrapper, has_this_injection,
-    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    class_to_descriptor, current_module_name, function_requires_nullish_bridge,
-    generate_ctor_ets_decl, generate_ctor_signature, generate_fn_ets_binding,
-    generate_fn_signature, generate_getter_ets_decl, generate_setter_ets_decl,
-    module_to_descriptor, namespace_to_descriptor, qualify_member_descriptor, EtsDeclKind,
+    EtsDeclKind, class_to_descriptor, current_module_name, function_requires_nullish_bridge,
+    generate_ctor_signature, generate_fn_ets_binding, generate_fn_signature,
+    generate_getter_ets_decl, generate_setter_ets_decl, module_to_descriptor,
+    namespace_to_descriptor, qualify_member_descriptor,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CallableKind {
+    Function,
+    Constructor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BindingResolveInput {
+    pub callable_kind: CallableKind,
+    pub wrapper_binding_kind: WrapperBindingKind,
+    pub skip_first_arg: bool,
+}
+
+impl BindingResolveInput {
+    pub(crate) fn is_constructor(self) -> bool {
+        matches!(self.callable_kind, CallableKind::Constructor)
+    }
+
+    pub(crate) fn is_static(self) -> bool {
+        self.wrapper_binding_kind.is_static()
+    }
+}
+
+pub(crate) fn class_wrapper_binding_kind(is_static: bool) -> WrapperBindingKind {
+    if is_static {
+        WrapperBindingKind::ClassStatic
+    } else {
+        WrapperBindingKind::ClassInstance
+    }
+}
+
+fn resolve_function_binding_input(attrs: &BindgenAttrs, func: &ItemFn) -> BindingResolveInput {
+    let callable_kind = if attrs.constructor {
+        CallableKind::Constructor
+    } else {
+        CallableKind::Function
+    };
+    let is_class_method = attrs.class.is_some();
+    let has_self = func
+        .sig
+        .inputs
+        .first()
+        .is_some_and(|arg| matches!(arg, FnArg::Receiver(_)));
+    let has_this = has_this_injection(func);
+    let is_static = if matches!(callable_kind, CallableKind::Constructor) {
+        false
+    } else if is_class_method {
+        attrs.is_static
+    } else {
+        attrs.is_static || (!has_self && !has_this)
+    };
+
+    BindingResolveInput {
+        callable_kind,
+        wrapper_binding_kind: if is_class_method {
+            class_wrapper_binding_kind(is_static)
+        } else {
+            WrapperBindingKind::Global
+        },
+        skip_first_arg: has_self,
+    }
+}
 
 /// Expand `#[ani]` for functions
 pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
@@ -34,43 +99,13 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
 
     let func_name = &func.sig.ident;
     let func_name_str = func_name.to_string();
-    let is_constructor = attrs.constructor;
-    let is_class_method = attrs.class.is_some();
+    let binding_input = resolve_function_binding_input(&attrs, &func);
 
-    // Check if function has self parameter (instance method)
-    let has_self = func
-        .sig
-        .inputs
-        .first()
-        .is_some_and(|arg| matches!(arg, FnArg::Receiver(_)));
-
-    // Check if function has This injection (alternative way to indicate instance method)
-    let has_this = has_this_injection(&func);
-
-    // Class methods are instance methods by default in ArkTS.
-    let is_static = if is_constructor {
-        false
-    } else if is_class_method {
-        attrs.is_static
-    } else {
-        // Keep old behavior for non-class functions.
-        attrs.is_static || (!has_self && !has_this)
-    };
-    // Only skip explicit receiver (`self`). Injected params are filtered out
-    // by `should_skip_in_signature`.
-    let skip_first = has_self;
-
-    let binding = match resolve_binding_plan(
-        &attrs,
-        &func_name.to_string(),
-        &func.sig,
-        is_static,
-        is_constructor,
-        skip_first,
-    ) {
-        Ok(binding) => binding,
-        Err(err) => return err.to_compile_error(),
-    };
+    let binding =
+        match resolve_binding_plan(&attrs, &func_name.to_string(), &func.sig, binding_input) {
+            Ok(binding) => binding,
+            Err(err) => return err.to_compile_error(),
+        };
     emit_export_plan_ets(&binding);
 
     // Generate wrapper function name
@@ -79,7 +114,7 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let ctor_register_name = format_ident!("__ani_ctor_register_{}", func_name);
 
     // Generate wrapper function
-    let wrapper = generate_wrapper(&func, &wrapper_name, is_class_method, is_static);
+    let wrapper = generate_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind);
 
     // Generate registration function based on target
     let register_fn = generate_register_fn(
@@ -182,13 +217,17 @@ pub(crate) struct AccessorConfig {
     pub property_name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolvedClassBinding {
+    descriptor: ClassDescriptorMember,
+    register: ClassRegisterDescriptor,
+}
+
 pub(crate) fn resolve_accessor_config(
     attrs: &BindgenAttrs,
     rust_name: &str,
     sig: &Signature,
-    is_static: bool,
-    is_constructor: bool,
-    skip_first: bool,
+    binding_input: BindingResolveInput,
 ) -> syn::Result<Option<AccessorConfig>> {
     if attrs.getter.is_some() && attrs.setter.is_some() {
         return Err(syn::Error::new_spanned(
@@ -211,15 +250,15 @@ pub(crate) fn resolve_accessor_config(
             "#[ani(getter)] / #[ani(setter)] can only be used on methods bound to a class",
         ));
     }
-    if is_constructor {
+    if binding_input.is_constructor() {
         return Err(syn::Error::new_spanned(
             sig,
             "#[ani(constructor)] cannot be combined with #[ani(getter)] / #[ani(setter)]",
         ));
     }
     match kind {
-        AccessorKind::Getter => validate_getter_signature(sig, skip_first)?,
-        AccessorKind::Setter => validate_setter_signature(sig, skip_first)?,
+        AccessorKind::Getter => validate_getter_signature(sig, binding_input.skip_first_arg)?,
+        AccessorKind::Setter => validate_setter_signature(sig, binding_input.skip_first_arg)?,
     }
 
     let property_name = if explicit_name.trim().is_empty() {
@@ -238,23 +277,15 @@ pub(crate) fn resolve_binding_plan(
     attrs: &BindgenAttrs,
     rust_name: &str,
     sig: &Signature,
-    is_static: bool,
-    is_constructor: bool,
-    skip_first: bool,
+    binding_input: BindingResolveInput,
 ) -> syn::Result<ExportPlan> {
     let ets_name = attrs.name.clone().unwrap_or_else(|| rust_name.to_string());
-    let requires_nullish_bridge = function_requires_nullish_bridge(sig, skip_first);
-    if is_constructor && requires_nullish_bridge {
-        return Err(syn::Error::new_spanned(
-            sig,
-            "#[ani(constructor)] does not support nullish-exposed parameters yet; use explicit ArkTS wrappers instead",
-        ));
-    }
+    let requires_nullish_bridge =
+        function_requires_nullish_bridge(sig, binding_input.skip_first_arg);
 
-    let accessor =
-        resolve_accessor_config(attrs, rust_name, sig, is_static, is_constructor, skip_first)?;
+    let accessor = resolve_accessor_config(attrs, rust_name, sig, binding_input)?;
 
-    let register_symbol_name = if is_constructor {
+    let register_symbol_name = if binding_input.is_constructor() {
         "<ctor>".to_string()
     } else if accessor.is_some() || requires_nullish_bridge {
         format!("__ani_native_{ets_name}")
@@ -263,41 +294,41 @@ pub(crate) fn resolve_binding_plan(
     };
 
     let signature = attrs.signature.clone().unwrap_or_else(|| {
-        if is_constructor {
-            generate_ctor_signature(sig, skip_first)
+        if binding_input.is_constructor() {
+            generate_ctor_signature(sig, binding_input.skip_first_arg)
         } else {
-            generate_fn_signature(sig, skip_first)
+            generate_fn_signature(sig, binding_input.skip_first_arg)
         }
     });
     let ets_target = resolve_ets_binding_target(attrs);
+    let ets_kind = ets_target.kind;
+    let class_binding = resolve_class_binding(
+        attrs,
+        binding_input,
+        &ets_name,
+        &register_symbol_name,
+        accessor.as_ref(),
+    );
+    let class_descriptor = class_binding
+        .as_ref()
+        .map(|binding| binding.descriptor.clone());
+    let class_register = class_binding
+        .as_ref()
+        .map(|binding| binding.register.clone());
 
-    let ets = if let Some(accessor) = &accessor {
+    let ets = if let Some(class_descriptor) = &class_descriptor {
         EtsBindingEmission::ClassMember {
-            target: ets_target.target.clone(),
-            rendered: render_accessor_ets_decl(
-                accessor,
-                sig,
-                &ets_target.target,
-                &register_symbol_name,
-                skip_first,
-                is_static,
-            ),
-        }
-    } else if is_constructor {
-        EtsBindingEmission::Plain {
-            target: ets_target,
-            signature: generate_ctor_ets_decl(sig, skip_first),
-            is_static,
+            rendered: render_class_member_ets_decl(class_descriptor, sig, binding_input),
         }
     } else {
         EtsBindingEmission::Rendered {
-            target: ets_target.clone(),
+            target: ets_target,
             rendered: generate_fn_ets_binding(
-                ets_target.kind,
+                ets_kind,
                 sig,
                 &ets_name,
-                skip_first,
-                is_static,
+                binding_input.skip_first_arg,
+                binding_input.is_static(),
             ),
         }
     };
@@ -305,8 +336,10 @@ pub(crate) fn resolve_binding_plan(
     Ok(ExportPlan {
         register_symbol_name,
         signature,
-        register_target: resolve_register_target(attrs, is_static),
+        register_target: resolve_register_target(attrs, class_register.as_ref()),
         ets,
+        class_descriptor,
+        class_register,
     })
 }
 
@@ -341,33 +374,116 @@ fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
     }
 }
 
-fn render_accessor_ets_decl(
-    accessor: &AccessorConfig,
+fn render_class_member_ets_decl(
+    class_descriptor: &ClassDescriptorMember,
     sig: &Signature,
-    class_target: &str,
-    backing_name: &str,
-    skip_first: bool,
-    is_static: bool,
+    binding_input: BindingResolveInput,
 ) -> String {
-    let owner_name = class_target.rsplit('.').next().unwrap_or(class_target);
-    match accessor.kind {
-        AccessorKind::Getter => generate_getter_ets_decl(
+    match class_descriptor {
+        ClassDescriptorMember::Constructor(_) => {
+            crate::types::generate_ctor_ets_binding(sig, binding_input.skip_first_arg)
+        }
+        ClassDescriptorMember::Method(descriptor) => generate_fn_ets_binding(
+            EtsDeclKind::Class,
             sig,
-            &accessor.property_name,
-            backing_name,
-            owner_name,
-            skip_first,
-            is_static,
+            &descriptor.public_name,
+            binding_input.skip_first_arg,
+            binding_input.is_static(),
         ),
-        AccessorKind::Setter => generate_setter_ets_decl(
-            sig,
-            &accessor.property_name,
-            backing_name,
-            owner_name,
-            skip_first,
-            is_static,
-        ),
+        ClassDescriptorMember::Property(descriptor) => {
+            render_property_member_ets_decl(&descriptor, sig, binding_input.skip_first_arg)
+        }
     }
+}
+
+fn render_property_member_ets_decl(
+    descriptor: &ClassPropertyDescriptor,
+    sig: &Signature,
+    skip_first: bool,
+) -> String {
+    let owner_name = descriptor
+        .owner
+        .rsplit('.')
+        .next()
+        .unwrap_or(descriptor.owner.as_str());
+    let is_static = matches!(descriptor.scope, ClassMemberScope::Static);
+
+    if let Some(getter) = &descriptor.getter {
+        return generate_getter_ets_decl(
+            sig,
+            &descriptor.public_name,
+            &getter.native_symbol_name,
+            owner_name,
+            skip_first,
+            is_static,
+        );
+    }
+
+    if let Some(setter) = &descriptor.setter {
+        return generate_setter_ets_decl(
+            sig,
+            &descriptor.public_name,
+            &setter.native_symbol_name,
+            owner_name,
+            skip_first,
+            is_static,
+        );
+    }
+
+    panic!("property descriptor must contain a getter or setter accessor")
+}
+
+fn resolve_class_binding(
+    attrs: &BindgenAttrs,
+    binding_input: BindingResolveInput,
+    ets_name: &str,
+    register_symbol_name: &str,
+    accessor: Option<&AccessorConfig>,
+) -> Option<ResolvedClassBinding> {
+    let owner = attrs.class.clone()?;
+    let scope = if binding_input.is_static() {
+        ClassMemberScope::Static
+    } else {
+        ClassMemberScope::Instance
+    };
+
+    let descriptor = if binding_input.is_constructor() {
+        ClassDescriptorMember::Constructor(ClassCallableDescriptor {
+            owner,
+            public_name: "constructor".to_string(),
+            native_symbol_name: register_symbol_name.to_string(),
+            scope,
+        })
+    } else if let Some(accessor_config) = accessor {
+        let mut property = ClassPropertyDescriptor {
+            owner,
+            public_name: accessor_config.property_name.clone(),
+            scope,
+            getter: None,
+            setter: None,
+        };
+        let accessor_descriptor = ClassPropertyAccessorDescriptor {
+            native_symbol_name: register_symbol_name.to_string(),
+        };
+        match accessor_config.kind {
+            AccessorKind::Getter => property.getter = Some(accessor_descriptor),
+            AccessorKind::Setter => property.setter = Some(accessor_descriptor),
+        }
+        ClassDescriptorMember::Property(property)
+    } else {
+        ClassDescriptorMember::Method(ClassCallableDescriptor {
+            owner,
+            public_name: ets_name.to_string(),
+            native_symbol_name: register_symbol_name.to_string(),
+            scope,
+        })
+    };
+    let register = descriptor.register_descriptor();
+
+    Some(ResolvedClassBinding {
+        descriptor,
+        register,
+    })
 }
 
 fn validate_getter_signature(sig: &Signature, skip_first: bool) -> syn::Result<()> {
@@ -449,13 +565,19 @@ fn strip_accessor_prefix(name: &str, prefixes: &[&str]) -> Option<String> {
     None
 }
 
-pub(crate) fn resolve_register_target(attrs: &BindgenAttrs, is_static: bool) -> RegisterTarget {
+pub(crate) fn resolve_register_target(
+    attrs: &BindgenAttrs,
+    class_register: Option<&ClassRegisterDescriptor>,
+) -> RegisterTarget {
     let module_name = current_module_name();
 
-    if let Some(class) = attrs.class.as_deref() {
+    if let Some(class_register) = class_register {
         RegisterTarget::Class {
-            descriptor: class_to_descriptor(&qualify_member_descriptor(class, &module_name)),
-            is_static,
+            descriptor: class_to_descriptor(&qualify_member_descriptor(
+                &class_register.owner,
+                &module_name,
+            )),
+            scope: class_register.scope,
         }
     } else if let Some(namespace) = attrs.namespace.as_deref() {
         RegisterTarget::Namespace(namespace_to_descriptor(&qualify_member_descriptor(
@@ -730,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_plan_rejects_nullish_constructor_params() {
+    fn binding_plan_supports_nullish_constructor_params() {
         let attrs = BindgenAttrs {
             constructor: true,
             class: Some("Person".to_string()),
@@ -739,7 +861,22 @@ mod tests {
         let sig: Signature = parse_quote! {
             fn ctor(name: Option<String>)
         };
-        assert!(resolve_binding_plan(&attrs, "ctor", &sig, false, true, false).is_err());
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Constructor,
+            wrapper_binding_kind: WrapperBindingKind::ClassInstance,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "ctor", &sig, binding_input)
+            .expect("binding plan should resolve");
+        match &plan.ets {
+            EtsBindingEmission::ClassMember { rendered } => {
+                assert_eq!(
+                    rendered,
+                    "native constructor(name: String | null | undefined);"
+                );
+            }
+            other => panic!("expected class member emission, got {other:?}"),
+        }
     }
 
     #[test]
@@ -751,6 +888,184 @@ mod tests {
         };
         let func: ItemFn = parse_quote! { fn get_value() -> i32 { 1 } };
         assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
+    }
+
+    #[test]
+    fn binding_plan_tracks_static_property_descriptor() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            getter: Some("value".to_string()),
+            is_static: true,
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn get_value() -> i32
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            wrapper_binding_kind: WrapperBindingKind::ClassStatic,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "get_value", &sig, binding_input)
+            .expect("binding plan should resolve");
+        assert_eq!(
+            plan.class_descriptor,
+            Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
+                owner: "Widget".to_string(),
+                public_name: "value".to_string(),
+                scope: ClassMemberScope::Static,
+                getter: Some(ClassPropertyAccessorDescriptor {
+                    native_symbol_name: "__ani_native_get_value".to_string(),
+                }),
+                setter: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn binding_plan_tracks_constructor_descriptor() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            constructor: true,
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn ctor(name: String)
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Constructor,
+            wrapper_binding_kind: WrapperBindingKind::ClassInstance,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "ctor", &sig, binding_input)
+            .expect("binding plan should resolve");
+        assert_eq!(
+            plan.class_descriptor,
+            Some(ClassDescriptorMember::Constructor(
+                ClassCallableDescriptor {
+                    owner: "Widget".to_string(),
+                    public_name: "constructor".to_string(),
+                    native_symbol_name: "<ctor>".to_string(),
+                    scope: ClassMemberScope::Instance,
+                }
+            ))
+        );
+        match &plan.ets {
+            EtsBindingEmission::ClassMember { rendered } => {
+                assert_eq!(rendered, "native constructor(name: string);");
+            }
+            other => panic!("expected class member emission, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn binding_plan_register_target_uses_member_scope() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            getter: Some("value".to_string()),
+            is_static: true,
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn get_value() -> i32
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            wrapper_binding_kind: WrapperBindingKind::ClassStatic,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "get_value", &sig, binding_input)
+            .expect("binding plan should resolve");
+        assert_eq!(
+            plan.register_target,
+            RegisterTarget::Class {
+                descriptor: "ani_derive.Widget".to_string(),
+                scope: ClassMemberScope::Static,
+            }
+        );
+        assert_eq!(
+            plan.class_register,
+            Some(ClassRegisterDescriptor {
+                owner: "Widget".to_string(),
+                scope: ClassMemberScope::Static,
+            })
+        );
+    }
+
+    #[test]
+    fn binding_plan_tracks_method_descriptor_and_register() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn rename(name: String) -> String
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            wrapper_binding_kind: WrapperBindingKind::ClassInstance,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "rename", &sig, binding_input)
+            .expect("binding plan should resolve");
+        assert_eq!(
+            plan.class_descriptor,
+            Some(ClassDescriptorMember::Method(
+                crate::codegen::ClassCallableDescriptor {
+                    owner: "Widget".to_string(),
+                    public_name: "rename".to_string(),
+                    native_symbol_name: "rename".to_string(),
+                    scope: ClassMemberScope::Instance,
+                }
+            ))
+        );
+        assert_eq!(
+            plan.class_register,
+            Some(ClassRegisterDescriptor {
+                owner: "Widget".to_string(),
+                scope: ClassMemberScope::Instance,
+            })
+        );
+    }
+
+    #[test]
+    fn binding_plan_tracks_distinct_property_and_native_names() {
+        let attrs = BindgenAttrs {
+            class: Some("Widget".to_string()),
+            getter: Some("total".to_string()),
+            name: Some("native_get_total".to_string()),
+            is_static: true,
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn get_total() -> i32
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            wrapper_binding_kind: WrapperBindingKind::ClassStatic,
+            skip_first_arg: false,
+        };
+        let plan = resolve_binding_plan(&attrs, "get_total", &sig, binding_input)
+            .expect("binding plan should resolve");
+        assert_eq!(
+            plan.class_descriptor,
+            Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
+                owner: "Widget".to_string(),
+                public_name: "total".to_string(),
+                scope: ClassMemberScope::Static,
+                getter: Some(ClassPropertyAccessorDescriptor {
+                    native_symbol_name: "__ani_native_native_get_total".to_string(),
+                }),
+                setter: None,
+            }))
+        );
+        match &plan.ets {
+            EtsBindingEmission::ClassMember { rendered } => {
+                assert!(rendered.contains("static native __ani_native_native_get_total(): int;"));
+                assert!(rendered.contains("static get total(): int"));
+            }
+            other => panic!("expected class member emission, got {other:?}"),
+        }
     }
 
     #[test]
