@@ -25,7 +25,9 @@ pub fn array_length(env: &Env<'_>, arr: AniObject<'_>) -> i32 {
 
 #[ani]
 pub fn array_get(env: &Env<'_>, arr: AniObject<'_>, index: i32) -> Result<bool> {
-    let elem = env.call_method_by_name_ref(&arr, "$_get", Some("I:Lstd/core/Object;"), index)?;
+    let args = [ani_value_int(index)];
+    let elem =
+        env.call_method_by_name_ref_with_args(&arr, "$_get", Some("I:Lstd/core/Object;"), &args)?;
     Ok(!env.is_nullish(&elem)?)
 }
 

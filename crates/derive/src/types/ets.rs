@@ -3,7 +3,7 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -11,12 +11,12 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    should_skip_in_signature, ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope,
-    ClassPropertyDescriptor,
+    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
+    should_skip_in_signature,
 };
 
 use super::ani_type::{
-    resolve_object_type_alias, AniType, FunctionType, PrimitiveType, StringType, WrapperType,
+    AniType, FunctionType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,12 +310,30 @@ fn property_slot_sort_key(slot: &RenderedPropertySlot) -> (u8, String) {
     (scope_rank, slot.descriptor.public_name.clone())
 }
 
+fn ensure_exported_block(block: &str) -> String {
+    let mut lines = block.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+
+    let first = first.trim_start();
+    let mut out = if first.starts_with("export ") {
+        first.to_string()
+    } else {
+        format!("export {first}")
+    };
+
+    for line in lines {
+        out.push('\n');
+        out.push_str(line);
+    }
+
+    out
+}
+
 fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: &ClassNode) {
     let pad = " ".repeat(indent);
-    out.push_str(&format!(
-        "{pad}class {class_name} {{
-"
-    ));
+    out.push_str(&format!("{pad}export class {class_name} {{\n"));
 
     let mut object_members = class.object_members.clone();
     object_members.sort_by_key(object_member_sort_key);
@@ -374,7 +392,7 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
 
 fn render_namespace(out: &mut String, indent: usize, name: &str, node: &NamespaceNode) {
     let pad = " ".repeat(indent);
-    out.push_str(&format!("{pad}namespace {name} {{\n"));
+    out.push_str(&format!("{pad}export namespace {name} {{\n"));
 
     for (class_name, class) in &node.classes {
         render_class_block(out, indent + 2, class_name, class);
@@ -383,7 +401,7 @@ fn render_namespace(out: &mut String, indent: usize, name: &str, node: &Namespac
     let mut fns = node.functions.clone();
     fns.sort();
     for function in fns {
-        push_indented_block(out, indent + 2, &function);
+        push_indented_block(out, indent + 2, &ensure_exported_block(&function));
     }
 
     for (child, child_node) in &node.children {
@@ -447,7 +465,7 @@ fn render_decls(
     if !globals.is_empty() {
         section_break(&mut out, &mut has_content);
         for global in globals {
-            push_indented_block(&mut out, 0, &global);
+            push_indented_block(&mut out, 0, &ensure_exported_block(&global));
         }
     }
 
@@ -1448,6 +1466,229 @@ get age(): int {
         assert!(rendered.contains("active: boolean = false;"));
         assert!(rendered.contains("native getName(): string;"));
         assert!(rendered.contains("static native create(name: string): long;"));
+    }
+
+    #[test]
+    fn test_render_decls_supports_mixed_module_namespace_and_namespaced_class_exports() {
+        let decls = vec![
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function add(a: int, b: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "AniMath.Utils".to_string(),
+                rendered: "native function sqrt(x: double): double;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "AniMath.Utils".to_string(),
+                rendered: "native function sum3(a: int, b: int, c: int): int;".to_string(),
+            },
+        ];
+        let class_members = vec![
+            EtsClassMemberDecl {
+                target: "example.Person".to_string(),
+                descriptor: Some(ClassDescriptorMember::Constructor(
+                    ClassCallableDescriptor {
+                        owner: "example.Person".to_string(),
+                        public_name: "constructor".to_string(),
+                        native_symbol_name: "<ctor>".to_string(),
+                        scope: ClassMemberScope::Instance,
+                    },
+                )),
+                rendered: "native constructor(name: string, score: int);".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "example.Person".to_string(),
+                descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
+                    owner: "example.Person".to_string(),
+                    public_name: "name".to_string(),
+                    scope: ClassMemberScope::Instance,
+                    getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
+                        native_symbol_name: "__ani_native_get_name".to_string(),
+                    }),
+                    setter: None,
+                })),
+                rendered: "get name(): string {\n  return this.__ani_native_get_name();\n}"
+                    .to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "example.Person".to_string(),
+                descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
+                    owner: "example.Person".to_string(),
+                    public_name: "score".to_string(),
+                    scope: ClassMemberScope::Instance,
+                    getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
+                        native_symbol_name: "__ani_native_get_score".to_string(),
+                    }),
+                    setter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
+                        native_symbol_name: "__ani_native_set_score".to_string(),
+                    }),
+                })),
+                rendered: "get score(): int {\n  return this.__ani_native_get_score();\n}\nset score(value: int) {\n  this.__ani_native_set_score(value);\n}"
+                    .to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "example.Person".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "example.Person".to_string(),
+                    public_name: "label".to_string(),
+                    native_symbol_name: "__ani_native_label".to_string(),
+                    scope: ClassMemberScope::Instance,
+                })),
+                rendered: "native label(): string;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "example.Person".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "example.Person".to_string(),
+                    public_name: "species".to_string(),
+                    native_symbol_name: "__ani_native_species".to_string(),
+                    scope: ClassMemberScope::Static,
+                })),
+                rendered: "static native species(): string;".to_string(),
+            },
+        ];
+
+        let rendered = render_decls(&decls, &[], &class_members);
+
+        assert!(rendered.contains("native function add(a: int, b: int): int;"));
+        assert!(rendered.contains("namespace AniMath {"));
+        assert!(rendered.contains("namespace Utils {"));
+        assert!(rendered.contains("native function sqrt(x: double): double;"));
+        assert!(rendered.contains("native function sum3(a: int, b: int, c: int): int;"));
+        assert!(rendered.contains("namespace example {"));
+        assert!(rendered.contains("class Person {"));
+        assert!(rendered.contains("native constructor(name: string, score: int);"));
+        assert!(rendered.contains("get name(): string"));
+        assert!(rendered.contains("get score(): int"));
+        assert!(rendered.contains("set score(value: int)"));
+        assert!(rendered.contains("native label(): string;"));
+        assert!(rendered.contains("static native species(): string;"));
+    }
+
+    #[test]
+    fn test_render_decls_keeps_global_and_namespace_overloads() {
+        let decls = vec![
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function sum(a: int, b: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function sum(a: int, b: int, c: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function concat(left: string, right: string): string;"
+                    .to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "ops".to_string(),
+                rendered: "native function sum(a: int, b: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "ops".to_string(),
+                rendered: "native function sum(a: int, b: int, c: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "ops".to_string(),
+                rendered: "native function concat(left: string, right: string): string;"
+                    .to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "A".to_string(),
+                rendered: "native function recursiveFunction(value: int): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "A.B".to_string(),
+                rendered: "native function sumB(a: int, b: int): int;".to_string(),
+            },
+        ];
+
+        let rendered = render_decls(&decls, &[], &[]);
+
+        assert!(rendered.contains("export native function sum(a: int, b: int): int;"));
+        assert!(rendered.contains("export native function sum(a: int, b: int, c: int): int;"));
+        assert!(
+            rendered
+                .contains("export native function concat(left: string, right: string): string;")
+        );
+        assert!(rendered.contains("export namespace ops {"));
+        assert!(rendered.contains("export native function sum(a: int, b: int): int;"));
+        assert!(rendered.contains("export native function sum(a: int, b: int, c: int): int;"));
+        assert!(
+            rendered
+                .contains("export native function concat(left: string, right: string): string;")
+        );
+        assert!(rendered.contains("export namespace A {"));
+        assert!(rendered.contains("export native function recursiveFunction(value: int): int;"));
+        assert!(rendered.contains("export namespace B {"));
+        assert!(rendered.contains("export native function sumB(a: int, b: int): int;"));
+    }
+
+    #[test]
+    fn test_render_decls_keeps_class_method_overloads() {
+        let class_members = vec![
+            EtsClassMemberDecl {
+                target: "demo.MathBox".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "demo.MathBox".to_string(),
+                    public_name: "mix".to_string(),
+                    native_symbol_name: "__ani_native_mix_2".to_string(),
+                    scope: ClassMemberScope::Instance,
+                })),
+                rendered: "native mix(left: int, right: int): int;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "demo.MathBox".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "demo.MathBox".to_string(),
+                    public_name: "mix".to_string(),
+                    native_symbol_name: "__ani_native_mix_3".to_string(),
+                    scope: ClassMemberScope::Instance,
+                })),
+                rendered: "native mix(left: int, right: int, extra: int): int;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "demo.MathBox".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "demo.MathBox".to_string(),
+                    public_name: "tag".to_string(),
+                    native_symbol_name: "__ani_native_tag_1".to_string(),
+                    scope: ClassMemberScope::Static,
+                })),
+                rendered: "static native tag(value: string): string;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "demo.MathBox".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    owner: "demo.MathBox".to_string(),
+                    public_name: "tag".to_string(),
+                    native_symbol_name: "__ani_native_tag_2".to_string(),
+                    scope: ClassMemberScope::Static,
+                })),
+                rendered: "static native tag(value: string, suffix: string): string;".to_string(),
+            },
+        ];
+
+        let rendered = render_decls(&[], &[], &class_members);
+
+        assert!(rendered.contains("export class MathBox {"));
+        assert!(rendered.contains("native mix(left: int, right: int): int;"));
+        assert!(rendered.contains("native mix(left: int, right: int, extra: int): int;"));
+        assert!(rendered.contains("static native tag(value: string): string;"));
+        assert!(rendered.contains("static native tag(value: string, suffix: string): string;"));
     }
 
     #[test]

@@ -1845,12 +1845,13 @@ impl<'local> Env<'local> {
     // Call Method by Name (Simplified API)
     // ========================================================================
 
-    /// Call a method returning int by name
-    pub fn call_method_by_name_int(
+    /// Call a method returning int by name with `ani_value` arguments.
+    pub fn call_method_by_name_int_with_args(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<i32> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1864,16 +1865,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning long by name
-    pub fn call_method_by_name_long(
+    /// Call a method returning int by name.
+    pub fn call_method_by_name_int(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<i32> {
+        self.call_method_by_name_int_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning long by name with `ani_value` arguments.
+    pub fn call_method_by_name_long_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<i64> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1887,16 +1899,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning double by name
-    pub fn call_method_by_name_double(
+    /// Call a method returning long by name.
+    pub fn call_method_by_name_long(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<i64> {
+        self.call_method_by_name_long_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning double by name with `ani_value` arguments.
+    pub fn call_method_by_name_double_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<f64> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1910,16 +1933,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning float by name
-    pub fn call_method_by_name_float(
+    /// Call a method returning double by name.
+    pub fn call_method_by_name_double(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<f64> {
+        self.call_method_by_name_double_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning float by name with `ani_value` arguments.
+    pub fn call_method_by_name_float_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<f32> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1933,16 +1967,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning boolean by name
-    pub fn call_method_by_name_boolean(
+    /// Call a method returning float by name.
+    pub fn call_method_by_name_float(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<f32> {
+        self.call_method_by_name_float_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning boolean by name with `ani_value` arguments.
+    pub fn call_method_by_name_boolean_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<bool> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1956,17 +2001,28 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )?;
         Ok(result != 0)
     }
 
-    /// Call a method returning byte by name
-    pub fn call_method_by_name_byte(
+    /// Call a method returning boolean by name.
+    pub fn call_method_by_name_boolean(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<bool> {
+        self.call_method_by_name_boolean_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning byte by name with `ani_value` arguments.
+    pub fn call_method_by_name_byte_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<i8> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -1980,16 +2036,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning short by name
-    pub fn call_method_by_name_short(
+    /// Call a method returning byte by name.
+    pub fn call_method_by_name_byte(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<i8> {
+        self.call_method_by_name_byte_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning short by name with `ani_value` arguments.
+    pub fn call_method_by_name_short_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<i16> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -2003,16 +2070,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a method returning char by name
-    pub fn call_method_by_name_char(
+    /// Call a method returning short by name.
+    pub fn call_method_by_name_short(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<i16> {
+        self.call_method_by_name_short_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a method returning char by name with `ani_value` arguments.
+    pub fn call_method_by_name_char_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<u16> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -2026,16 +2104,27 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null()
+            Self::value_args_ptr(args)
         )
     }
 
-    /// Call a void method by name
-    pub fn call_method_by_name_void(
+    /// Call a method returning char by name.
+    pub fn call_method_by_name_char(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
+    ) -> Result<u16> {
+        self.call_method_by_name_char_with_args(obj, name, signature, &[])
+    }
+
+    /// Call a void method by name with `ani_value` arguments.
+    pub fn call_method_by_name_void_with_args(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
     ) -> Result<()> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -2047,8 +2136,18 @@ impl<'local> Env<'local> {
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            ptr::null::<sys::ani_value>()
+            Self::value_args_ptr(args)
         )
+    }
+
+    /// Call a void method by name.
+    pub fn call_method_by_name_void(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<()> {
+        self.call_method_by_name_void_with_args(obj, name, signature, &[])
     }
 
     /// Call a void method (using method handle)
@@ -4515,13 +4614,13 @@ impl<'local> Env<'local> {
     // Call Method by Name Returning Reference
     // ========================================================================
 
-    /// Call a method returning reference by name
-    pub fn call_method_by_name_ref(
+    /// Call a method returning reference by name with `ani_value` arguments.
+    pub fn call_method_by_name_ref_with_args(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
-        arg: sys::ani_int,
+        args: &[sys::ani_value],
     ) -> Result<AniRef<'local>> {
         let c_name =
             CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
@@ -4530,15 +4629,27 @@ impl<'local> Env<'local> {
 
         let result = ani_call_ret_mid!(
             self,
-            Object_CallMethodByName_Ref,
+            Object_CallMethodByName_Ref_A,
             sys::ani_ref,
             ptr::null_mut(),
             obj.as_raw(),
             c_name.as_ptr(),
             sig_ptr,
-            arg
+            Self::value_args_ptr(args)
         )?;
         Ok(unsafe { AniRef::from_raw(result) })
+    }
+
+    /// Call a method returning reference by name with a single int argument.
+    pub fn call_method_by_name_ref(
+        &self,
+        obj: &AniObject<'_>,
+        name: &str,
+        signature: Option<&str>,
+        arg: sys::ani_int,
+    ) -> Result<AniRef<'local>> {
+        let args = [ani_value_int(arg)];
+        self.call_method_by_name_ref_with_args(obj, name, signature, &args)
     }
 
     // ========================================================================

@@ -7,19 +7,19 @@ use std::collections::BTreeSet;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    punctuated::Punctuated, Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics,
-    Ident, ItemStruct, Lit, Token, Variant,
+    Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics, Ident, ItemStruct, Lit,
+    Token, Variant, punctuated::Punctuated,
 };
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    register_object_type_alias, register_object_type_members, ObjectMemberAccessKind,
-    ObjectMemberDescriptor,
+    ObjectMemberAccessKind, ObjectMemberDescriptor, register_object_type_alias,
+    register_object_type_members,
 };
 use crate::types::{
-    current_module_name, emit_compile_ets_object, emit_compile_ets_rendered_decl,
-    generate_object_field_ets_decl, generate_object_property_ets_decl, qualify_member_descriptor,
-    EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind,
+    EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind, current_module_name,
+    emit_compile_ets_object, emit_compile_ets_rendered_decl, generate_object_field_ets_decl,
+    generate_object_property_ets_decl, qualify_member_descriptor,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -757,7 +757,9 @@ mod tests {
         };
 
         let expanded = expand_class_derive(input).to_string();
-        assert!(expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile"));
+        assert!(
+            expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile")
+        );
         assert!(expanded.contains("pub const fn arkts_name () -> & 'static str"));
         assert!(expanded.contains("models.ExplicitDerivedProfile"));
         assert!(expanded.contains(

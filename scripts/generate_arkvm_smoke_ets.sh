@@ -18,7 +18,6 @@ emit_local_bindings_from_decl() {
   local decl="$1"
   sed -E \
     -e '/^[[:space:]]*loadLibrary\(/d' \
-    -e 's/^([[:space:]]*)export[[:space:]]+/\1/' \
     "$decl"
 }
 
@@ -255,9 +254,31 @@ __ANI_GENERATED__.check_array_bounds(1, 3);
 __assert_true("check_array_bounds_ok", true);
 ETS
       ;;
+    ani-example-bind-overload)
+      cat <<'ETS'
+__assert_eq_int("sum_2", __ANI_GENERATED__.sum(8, 16), 24);
+__assert_eq_int("sum_3", __ANI_GENERATED__.sum(8, 16, 6), 30);
+__assert_eq_string("concat_2", __ANI_GENERATED__.concat("abc", "def"), "abcdef");
+__assert_eq_string("concat_3", __ANI_GENERATED__.concat("abc", "def", "ghi"), "abcdefghi");
+__assert_eq_int("ops.sum_2", ops.sum(8, 16), 24);
+__assert_eq_int("ops.sum_3", ops.sum(8, 16, 6), 30);
+__assert_eq_string("ops.concat_2", ops.concat("abc", "def"), "abcdef");
+__assert_eq_int("A.recursiveFunction", A.recursiveFunction(5), 15);
+__assert_eq_int("A.B.sumB", A.B.sumB(8, 16), 24);
+ETS
+      ;;
     ani-example-ets-declaration)
       cat <<'ETS'
 __assert_eq_int("add", __ANI_GENERATED__.add(3, 4), 7);
+__assert_eq_double("AniMath.Utils.sqrt", AniMath.Utils.sqrt(9.0), 3.0);
+__assert_eq_int("AniMath.Utils.sum3", AniMath.Utils.sum3(1, 2, 3), 6);
+let person = new example.Person("ani-rs", 7);
+__assert_eq_string("example.Person.name", person.name, "ani-rs");
+__assert_eq_int("example.Person.score", person.score, 7);
+person.score = 9;
+__assert_eq_int("example.Person.score_after_set", person.score, 9);
+__assert_eq_string("example.Person.label", person.label(), "ani-rs#9");
+__assert_eq_string("example.Person.species", example.Person.species(), "human");
 ETS
       ;;
     ani-example-fixed-array-wrapper)
@@ -395,6 +416,16 @@ __assert_eq_string("Measure.describe_named", named.describe(), "named:4");
 ETS
       ;;
 
+    ani-example-class-method-overload)
+      cat <<'ETS'
+let box = new __ANI_GENERATED__.MathBox(5);
+__assert_eq_int("MathBox.base", box.base, 5);
+__assert_eq_int("MathBox.mix2", box.mix(2, 3), 10);
+__assert_eq_int("MathBox.mix3", box.mix(2, 3, 4), 14);
+__assert_eq_string("MathBox.tag1", __ANI_GENERATED__.MathBox.tag("ark"), "[ark]");
+__assert_eq_string("MathBox.tag2", __ANI_GENERATED__.MathBox.tag("ark", "ts"), "[ark:ts]");
+ETS
+      ;;
     ani-example-new-class)
       cat <<'ETS'
 let calcToken = __ANI_GENERATED__.Calculator.create();
@@ -469,6 +500,94 @@ class ObjTypedToken {}
 let objTyped = new ObjTyped();
 __assert_eq_long("field_by_name_roundtrip_long", __ANI_GENERATED__.field_by_name_roundtrip_long(objTyped, 99), 99);
 __assert_eq_double("property_roundtrip_float", __ANI_GENERATED__.property_roundtrip_float(objTyped, 1.25), 1.25);
+ETS
+      ;;
+    ani-example-object-access)
+      cat <<'ETS'
+class AccessTarget {
+  counter: int;
+  label: string;
+  private _ratio: double;
+  private _alias: string;
+
+  constructor(counter: int, label: string, ratio: double, alias: string) {
+    this.counter = counter;
+    this.label = label;
+    this._ratio = ratio;
+    this._alias = alias;
+  }
+
+  get ratio(): double {
+    return this._ratio;
+  }
+
+  set ratio(value: double) {
+    this._ratio = value;
+  }
+
+  get alias(): string {
+    return this._alias;
+  }
+
+  set alias(value: string) {
+    this._alias = value;
+  }
+}
+
+let target = new AccessTarget(1, "seed", 1.5, "alpha");
+__assert_eq_int("field_by_name_int_roundtrip", __ANI_GENERATED__.field_by_name_int_roundtrip(target, 7), 7);
+__assert_eq_int("field_by_name_int_state", target.counter, 7);
+__assert_eq_int("field_by_handle_int_roundtrip", __ANI_GENERATED__.field_by_handle_int_roundtrip(target, 11), 11);
+__assert_eq_int("field_by_handle_int_state", target.counter, 11);
+__assert_true("field_ref_roundtrip", __ANI_GENERATED__.field_ref_roundtrip(target, "renamed"));
+__assert_eq_string("field_ref_state", target.label, "renamed");
+__assert_eq_double("property_by_name_double_roundtrip", __ANI_GENERATED__.property_by_name_double_roundtrip(target, 2.75), 2.75);
+__assert_eq_double("property_by_name_double_state", target.ratio, 2.75);
+__assert_true("property_ref_roundtrip", __ANI_GENERATED__.property_ref_roundtrip(target, "beta"));
+__assert_eq_string("property_ref_state", target.alias, "beta");
+ETS
+      ;;
+    ani-example-object-runtime)
+      cat <<'ETS'
+class RuntimeBox {
+  value: int;
+  label: string;
+
+  constructor(value: int, label: string) {
+    this.value = value;
+    this.label = label;
+  }
+
+  sumNumbers(left: int, right: int): int {
+    return this.value + left + right;
+  }
+
+  compareNumbers(left: int, right: int): string {
+    return left == right ? "eq" : "ne";
+  }
+
+  describe(): string {
+    return this.label + ":" + this.value;
+  }
+}
+
+class RuntimeSubBox extends RuntimeBox {
+  constructor(value: int, label: string) {
+    super(value, label);
+  }
+}
+
+__assert_eq_string("create_runtime_box", __ANI_GENERATED__.create_runtime_box(5, "seed"), "seed:5");
+let created = new RuntimeBox(5, "seed");
+__assert_eq_int("sum_by_name", __ANI_GENERATED__.sum_by_name(created, 2, 3), 10);
+__assert_eq_string("compare_by_name_eq", __ANI_GENERATED__.compare_by_name(created, 4, 4), "eq");
+__assert_eq_string("compare_by_name_ne", __ANI_GENERATED__.compare_by_name(created, 4, 5), "ne");
+__assert_eq_string("describe_by_handle", __ANI_GENERATED__.describe_by_handle(created), "seed:5");
+__assert_true("is_runtime_box_instance_base", __ANI_GENERATED__.is_runtime_box_instance(created));
+let derived = new RuntimeSubBox(9, "child");
+__assert_true("is_runtime_box_instance_sub", __ANI_GENERATED__.is_runtime_box_instance(derived));
+__assert_true("runtime_box_assignable_to_base", __ANI_GENERATED__.runtime_box_assignable_to_base(derived));
+__assert_true("runtime_box_has_super", __ANI_GENERATED__.runtime_box_has_super(derived));
 ETS
       ;;
     ani-example-object-model)

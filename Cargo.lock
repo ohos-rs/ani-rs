@@ -73,6 +73,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-bind-overload"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-call-method"
 version = "0.1.0"
 dependencies = [
@@ -90,6 +98,14 @@ dependencies = [
 
 [[package]]
 name = "ani-example-class-bind-static-native"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-class-method-overload"
 version = "0.1.0"
 dependencies = [
  "ani",
@@ -266,7 +282,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-object-access"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-object-model"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-object-runtime"
 version = "0.1.0"
 dependencies = [
  "ani",

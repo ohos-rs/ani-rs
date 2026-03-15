@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::env::Env;
-use crate::error::{check_status, Error, Result};
+use crate::error::{Error, Result, check_status};
 use crate::sys;
 use crate::types::*;
 
