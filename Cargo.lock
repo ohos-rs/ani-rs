@@ -226,6 +226,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-map"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-module-member"
 version = "0.1.0"
 dependencies = [
@@ -299,6 +307,14 @@ dependencies = [
 
 [[package]]
 name = "ani-example-reference-scope"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-set"
 version = "0.1.0"
 dependencies = [
  "ani",

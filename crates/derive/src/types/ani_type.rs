@@ -98,7 +98,26 @@ pub struct RecordType {
     pub value: Box<AniType>,
 }
 
+/// Set type (`Set<T>`)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SetType {
+    /// Element type `T`
+    pub element: Box<AniType>,
+}
+
+/// Map type (`Map<K, V>`)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MapType {
+    /// Key type `K`
+    pub key: Box<AniType>,
+    /// Value type `V`
+    pub value: Box<AniType>,
+}
+
 /// The main ANI type enum
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum AniType {
@@ -124,6 +143,10 @@ pub enum AniType {
     Promise(PromiseType),
     /// Record type
     Record(RecordType),
+    /// Set type
+    Set(SetType),
+    /// Map type
+    Map(MapType),
     /// AniObject - raw object type
     AniObject,
     /// ArrayBuffer - binary data buffer type
@@ -341,7 +364,22 @@ impl AniType {
             }
         }
 
+        // HashSet<T> maps to ArkTS Set<T>
+        if ident == "HashSet" {
+            if let Some(set) = parse_set_type(&segment.arguments) {
+                return AniType::Set(set);
+            }
+        }
+
+        // BTreeMap<K, V> maps to ArkTS Map<K, V>
+        if ident == "BTreeMap" {
+            if let Some(map) = parse_map_type(&segment.arguments) {
+                return AniType::Map(map);
+            }
+        }
+
         // Check for generic wrapper types
+
         match ident.as_str() {
             "Option" => {
                 let inner = extract_first_generic_type(&segment.arguments)
@@ -498,7 +536,10 @@ impl AniType {
             AniType::Either(_) => quote! { ani::sys::ani_object },
             AniType::Promise(_) => quote! { ani::sys::ani_object },
             AniType::Record(_) => quote! { ani::sys::ani_object },
+            AniType::Set(_) => quote! { ani::sys::ani_object },
+            AniType::Map(_) => quote! { ani::sys::ani_object },
             AniType::AniObject => quote! { ani::sys::ani_object },
+
             AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
             AniType::Unknown(_) => quote! { ani::sys::ani_object },
@@ -615,7 +656,10 @@ impl AniType {
             }
             AniType::Promise(_) => "Lstd/core/Promise;".to_string(),
             AniType::Record(_) => "Lstd/core/Record;".to_string(),
+            AniType::Set(_) => "Lstd/core/Set;".to_string(),
+            AniType::Map(_) => "Lstd/core/Map;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
+
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
             AniType::Tuple(elements) => {
                 // Tuple generates signature for each element
@@ -639,7 +683,10 @@ impl AniType {
             AniType::AniObject => "C{std.core.Object}".to_string(),
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
+            AniType::Set(_) => to_new_style_ref_signature("Lstd/core/Set;"),
+            AniType::Map(_) => to_new_style_ref_signature("Lstd/core/Map;"),
             AniType::Function(function) => format!("C{{{}}}", function_signature_name(function)),
+
             AniType::Wrapper(WrapperType::Vec(inner)) => {
                 format!("A{{{}}}", inner.to_fixed_array_elem_signature())
             }
@@ -826,6 +873,24 @@ fn parse_record_type(args: &PathArguments) -> Option<RecordType> {
     }
 
     Some(RecordType {
+        value: Box::new(AniType::from_syn_type(&types[1])),
+    })
+}
+
+fn parse_set_type(args: &PathArguments) -> Option<SetType> {
+    extract_first_generic_type(args).map(|element| SetType {
+        element: Box::new(AniType::from_syn_type(&element)),
+    })
+}
+
+fn parse_map_type(args: &PathArguments) -> Option<MapType> {
+    let types = extract_all_generic_types(args);
+    if types.len() != 2 {
+        return None;
+    }
+
+    Some(MapType {
+        key: Box::new(AniType::from_syn_type(&types[0])),
         value: Box::new(AniType::from_syn_type(&types[1])),
     })
 }
@@ -1099,7 +1164,16 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Record;");
 
+        let ty: Type = syn::parse_quote!(HashSet<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Set;");
+
+        let ty: Type = syn::parse_quote!(BTreeMap<String, i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Map;");
+
         let ty: Type = syn::parse_quote!(Undefined);
+
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "U");
 
@@ -1177,6 +1251,69 @@ mod tests {
             ));
         } else {
             panic!("Expected Record type");
+        }
+    }
+
+    #[test]
+    fn test_parse_set() {
+        let ty: Type = syn::parse_quote!(HashSet<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Set(set) = ani_type {
+            assert!(matches!(
+                set.element.as_ref(),
+                AniType::String(StringType::String)
+            ));
+        } else {
+            panic!("Expected Set type");
+        }
+    }
+
+    #[test]
+    fn test_parse_map() {
+        let ty: Type = syn::parse_quote!(BTreeMap<String, i32>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Map(map) = ani_type {
+            assert!(matches!(
+                map.key.as_ref(),
+                AniType::String(StringType::String)
+            ));
+            assert!(matches!(
+                map.value.as_ref(),
+                AniType::Primitive(PrimitiveType::I32)
+            ));
+        } else {
+            panic!("Expected Map type");
+        }
+    }
+
+    #[test]
+    fn test_object_containers_preserve_custom_inner_types() {
+        let record_ty: Type = syn::parse_quote!(HashMap<String, crate::models::UserInfo>);
+        let record = AniType::from_syn_type(&record_ty);
+        if let AniType::Record(record) = record {
+            assert!(matches!(record.value.as_ref(), AniType::Unknown(_)));
+        } else {
+            panic!("Expected Record type");
+        }
+
+        let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
+        let set = AniType::from_syn_type(&set_ty);
+        if let AniType::Set(set) = set {
+            assert!(matches!(set.element.as_ref(), AniType::Unknown(_)));
+        } else {
+            panic!("Expected Set type");
+        }
+
+        let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
+        let map = AniType::from_syn_type(&map_ty);
+        if let AniType::Map(map) = map {
+            assert!(matches!(
+                map.key.as_ref(),
+                AniType::String(StringType::String)
+            ));
+            assert!(matches!(map.value.as_ref(), AniType::Unknown(_)));
+        } else {
+            panic!("Expected Map type");
         }
     }
 

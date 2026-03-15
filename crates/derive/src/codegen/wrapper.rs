@@ -355,9 +355,3 @@ fn build_param_error_return(return_type: &ReturnType) -> TokenStream {
 pub fn should_skip_in_signature(arg: &FnArg) -> bool {
     classify_sig_param(arg) != ParamKind::Regular
 }
-
-pub fn has_this_injection(func: &ItemFn) -> bool {
-    analyze_wrapper_params(func)
-        .iter()
-        .any(|param| param.kind == ParamKind::Injected(InjectedParamKind::This))
-}

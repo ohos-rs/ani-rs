@@ -349,6 +349,34 @@ mod tests {
     }
 
     #[test]
+    fn test_set_and_map_type_signatures() {
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(HashSet<String>)),
+            "Lstd/core/Set;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(BTreeMap<String, i32>)),
+            "Lstd/core/Map;"
+        );
+    }
+
+    #[test]
+    fn test_object_container_type_signatures_stay_container_shaped() {
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(HashMap<String, crate::models::UserInfo>)),
+            "Lstd/core/Record;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(HashSet<crate::models::UserInfo>)),
+            "Lstd/core/Set;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>)),
+            "Lstd/core/Map;"
+        );
+    }
+
+    #[test]
     fn test_result_type_signature() {
         // Result<String, Error> should use the Ok type signature
         assert_eq!(

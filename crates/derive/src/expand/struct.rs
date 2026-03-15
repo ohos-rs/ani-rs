@@ -7,18 +7,19 @@ use std::collections::BTreeSet;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics, Ident, ItemStruct, Lit,
-    Token, Variant, punctuated::Punctuated,
+    punctuated::Punctuated, Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics,
+    Ident, ItemStruct, Lit, Token, Variant,
 };
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    ObjectMemberAccessKind, ObjectMemberDescriptor, register_object_type_alias,
-    register_object_type_members,
+    register_object_type_alias, register_object_type_members, ObjectMemberAccessKind,
+    ObjectMemberDescriptor,
 };
 use crate::types::{
-    EtsDeclKind, current_module_name, emit_compile_ets_object, emit_compile_ets_rendered_decl,
+    current_module_name, emit_compile_ets_object, emit_compile_ets_rendered_decl,
     generate_object_field_ets_decl, generate_object_property_ets_decl, qualify_member_descriptor,
+    EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,6 +212,23 @@ fn expand_object_type_impls(
             }
         }
 
+        impl<'env> ani::conversions::RecordValue<'env> for #struct_name {
+            fn to_record_ref(self, env: &ani::env::Env<'env>) -> ani::error::Result<ani::types::AniRef<'env>> {
+                let raw = <Self as ani::conversions::ToAni<'env>>::to_ani(self, env)?;
+                Ok(unsafe { ani::types::AniRef::from_raw(raw as ani::sys::ani_ref) })
+            }
+
+            fn from_record_ref(
+                env: &ani::env::Env<'env>,
+                value: &ani::types::AniRef<'env>,
+            ) -> ani::error::Result<Self> {
+                <Self as ani::conversions::FromAni<'env>>::from_ani(
+                    env,
+                    value.as_raw() as ani::sys::ani_object,
+                )
+            }
+        }
+
         impl<'env> ani::conversions::ToAniObject<'env> for #struct_name {
             fn to_ani_object(self, env: &ani::env::Env<'env>) -> ani::error::Result<ani::sys::ani_object> {
                 <Self as ani::conversions::ToAni<'env>>::to_ani(self, env)
@@ -292,12 +310,26 @@ fn generate_field_write_back(field: &ObjectFieldSpec) -> TokenStream {
 fn emit_object_decl(class_name: &str, fields: &[ObjectFieldSpec]) {
     let object_field_decls = fields
         .iter()
-        .map(|field| match field.access {
-            ObjectAccessKind::Field => {
-                generate_object_field_ets_decl(&field.arkts_name, &field.ty, field.emit_private)
-            }
-            ObjectAccessKind::Property => {
-                generate_object_property_ets_decl(&field.arkts_name, &field.ty)
+        .map(|field| {
+            let (kind, rendered) = match field.access {
+                ObjectAccessKind::Field => (
+                    EtsObjectMemberKind::Field,
+                    generate_object_field_ets_decl(
+                        &field.arkts_name,
+                        &field.ty,
+                        field.emit_private,
+                    ),
+                ),
+                ObjectAccessKind::Property => (
+                    EtsObjectMemberKind::Property,
+                    generate_object_property_ets_decl(&field.arkts_name, &field.ty),
+                ),
+            };
+            EtsObjectMemberDecl {
+                name: field.arkts_name.clone(),
+                kind,
+                is_private: field.emit_private,
+                rendered,
             }
         })
         .collect::<Vec<_>>();
@@ -725,9 +757,7 @@ mod tests {
         };
 
         let expanded = expand_class_derive(input).to_string();
-        assert!(
-            expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile")
-        );
+        assert!(expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile"));
         assert!(expanded.contains("pub const fn arkts_name () -> & 'static str"));
         assert!(expanded.contains("models.ExplicitDerivedProfile"));
         assert!(expanded.contains(

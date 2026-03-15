@@ -4,12 +4,17 @@
 //! - direct parameters / returns
 //! - `Either<T, String>`
 //! - `Result<T>`
+//! - `Map<string, T>` object values
+//! - `Record<string, T>` object values
+//! - `Set<T>` object elements
+
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ani::conversions::Either;
 use ani::prelude::*;
 use ani_derive::{ani, AniClass};
 
-#[derive(AniClass)]
+#[derive(AniClass, PartialEq, Eq, Hash)]
 #[ani(class = "UserProfile")]
 pub struct UserProfile {
     pub id: i32,
@@ -96,6 +101,104 @@ pub fn user_profile_result(flag: bool) -> Result<UserProfile> {
     }
 }
 
+#[ani]
+pub fn make_user_profile_directory() -> BTreeMap<String, UserProfile> {
+    let mut values = BTreeMap::new();
+    values.insert(
+        "primary".to_string(),
+        UserProfile {
+            id: 21,
+            name: "directory-primary".to_string(),
+            active: true,
+        },
+    );
+    values.insert(
+        "backup".to_string(),
+        UserProfile {
+            id: 22,
+            name: "directory-backup".to_string(),
+            active: false,
+        },
+    );
+    values
+}
+
+#[ani]
+pub fn summarize_user_profile_directory(values: BTreeMap<String, UserProfile>) -> String {
+    let mut out = Vec::new();
+    for (key, value) in values {
+        let state = if value.active { "active" } else { "inactive" };
+        out.push(format!("{}={}#{}#{}", key, value.id, value.name, state));
+    }
+    out.join("|")
+}
+
+#[ani]
+pub fn make_user_profile_record() -> HashMap<String, UserProfile> {
+    let mut values = HashMap::new();
+    values.insert(
+        "primary".to_string(),
+        UserProfile {
+            id: 41,
+            name: "record-primary".to_string(),
+            active: true,
+        },
+    );
+    values.insert(
+        "backup".to_string(),
+        UserProfile {
+            id: 42,
+            name: "record-backup".to_string(),
+            active: false,
+        },
+    );
+    values
+}
+
+#[ani]
+pub fn summarize_user_profile_record(values: HashMap<String, UserProfile>) -> String {
+    let mut entries = values.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+        .into_iter()
+        .map(|(key, value)| {
+            let state = if value.active { "active" } else { "inactive" };
+            format!("{}={}#{}#{}", key, value.id, value.name, state)
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+#[ani]
+pub fn make_user_profile_group() -> HashSet<UserProfile> {
+    let mut values = HashSet::new();
+    values.insert(UserProfile {
+        id: 61,
+        name: "set-primary".to_string(),
+        active: true,
+    });
+    values.insert(UserProfile {
+        id: 62,
+        name: "set-backup".to_string(),
+        active: false,
+    });
+    values
+}
+
+#[ani]
+pub fn summarize_user_profile_group(values: HashSet<UserProfile>) -> String {
+    let mut entries = values.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    entries
+        .into_iter()
+        .map(|value| {
+            let state = if value.active { "active" } else { "inactive" };
+            format!("{}#{}#{}", value.id, value.name, state)
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +227,26 @@ mod tests {
         assert!(maybe_user_profile_result(false).unwrap().is_none());
         assert!(user_profile_result(true).is_ok());
         assert!(user_profile_result(false).is_err());
+
+        let directory = make_user_profile_directory();
+        assert_eq!(directory.len(), 2);
+        assert_eq!(
+            summarize_user_profile_directory(directory),
+            "backup=22#directory-backup#inactive|primary=21#directory-primary#active"
+        );
+
+        let record = make_user_profile_record();
+        assert_eq!(record.len(), 2);
+        assert_eq!(
+            summarize_user_profile_record(record),
+            "backup=42#record-backup#inactive|primary=41#record-primary#active"
+        );
+
+        let group = make_user_profile_group();
+        assert_eq!(group.len(), 2);
+        assert_eq!(
+            summarize_user_profile_group(group),
+            "61#set-primary#active|62#set-backup#inactive"
+        );
     }
 }

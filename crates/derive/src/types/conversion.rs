@@ -113,8 +113,8 @@ fn generate_type_conversion(
             generate_arraybuffer_param_conversion(param_name, converted_name, ty, on_error_return)
         }
 
-        // Record<string, V> - use FromAni on typed Rust container (e.g. HashMap<String, V>)
-        AniType::Record(_) => {
+        // Record/Set/Map containers - use FromAni on the typed Rust container.
+        AniType::Record(_) | AniType::Set(_) | AniType::Map(_) => {
             generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
         }
 
@@ -436,7 +436,9 @@ fn generate_value_return_conversion(
         },
         AniType::Unit => quote! {},
         AniType::Promise(_) => quote! { #value_expr.into_raw() },
-        AniType::Record(_) => generate_to_ani_conversion(value_expr, on_null_error, true),
+        AniType::Record(_) | AniType::Set(_) | AniType::Map(_) => {
+            generate_to_ani_conversion(value_expr, on_null_error, true)
+        }
         AniType::ArrayBuffer | AniType::Either(_) | AniType::Null | AniType::Undefined => {
             generate_to_ani_conversion(value_expr, on_null_error, false)
         }
@@ -463,6 +465,8 @@ fn generate_result_error_fallback(ok_type: &AniType, original_ok_ty: Option<&Typ
         AniType::String(StringType::String)
         | AniType::Promise(_)
         | AniType::Record(_)
+        | AniType::Set(_)
+        | AniType::Map(_)
         | AniType::ArrayBuffer
         | AniType::Either(_)
         | AniType::Null
@@ -570,6 +574,14 @@ mod tests {
         let code = generate_return_conversion(&output).to_string();
         assert!(code.contains("throw_error"));
         assert!(!code.contains("Err (_) => Default :: default ()"));
+    }
+
+    #[test]
+    fn set_return_conversion_uses_into_raw_object() {
+        let output: ReturnType = parse_quote!(-> std::collections::HashSet<String>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("obj . into_raw ()"));
     }
 
     #[test]

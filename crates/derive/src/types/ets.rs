@@ -3,7 +3,7 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -11,12 +11,12 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
-    should_skip_in_signature,
+    should_skip_in_signature, ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope,
+    ClassPropertyDescriptor,
 };
 
 use super::ani_type::{
-    AniType, FunctionType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias,
+    resolve_object_type_alias, AniType, FunctionType, PrimitiveType, StringType, WrapperType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,10 +33,24 @@ struct EtsDecl {
     rendered: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum EtsObjectMemberKind {
+    Field,
+    Property,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EtsObjectMemberDecl {
+    pub name: String,
+    pub kind: EtsObjectMemberKind,
+    pub is_private: bool,
+    pub rendered: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct EtsObjectDecl {
     target: String,
-    members: Vec<String>,
+    members: Vec<EtsObjectMemberDecl>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,7 +141,7 @@ struct RenderedPropertySlot {
 
 #[derive(Default)]
 struct ClassNode {
-    object_members: Vec<String>,
+    object_members: Vec<EtsObjectMemberDecl>,
     callable_members: Vec<RenderedClassMember>,
     property_slots: BTreeMap<(ClassMemberScope, String), RenderedPropertySlot>,
 }
@@ -177,7 +191,7 @@ impl NamespaceNode {
         });
     }
 
-    fn insert_object_class(&mut self, path: &str, members: &[String]) {
+    fn insert_object_class(&mut self, path: &str, members: &[EtsObjectMemberDecl]) {
         let mut parts = path
             .split('.')
             .filter(|s| !s.is_empty())
@@ -274,6 +288,20 @@ fn class_member_sort_key(member: &RenderedClassMember) -> (u8, u8, String, Strin
     }
 }
 
+fn object_member_sort_key(member: &EtsObjectMemberDecl) -> (u8, u8, String, String) {
+    let visibility_rank = if member.is_private { 1 } else { 0 };
+    let kind_rank = match member.kind {
+        EtsObjectMemberKind::Field => 0,
+        EtsObjectMemberKind::Property => 1,
+    };
+    (
+        visibility_rank,
+        kind_rank,
+        member.name.clone(),
+        member.rendered.clone(),
+    )
+}
+
 fn property_slot_sort_key(slot: &RenderedPropertySlot) -> (u8, String) {
     let scope_rank = match slot.descriptor.scope {
         ClassMemberScope::Static => 0,
@@ -290,9 +318,9 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
     ));
 
     let mut object_members = class.object_members.clone();
-    object_members.sort();
+    object_members.sort_by_key(object_member_sort_key);
     for member in object_members {
-        push_indented_block(out, indent + 2, &member);
+        push_indented_block(out, indent + 2, &member.rendered);
     }
 
     let mut constructors = class
@@ -487,7 +515,7 @@ pub fn emit_compile_ets_class_member(
     write_ets_file(&path, file_state);
 }
 
-pub fn emit_compile_ets_object(target: &str, members: &[String]) {
+pub fn emit_compile_ets_object(target: &str, members: &[EtsObjectMemberDecl]) {
     let Some(path) = output_path() else {
         return;
     };
@@ -557,6 +585,8 @@ fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
         AniType::Either(_)
         | AniType::Promise(_)
         | AniType::Record(_)
+        | AniType::Set(_)
+        | AniType::Map(_)
         | AniType::AniObject
         | AniType::ArrayBuffer
         | AniType::Function(_)
@@ -636,7 +666,21 @@ fn ani_type_to_ets_with_option_style(ty: &AniType, option_style: OptionStyle) ->
                 ani_type_to_ets_with_option_style(record.value.as_ref(), option_style)
             )
         }
+        AniType::Set(set) => {
+            format!(
+                "Set<{}>",
+                ani_type_to_ets_with_option_style(set.element.as_ref(), option_style)
+            )
+        }
+        AniType::Map(map) => {
+            format!(
+                "Map<{}, {}>",
+                ani_type_to_ets_with_option_style(map.key.as_ref(), option_style),
+                ani_type_to_ets_with_option_style(map.value.as_ref(), option_style)
+            )
+        }
         AniType::AniObject => "Object".to_string(),
+
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::Tuple(items) => format!(
             "[{}]",
@@ -1364,13 +1408,28 @@ get age(): int {
             EtsObjectDecl {
                 target: "UserProfile".to_string(),
                 members: vec![
-                    "id: int = 0;".to_string(),
-                    "name: string = \"\";".to_string(),
+                    EtsObjectMemberDecl {
+                        name: "id".to_string(),
+                        kind: EtsObjectMemberKind::Field,
+                        is_private: false,
+                        rendered: "id: int = 0;".to_string(),
+                    },
+                    EtsObjectMemberDecl {
+                        name: "name".to_string(),
+                        kind: EtsObjectMemberKind::Field,
+                        is_private: false,
+                        rendered: "name: string = \"\";".to_string(),
+                    },
                 ],
             },
             EtsObjectDecl {
                 target: "example.Person".to_string(),
-                members: vec!["active: boolean = false;".to_string()],
+                members: vec![EtsObjectMemberDecl {
+                    name: "active".to_string(),
+                    kind: EtsObjectMemberKind::Field,
+                    is_private: false,
+                    rendered: "active: boolean = false;".to_string(),
+                }],
             },
         ];
 
@@ -1391,6 +1450,53 @@ get age(): int {
         assert!(rendered.contains("static native create(name: string): long;"));
     }
 
+    #[test]
+    fn test_render_decls_sorts_object_members_by_metadata() {
+        let objects = vec![EtsObjectDecl {
+            target: "demo.Measure".to_string(),
+            members: vec![
+                EtsObjectMemberDecl {
+                    name: "_kind".to_string(),
+                    kind: EtsObjectMemberKind::Field,
+                    is_private: true,
+                    rendered: "private _kind: string = \"\";".to_string(),
+                },
+                EtsObjectMemberDecl {
+                    name: "label".to_string(),
+                    kind: EtsObjectMemberKind::Field,
+                    is_private: false,
+                    rendered: "label: string = \"\";".to_string(),
+                },
+                EtsObjectMemberDecl {
+                    name: "count".to_string(),
+                    kind: EtsObjectMemberKind::Property,
+                    is_private: false,
+                    rendered: "private __ani_property_count: int = 0;
+get count(): int {
+  return this.__ani_property_count;
+}
+set count(value: int) {
+  this.__ani_property_count = value;
+}"
+                    .to_string(),
+                },
+            ],
+        }];
+
+        let rendered = render_decls(&[], &objects, &[]);
+        let label_idx = rendered
+            .find("label: string = \"\";")
+            .expect("public field should exist");
+        let property_idx = rendered
+            .find("get count(): int")
+            .expect("property should exist");
+        let private_idx = rendered
+            .find("private _kind: string = \"\";")
+            .expect("private field should exist");
+
+        assert!(label_idx < property_idx);
+        assert!(property_idx < private_idx);
+    }
     #[test]
     fn test_render_decls_groups_property_accessors_into_slots() {
         let class_members = vec![
@@ -1791,6 +1897,22 @@ set name(name: String | null | undefined) {
         assert_eq!(
             generate_fn_ets_decl(&sig, "summarize", false),
             "summarize(input: Record<string, int>): Record<string, string>"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_keeps_object_container_types_precise() {
+        register_object_type_alias("crate::models::UserInfo", "models.UserInfo");
+        let sig: Signature = syn::parse_quote! {
+            fn collect(
+                record: HashMap<String, crate::models::UserInfo>,
+                set: HashSet<crate::models::UserInfo>,
+                map: BTreeMap<String, crate::models::UserInfo>
+            ) -> BTreeMap<String, crate::models::UserInfo>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "collect", false),
+            "collect(record_: Record<string, models.UserInfo>, set: Set<models.UserInfo>, map: Map<string, models.UserInfo>): Map<string, models.UserInfo>"
         );
     }
 

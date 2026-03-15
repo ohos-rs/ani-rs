@@ -38,7 +38,13 @@ function maybe_user_profile_result(flag: boolean): UserProfile | null | undefine
 native function choose_user_profile(flag: boolean): UserProfile | String;
 native function describe_user_profile(user: UserProfile): string;
 native function make_user_profile(id: int, name: string, active: boolean): UserProfile;
+native function make_user_profile_directory(): Map<string, UserProfile>;
+native function make_user_profile_group(): Set<UserProfile>;
+native function make_user_profile_record(): Record<string, UserProfile>;
 native function rename_user_profile(user: UserProfile, name: string): UserProfile;
+native function summarize_user_profile_directory(values: Map<string, UserProfile>): string;
+native function summarize_user_profile_group(values: Set<UserProfile>): string;
+native function summarize_user_profile_record(values: Record<string, UserProfile>): string;
 native function user_profile_result(flag: boolean): UserProfile;
 
 
@@ -175,6 +181,76 @@ __assert_true("user_profile_result_inactive", !resultOk.active);
 __assert_throws("user_profile_result_error", (): void => {
   user_profile_result(false);
 });
+
+let directory = make_user_profile_directory();
+let primary = directory.get("primary");
+__assert_true("make_user_profile_directory_primary_present", primary != undefined);
+let primaryUser = primary as UserProfile;
+__assert_eq_int("make_user_profile_directory_primary_id", primaryUser.id, 21);
+__assert_eq_string("make_user_profile_directory_primary_name", primaryUser.name, "directory-primary");
+let inputDirectory = new Map<string, UserProfile>(0);
+let inputPrimary = new UserProfile();
+inputPrimary.id = 31;
+inputPrimary.name = "input-primary";
+inputPrimary.active = true;
+let inputBackup = new UserProfile();
+inputBackup.id = 32;
+inputBackup.name = "input-backup";
+inputBackup.active = false;
+inputDirectory.set("primary", inputPrimary);
+inputDirectory.set("backup", inputBackup);
+__assert_eq_string(
+  "summarize_user_profile_directory",
+  summarize_user_profile_directory(inputDirectory),
+  "backup=32#input-backup#inactive|primary=31#input-primary#active",
+);
+
+let record = make_user_profile_record();
+let recordPrimary = record["primary"];
+__assert_true("make_user_profile_record_primary_present", recordPrimary != undefined);
+let recordPrimaryUser = recordPrimary as UserProfile;
+__assert_eq_int("make_user_profile_record_primary_id", recordPrimaryUser.id, 41);
+__assert_eq_string("make_user_profile_record_primary_name", recordPrimaryUser.name, "record-primary");
+let inputRecord = new Record<string, UserProfile>();
+let inputRecordPrimary = new UserProfile();
+inputRecordPrimary.id = 51;
+inputRecordPrimary.name = "record-input-primary";
+inputRecordPrimary.active = true;
+let inputRecordBackup = new UserProfile();
+inputRecordBackup.id = 52;
+inputRecordBackup.name = "record-input-backup";
+inputRecordBackup.active = false;
+inputRecord["primary"] = inputRecordPrimary;
+inputRecord["backup"] = inputRecordBackup;
+__assert_eq_string(
+  "summarize_user_profile_record",
+  summarize_user_profile_record(inputRecord),
+  "backup=52#record-input-backup#inactive|primary=51#record-input-primary#active",
+);
+
+let group = make_user_profile_group();
+__assert_eq_int("make_user_profile_group_size", group.size, 2);
+__assert_eq_string(
+  "summarize_user_profile_group_roundtrip",
+  summarize_user_profile_group(group),
+  "61#set-primary#active|62#set-backup#inactive",
+);
+let inputGroup = new Set<UserProfile>(0);
+let inputGroupPrimary = new UserProfile();
+inputGroupPrimary.id = 71;
+inputGroupPrimary.name = "set-input-primary";
+inputGroupPrimary.active = true;
+let inputGroupBackup = new UserProfile();
+inputGroupBackup.id = 72;
+inputGroupBackup.name = "set-input-backup";
+inputGroupBackup.active = false;
+inputGroup.add(inputGroupPrimary);
+inputGroup.add(inputGroupBackup);
+__assert_eq_string(
+  "summarize_user_profile_group_input",
+  summarize_user_profile_group(inputGroup),
+  "71#set-input-primary#active|72#set-input-backup#inactive",
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

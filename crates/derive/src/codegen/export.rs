@@ -1,5 +1,11 @@
+use syn::Signature;
+
 use crate::codegen::RegisterTarget;
-use crate::types::{EtsDeclKind, emit_compile_ets_class_member, emit_compile_ets_rendered_decl};
+use crate::types::{
+    EtsDeclKind, emit_compile_ets_class_member, emit_compile_ets_rendered_decl,
+    generate_ctor_ets_binding, generate_fn_ets_binding, generate_getter_ets_decl,
+    generate_setter_ets_decl,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ClassMemberScope {
@@ -42,6 +48,12 @@ pub enum ClassDescriptorMember {
     Property(ClassPropertyDescriptor),
 }
 
+impl ClassMemberScope {
+    pub fn is_static(self) -> bool {
+        matches!(self, ClassMemberScope::Static)
+    }
+}
+
 impl ClassDescriptorMember {
     pub fn register_descriptor(&self) -> ClassRegisterDescriptor {
         match self {
@@ -55,6 +67,30 @@ impl ClassDescriptorMember {
                 scope: descriptor.scope,
             },
         }
+    }
+
+    pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
+        match self {
+            ClassDescriptorMember::Constructor(_) => generate_ctor_ets_binding(sig, skip_first),
+            ClassDescriptorMember::Method(descriptor) => {
+                descriptor.render_ets_binding(sig, skip_first)
+            }
+            ClassDescriptorMember::Property(descriptor) => {
+                descriptor.render_ets_binding(sig, skip_first)
+            }
+        }
+    }
+}
+
+impl ClassCallableDescriptor {
+    pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
+        generate_fn_ets_binding(
+            EtsDeclKind::Class,
+            sig,
+            &self.public_name,
+            skip_first,
+            self.scope.is_static(),
+        )
     }
 }
 
@@ -108,6 +144,34 @@ impl ClassPropertyDescriptor {
             "duplicate {scope_name} property {accessor_name} for `{}` on `{}`",
             self.public_name, self.owner
         )
+    }
+
+    pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
+        let owner_name = self.owner.rsplit('.').next().unwrap_or(self.owner.as_str());
+
+        if let Some(getter) = &self.getter {
+            return generate_getter_ets_decl(
+                sig,
+                &self.public_name,
+                &getter.native_symbol_name,
+                owner_name,
+                skip_first,
+                self.scope.is_static(),
+            );
+        }
+
+        if let Some(setter) = &self.setter {
+            return generate_setter_ets_decl(
+                sig,
+                &self.public_name,
+                &setter.native_symbol_name,
+                owner_name,
+                skip_first,
+                self.scope.is_static(),
+            );
+        }
+
+        panic!("property descriptor must contain a getter or setter accessor")
     }
 }
 
@@ -289,6 +353,45 @@ mod tests {
                 native_symbol_name: "<ctor>".to_string(),
                 scope: ClassMemberScope::Instance,
             })
+        );
+    }
+
+    #[test]
+    fn class_method_descriptor_renders_static_binding() {
+        let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
+            owner: "Widget".to_string(),
+            public_name: "sum".to_string(),
+            native_symbol_name: "sum".to_string(),
+            scope: ClassMemberScope::Static,
+        });
+        let sig: Signature = syn::parse_quote! {
+            fn sum(a: i32, b: i32) -> i32
+        };
+
+        assert_eq!(
+            member.render_ets_binding(&sig, false),
+            "static native sum(a: int, b: int): int;"
+        );
+    }
+
+    #[test]
+    fn class_property_descriptor_renders_nullish_setter_binding() {
+        let member = ClassDescriptorMember::Property(ClassPropertyDescriptor {
+            owner: "Widget".to_string(),
+            public_name: "name".to_string(),
+            scope: ClassMemberScope::Instance,
+            getter: None,
+            setter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: "__ani_native_set_name".to_string(),
+            }),
+        });
+        let sig: Signature = syn::parse_quote! {
+            fn set_name(value: Option<String>)
+        };
+
+        assert_eq!(
+            member.render_ets_binding(&sig, false),
+            "native __ani_native_set_name(value: String | null): void;\nset name(value: String | null | undefined) {\n  this.__ani_native_set_name(value == undefined ? null : value);\n}"
         );
     }
 }

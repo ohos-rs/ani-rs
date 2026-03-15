@@ -7,9 +7,10 @@
 //! - Tuple types
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::Hash;
 
 use crate::env::Env;
-use crate::error::{Error, Result, check_status};
+use crate::error::{check_status, Error, Result};
 use crate::sys;
 use crate::types::*;
 
@@ -29,12 +30,12 @@ impl<V: TypeInfo> TypeInfo for HashMap<String, V> {
     }
 }
 
-/// Value conversion for `Record<string, V>` mapping.
+/// Shared ref conversion used by Record/Map/Set container elements.
 pub trait RecordValue<'env>: Sized {
-    /// Convert Rust value into ANI ref used by Record values.
+    /// Convert Rust value into ANI ref used by ArkTS container entries.
     fn to_record_ref(self, env: &Env<'env>) -> Result<AniRef<'env>>;
 
-    /// Convert ANI ref value from Record into Rust value.
+    /// Convert ANI ref value from ArkTS container entries into Rust value.
     fn from_record_ref(env: &Env<'env>, value: &AniRef<'env>) -> Result<Self>;
 }
 
@@ -218,30 +219,76 @@ where
 
 impl<T: TypeInfo> TypeInfo for HashSet<T> {
     fn type_signature() -> &'static str {
-        "Lescompat/Set;"
+        "Lstd/core/Set;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
     }
 }
 
-impl<'env> ToAni<'env> for HashSet<String> {
+impl<'env, T> ToAni<'env> for HashSet<T>
+where
+    T: RecordValue<'env> + Eq + Hash,
+{
     type Output = AniObject<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let set_class = env.find_class("escompat.Set")?;
-        let ctor = env.find_constructor(&set_class, ":")?;
-        let set = env.new_object(&set_class, &ctor, &[])?;
+        let set_class = env.find_class("std.core.Set")?;
+        let ctor = env.find_constructor(&set_class, "i:")?;
+        let ctor_args = [ani_value_int(0)];
+        let set = env.new_object(&set_class, &ctor, &ctor_args)?;
 
-        let add_method = env.find_method(&set_class, "add", "C{std.core.Object}:")?;
+        let add_method = find_method_no_signature(env, &set_class, "add")?;
 
         for item in self {
-            let ani_item = env.create_string(&item)?;
-            let args = [ani_value_ref(ani_item.as_raw() as sys::ani_ref)];
-            env.call_method_void(&set, &add_method, &args)?;
+            let item_ref = item.to_record_ref(env)?;
+            let args = [ani_value_ref(item_ref.as_raw())];
+            let _ = env.call_ref_method(&set, &add_method, &args)?;
         }
 
         Ok(set)
+    }
+}
+
+impl<'env, T> FromAni<'env> for HashSet<T>
+where
+    T: RecordValue<'env> + Eq + Hash,
+{
+    type Input = sys::ani_object;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                "Null pointer: set",
+            ));
+        }
+
+        let set = unsafe { AniObject::from_raw(value) };
+        let set_class = env.find_class("std.core.Set")?;
+        let values_method = find_method_no_signature(env, &set_class, "values")?;
+        let values_iter_ref = env.call_ref_method(&set, &values_method, &[])?;
+        let values_iter =
+            unsafe { AniObject::from_raw(values_iter_ref.as_raw() as sys::ani_object) };
+        let values_iter_type = env.get_object_type(&values_iter)?;
+        let values_iter_class =
+            unsafe { AniClass::from_raw(values_iter_type.as_raw() as sys::ani_class) };
+        let next_method = find_method_no_signature(env, &values_iter_class, "next")?;
+        let mut out = HashSet::new();
+
+        loop {
+            let next_ref = env.call_ref_method(&values_iter, &next_method, &[])?;
+            let next = unsafe { AniObject::from_raw(next_ref.as_raw() as sys::ani_object) };
+            if env.get_property_by_name_boolean(&next, "done")? {
+                break;
+            }
+
+            let value_ref = env.get_property_by_name_ref(&next, "value")?;
+            let item = T::from_record_ref(env, &value_ref)?;
+            out.insert(item);
+        }
+
+        Ok(out)
     }
 }
 
@@ -251,10 +298,97 @@ impl<'env> ToAni<'env> for HashSet<String> {
 
 impl<K: TypeInfo, V: TypeInfo> TypeInfo for BTreeMap<K, V> {
     fn type_signature() -> &'static str {
-        "Lescompat/Map;"
+        "Lstd/core/Map;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
+    }
+}
+
+impl<'env, K, V> ToAni<'env> for BTreeMap<K, V>
+where
+    K: RecordValue<'env> + Ord,
+    V: RecordValue<'env>,
+{
+    type Output = AniObject<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let map_class = env.find_class("std.core.Map")?;
+        let ctor = env.find_constructor(&map_class, "i:")?;
+        let ctor_args = [ani_value_int(0)];
+        let map = env.new_object(&map_class, &ctor, &ctor_args)?;
+        let set_method = find_method_no_signature(env, &map_class, "set")?;
+
+        for (key, value) in self {
+            let key_ref = key.to_record_ref(env)?;
+            let value_ref = value.to_record_ref(env)?;
+            let args = [
+                ani_value_ref(key_ref.as_raw()),
+                ani_value_ref(value_ref.as_raw()),
+            ];
+            let _ = env.call_ref_method(&map, &set_method, &args)?;
+        }
+
+        Ok(map)
+    }
+}
+
+impl<'env, K, V> FromAni<'env> for BTreeMap<K, V>
+where
+    K: RecordValue<'env> + Ord,
+    V: RecordValue<'env>,
+{
+    type Input = sys::ani_object;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                "Null pointer: map",
+            ));
+        }
+
+        let map = unsafe { AniObject::from_raw(value) };
+        let map_class = env.find_class("std.core.Map")?;
+        let keys_method = find_method_no_signature(env, &map_class, "keys")?;
+        let values_method = find_method_no_signature(env, &map_class, "values")?;
+        let keys_iter_ref = env.call_ref_method(&map, &keys_method, &[])?;
+        let keys_iter = unsafe { AniObject::from_raw(keys_iter_ref.as_raw() as sys::ani_object) };
+        let values_iter_ref = env.call_ref_method(&map, &values_method, &[])?;
+        let values_iter =
+            unsafe { AniObject::from_raw(values_iter_ref.as_raw() as sys::ani_object) };
+        let keys_iter_type = env.get_object_type(&keys_iter)?;
+        let keys_iter_class =
+            unsafe { AniClass::from_raw(keys_iter_type.as_raw() as sys::ani_class) };
+        let next_method = find_method_no_signature(env, &keys_iter_class, "next")?;
+        let mut out = BTreeMap::new();
+
+        loop {
+            let next_key_ref = env.call_ref_method(&keys_iter, &next_method, &[])?;
+            let next_key = unsafe { AniObject::from_raw(next_key_ref.as_raw() as sys::ani_object) };
+            let next_value_ref = env.call_ref_method(&values_iter, &next_method, &[])?;
+            let next_value =
+                unsafe { AniObject::from_raw(next_value_ref.as_raw() as sys::ani_object) };
+            let key_done = env.get_property_by_name_boolean(&next_key, "done")?;
+            let value_done = env.get_property_by_name_boolean(&next_value, "done")?;
+            if key_done || value_done {
+                if key_done == value_done {
+                    break;
+                }
+                return Err(Error::new(
+                    crate::error::Status::InvalidType,
+                    "Map keys()/values() iterator length mismatch",
+                ));
+            }
+
+            let key_ref = env.get_property_by_name_ref(&next_key, "value")?;
+            let value_ref = env.get_property_by_name_ref(&next_value, "value")?;
+            let key = K::from_record_ref(env, &key_ref)?;
+            let mapped_value = V::from_record_ref(env, &value_ref)?;
+            out.insert(key, mapped_value);
+        }
+
+        Ok(out)
     }
 }
 
@@ -468,7 +602,12 @@ mod tests {
 
     #[test]
     fn test_hashset_type_signature() {
-        assert_eq!(<HashSet<String>>::type_signature(), "Lescompat/Set;");
+        assert_eq!(<HashSet<String>>::type_signature(), "Lstd/core/Set;");
+    }
+
+    #[test]
+    fn test_btreemap_type_signature() {
+        assert_eq!(<BTreeMap<String, i32>>::type_signature(), "Lstd/core/Map;");
     }
 
     #[test]

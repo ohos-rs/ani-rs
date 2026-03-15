@@ -533,6 +533,76 @@ __assert_true("user_profile_result_inactive", !resultOk.active);
 __assert_throws("user_profile_result_error", (): void => {
   __ANI_GENERATED__.user_profile_result(false);
 });
+
+let directory = __ANI_GENERATED__.make_user_profile_directory();
+let primary = directory.get("primary");
+__assert_true("make_user_profile_directory_primary_present", primary != undefined);
+let primaryUser = primary as UserProfile;
+__assert_eq_int("make_user_profile_directory_primary_id", primaryUser.id, 21);
+__assert_eq_string("make_user_profile_directory_primary_name", primaryUser.name, "directory-primary");
+let inputDirectory = new Map<string, UserProfile>(0);
+let inputPrimary = new UserProfile();
+inputPrimary.id = 31;
+inputPrimary.name = "input-primary";
+inputPrimary.active = true;
+let inputBackup = new UserProfile();
+inputBackup.id = 32;
+inputBackup.name = "input-backup";
+inputBackup.active = false;
+inputDirectory.set("primary", inputPrimary);
+inputDirectory.set("backup", inputBackup);
+__assert_eq_string(
+  "summarize_user_profile_directory",
+  __ANI_GENERATED__.summarize_user_profile_directory(inputDirectory),
+  "backup=32#input-backup#inactive|primary=31#input-primary#active",
+);
+
+let record = __ANI_GENERATED__.make_user_profile_record();
+let recordPrimary = record["primary"];
+__assert_true("make_user_profile_record_primary_present", recordPrimary != undefined);
+let recordPrimaryUser = recordPrimary as UserProfile;
+__assert_eq_int("make_user_profile_record_primary_id", recordPrimaryUser.id, 41);
+__assert_eq_string("make_user_profile_record_primary_name", recordPrimaryUser.name, "record-primary");
+let inputRecord = new Record<string, UserProfile>();
+let inputRecordPrimary = new UserProfile();
+inputRecordPrimary.id = 51;
+inputRecordPrimary.name = "record-input-primary";
+inputRecordPrimary.active = true;
+let inputRecordBackup = new UserProfile();
+inputRecordBackup.id = 52;
+inputRecordBackup.name = "record-input-backup";
+inputRecordBackup.active = false;
+inputRecord["primary"] = inputRecordPrimary;
+inputRecord["backup"] = inputRecordBackup;
+__assert_eq_string(
+  "summarize_user_profile_record",
+  __ANI_GENERATED__.summarize_user_profile_record(inputRecord),
+  "backup=52#record-input-backup#inactive|primary=51#record-input-primary#active",
+);
+
+let group = __ANI_GENERATED__.make_user_profile_group();
+__assert_eq_int("make_user_profile_group_size", group.size, 2);
+__assert_eq_string(
+  "summarize_user_profile_group_roundtrip",
+  __ANI_GENERATED__.summarize_user_profile_group(group),
+  "61#set-primary#active|62#set-backup#inactive",
+);
+let inputGroup = new Set<UserProfile>(0);
+let inputGroupPrimary = new UserProfile();
+inputGroupPrimary.id = 71;
+inputGroupPrimary.name = "set-input-primary";
+inputGroupPrimary.active = true;
+let inputGroupBackup = new UserProfile();
+inputGroupBackup.id = 72;
+inputGroupBackup.name = "set-input-backup";
+inputGroupBackup.active = false;
+inputGroup.add(inputGroupPrimary);
+inputGroup.add(inputGroupBackup);
+__assert_eq_string(
+  "summarize_user_profile_group_input",
+  __ANI_GENERATED__.summarize_user_profile_group(inputGroup),
+  "71#set-input-primary#active|72#set-input-backup#inactive",
+);
 ETS
       ;;
 
@@ -560,6 +630,44 @@ __assert_eq_string("with_optional_string_some", __ANI_GENERATED__.with_optional_
 __assert_eq_string("with_optional_string_null", __ANI_GENERATED__.with_optional_string("x", null), "x");
 ETS
       ;;
+    ani-example-map)
+      cat <<'ETS'
+let scores = __ANI_GENERATED__.make_score_map();
+__assert_true("make_score_map_has_ani", scores.has("ani"));
+let aniScore = scores.get("ani");
+__assert_true("make_score_map_get_ani_present", aniScore != undefined);
+__assert_eq_int("make_score_map_get_ani", aniScore as int, 1);
+let missingScore = scores.get("missing");
+__assert_true("make_score_map_missing", missingScore == undefined);
+let emptyScores = __ANI_GENERATED__.make_empty_score_map();
+__assert_true("make_empty_score_map_missing", !emptyScores.has("ani"));
+let inputScores = new Map<string, int>(0);
+inputScores.set("ani", 1);
+inputScores.set("arkts", 2);
+inputScores.set("ets", 3);
+__assert_eq_int("sum_score_map", __ANI_GENERATED__.sum_score_map(inputScores), 6);
+ETS
+      ;;
+
+    ani-example-set)
+      cat <<'ETS'
+let words = __ANI_GENERATED__.make_word_set();
+__assert_true("make_word_set_has_ani", words.has("ani"));
+__assert_true("make_word_set_has_arkts", words.has("arkts"));
+__assert_true("make_word_set_has_ets", words.has("ets"));
+__assert_true("make_word_set_missing", !words.has("missing"));
+let emptyWords = __ANI_GENERATED__.make_empty_word_set();
+__assert_true("make_empty_word_set_missing", !emptyWords.has("ani"));
+let inputWords = new Set<string>(0);
+inputWords.add("ani");
+inputWords.add("arkts");
+inputWords.add("ets");
+__assert_eq_int("count_word_set", __ANI_GENERATED__.count_word_set(inputWords), 3);
+__assert_true("has_word_true", __ANI_GENERATED__.has_word(inputWords, "ani"));
+__assert_true("has_word_false", !__ANI_GENERATED__.has_word(inputWords, "missing"));
+ETS
+      ;;
+
     ani-example-record)
       cat <<'ETS'
 let recordPtr = __ANI_GENERATED__.create_record();

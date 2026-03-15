@@ -19,8 +19,9 @@ use crate::types::{
 };
 
 use super::function::{
-    BindingResolveInput, CallableKind, class_wrapper_binding_kind, resolve_accessor_config,
-    resolve_binding_plan, validate_constructor_usage, validate_unsupported_bind_attrs,
+    BindingOwner, BindingResolveInput, CallableKind, SignatureBindingStyle,
+    resolve_binding_plan_with_class_plan, resolve_class_member_plan, validate_constructor_usage,
+    validate_unsupported_bind_attrs,
 };
 
 /// Expand `#[ani]` for impl blocks
@@ -156,30 +157,47 @@ fn process_method(
         } else {
             CallableKind::Function
         },
-        wrapper_binding_kind: class_wrapper_binding_kind(if merged_attrs.constructor {
-            false
+        owner: BindingOwner::Class {
+            scope: if merged_attrs.constructor || !merged_attrs.is_static {
+                ClassMemberScope::Instance
+            } else {
+                ClassMemberScope::Static
+            },
+        },
+        signature_style: if receiver.has_receiver() {
+            SignatureBindingStyle::SkipRustReceiver
         } else {
-            merged_attrs.is_static
-        }),
-        skip_first_arg: receiver.has_receiver(),
+            SignatureBindingStyle::Direct
+        },
     };
 
-    if let Some(accessor) = resolve_accessor_config(
+    let ets_name = merged_attrs
+        .name
+        .clone()
+        .unwrap_or_else(|| method_name.to_string());
+    let class_member_plan = resolve_class_member_plan(
         &merged_attrs,
         &method_name.to_string(),
         &method.sig,
         binding_input,
-    )? {
+        &ets_name,
+    )?;
+
+    if let Some(property_name) = class_member_plan
+        .as_ref()
+        .and_then(|plan| plan.property_name())
+    {
         if !binding_input.is_static() {
-            validate_accessor_backing_field_conflict(struct_name, &accessor.property_name, method)?;
+            validate_accessor_backing_field_conflict(struct_name, property_name, method)?;
         }
     }
 
-    let binding = resolve_binding_plan(
+    let binding = resolve_binding_plan_with_class_plan(
         &merged_attrs,
-        &method_name.to_string(),
+        &ets_name,
         &method.sig,
         binding_input,
+        class_member_plan.as_ref(),
     )?;
     emit_export_plan_ets(&binding);
 
@@ -200,7 +218,7 @@ fn process_method(
         generate_wrapper_with_target(
             &to_item_fn(&sanitized_method),
             &wrapper_name,
-            binding_input.wrapper_binding_kind,
+            binding_input.wrapper_binding_kind(),
             call_target,
         )
     };
