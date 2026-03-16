@@ -335,7 +335,7 @@ impl<'local> Env<'local> {
     #[inline]
     fn value_args_ptr(args: &[sys::ani_value]) -> *const sys::ani_value {
         if args.is_empty() {
-            ptr::null()
+            ptr::NonNull::<sys::ani_value>::dangling().as_ptr() as *const sys::ani_value
         } else {
             args.as_ptr()
         }
@@ -1839,6 +1839,346 @@ impl<'local> Env<'local> {
             method.as_raw(),
             Self::value_args_ptr(args)
         )
+    }
+
+    /// Call a static method returning int by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_int_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<i32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Int_A,
+            sys::ani_int,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning int by name.
+    pub fn call_static_method_by_name_int(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<i32> {
+        self.call_static_method_by_name_int_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning long by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_long_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<i64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Long_A,
+            sys::ani_long,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning long by name.
+    pub fn call_static_method_by_name_long(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<i64> {
+        self.call_static_method_by_name_long_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning double by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_double_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<f64> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Double_A,
+            sys::ani_double,
+            0.0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning double by name.
+    pub fn call_static_method_by_name_double(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<f64> {
+        self.call_static_method_by_name_double_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning float by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_float_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<f32> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Float_A,
+            sys::ani_float,
+            0.0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning float by name.
+    pub fn call_static_method_by_name_float(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<f32> {
+        self.call_static_method_by_name_float_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning boolean by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_boolean_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<bool> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        let result = ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Boolean_A,
+            sys::ani_boolean,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )?;
+        Ok(result != 0)
+    }
+
+    /// Call a static method returning boolean by name.
+    pub fn call_static_method_by_name_boolean(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<bool> {
+        self.call_static_method_by_name_boolean_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning byte by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_byte_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<i8> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Byte_A,
+            sys::ani_byte,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning byte by name.
+    pub fn call_static_method_by_name_byte(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<i8> {
+        self.call_static_method_by_name_byte_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning short by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_short_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<i16> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Short_A,
+            sys::ani_short,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning short by name.
+    pub fn call_static_method_by_name_short(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<i16> {
+        self.call_static_method_by_name_short_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning char by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_char_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<u16> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call_by_name_ret!(
+            self,
+            Class_CallStaticMethodByName_Char_A,
+            sys::ani_char,
+            0,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method returning char by name.
+    pub fn call_static_method_by_name_char(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<u16> {
+        self.call_static_method_by_name_char_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method with `void` return type by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_void_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<()> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        ani_call!(
+            self,
+            Class_CallStaticMethodByName_Void_A,
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )
+    }
+
+    /// Call a static method with `void` return type by name.
+    pub fn call_static_method_by_name_void(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<()> {
+        self.call_static_method_by_name_void_with_args(class, name, signature, &[])
+    }
+
+    /// Call a static method returning reference value by name with `ani_value` arguments.
+    pub fn call_static_method_by_name_ref_with_args(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+        args: &[sys::ani_value],
+    ) -> Result<AniRef<'local>> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let c_sig = signature.map(|s| CString::new(s).ok()).flatten();
+        let sig_ptr = c_sig.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        let result = ani_call_ret_mid!(
+            self,
+            Class_CallStaticMethodByName_Ref_A,
+            sys::ani_ref,
+            ptr::null_mut(),
+            class.as_raw(),
+            c_name.as_ptr(),
+            sig_ptr,
+            Self::value_args_ptr(args)
+        )?;
+        Ok(unsafe { AniRef::from_raw(result) })
+    }
+
+    /// Call a static method returning reference value by name.
+    pub fn call_static_method_by_name_ref(
+        &self,
+        class: &AniClass<'_>,
+        name: &str,
+        signature: Option<&str>,
+    ) -> Result<AniRef<'local>> {
+        self.call_static_method_by_name_ref_with_args(class, name, signature, &[])
     }
 
     // ========================================================================
@@ -4640,16 +4980,14 @@ impl<'local> Env<'local> {
         Ok(unsafe { AniRef::from_raw(result) })
     }
 
-    /// Call a method returning reference by name with a single int argument.
+    /// Call a method returning reference by name.
     pub fn call_method_by_name_ref(
         &self,
         obj: &AniObject<'_>,
         name: &str,
         signature: Option<&str>,
-        arg: sys::ani_int,
     ) -> Result<AniRef<'local>> {
-        let args = [ani_value_int(arg)];
-        self.call_method_by_name_ref_with_args(obj, name, signature, &args)
+        self.call_method_by_name_ref_with_args(obj, name, signature, &[])
     }
 
     // ========================================================================

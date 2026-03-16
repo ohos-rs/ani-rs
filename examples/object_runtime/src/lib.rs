@@ -44,6 +44,24 @@ pub fn compare_by_name(env: &Env<'_>, obj: AniObject<'_>, left: i32, right: i32)
 }
 
 #[ani]
+pub fn describe_by_name_zero(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
+    let result = env.call_method_by_name_ref(&obj, "describe", Some(RUNTIME_BOX_DESCRIBE_SIG))?;
+    ref_to_string(env, result)
+}
+
+#[ani]
+pub fn is_positive_by_name(env: &Env<'_>, obj: AniObject<'_>) -> Result<bool> {
+    env.call_method_by_name_boolean(&obj, "isPositive", None)
+}
+
+#[ani]
+pub fn clear_label_by_name(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
+    env.call_method_by_name_void(&obj, "clearLabel", Some(":"))?;
+    let label = env.get_field_by_name_ref(&obj, "label")?;
+    ref_to_string(env, label)
+}
+
+#[ani]
 pub fn describe_by_handle(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
     let cls = env.find_class(RUNTIME_BOX_CLASS)?;
     let method = env.find_method(&cls, "describe", RUNTIME_BOX_DESCRIBE_SIG)?;
@@ -81,6 +99,9 @@ mod tests {
         let _ = create_runtime_box;
         let _ = sum_by_name;
         let _ = compare_by_name;
+        let _ = describe_by_name_zero;
+        let _ = is_positive_by_name;
+        let _ = clear_label_by_name;
         let _ = describe_by_handle;
         let _ = is_runtime_box_instance;
         let _ = runtime_box_assignable_to_base;

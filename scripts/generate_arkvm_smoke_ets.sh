@@ -214,6 +214,22 @@ ETS
 class ByNameHost {
   static COUNT: int = 0;
   static PAYLOAD: Object = new Object();
+
+  static flag(): boolean {
+    return true;
+  }
+
+  static sum(a: int, b: int): int {
+    return a + b;
+  }
+
+  static label(prefix: string, suffix: string): string {
+    return prefix + "-" + suffix;
+  }
+
+  static resetTo(value: int): void {
+    ByNameHost.COUNT = value;
+  }
 }
 class ByNamePayload {
   key: string = "";
@@ -226,6 +242,25 @@ __assert_eq_int("static_field_by_name_roundtrip_named", byNameCount, 7);
 __assert_bool(
   "static_ref_by_name_roundtrip_named",
   __ANI_GENERATED__.static_ref_by_name_roundtrip_named("arkvm_test.ByNameHost", new ByNamePayload("ok")),
+);
+__assert_eq_int(
+  "static_method_sum_by_name_named",
+  __ANI_GENERATED__.static_method_sum_by_name_named("arkvm_test.ByNameHost", 3, 4),
+  7,
+);
+__assert_true(
+  "static_method_flag_by_name_named",
+  __ANI_GENERATED__.static_method_flag_by_name_named("arkvm_test.ByNameHost"),
+);
+__assert_eq_string(
+  "static_method_label_by_name_named",
+  __ANI_GENERATED__.static_method_label_by_name_named("arkvm_test.ByNameHost", "left", "right"),
+  "left-right",
+);
+__assert_eq_int(
+  "static_method_reset_by_name_named",
+  __ANI_GENERATED__.static_method_reset_by_name_named("arkvm_test.ByNameHost", 19),
+  19,
 );
 ETS
       ;;
@@ -569,6 +604,14 @@ class RuntimeBox {
   describe(): string {
     return this.label + ":" + this.value;
   }
+
+  isPositive(): boolean {
+    return this.value > 0;
+  }
+
+  clearLabel(): void {
+    this.label = "cleared";
+  }
 }
 
 class RuntimeSubBox extends RuntimeBox {
@@ -582,7 +625,10 @@ let created = new RuntimeBox(5, "seed");
 __assert_eq_int("sum_by_name", __ANI_GENERATED__.sum_by_name(created, 2, 3), 10);
 __assert_eq_string("compare_by_name_eq", __ANI_GENERATED__.compare_by_name(created, 4, 4), "eq");
 __assert_eq_string("compare_by_name_ne", __ANI_GENERATED__.compare_by_name(created, 4, 5), "ne");
-__assert_eq_string("describe_by_handle", __ANI_GENERATED__.describe_by_handle(created), "seed:5");
+__assert_eq_string("describe_by_name_zero", __ANI_GENERATED__.describe_by_name_zero(created), "seed:5");
+__assert_true("is_positive_by_name", __ANI_GENERATED__.is_positive_by_name(created));
+__assert_eq_string("clear_label_by_name", __ANI_GENERATED__.clear_label_by_name(created), "cleared");
+__assert_eq_string("describe_by_handle", __ANI_GENERATED__.describe_by_handle(created), "cleared:5");
 __assert_true("is_runtime_box_instance_base", __ANI_GENERATED__.is_runtime_box_instance(created));
 let derived = new RuntimeSubBox(9, "child");
 __assert_true("is_runtime_box_instance_sub", __ANI_GENERATED__.is_runtime_box_instance(derived));

@@ -5,6 +5,10 @@
 
 export native function static_field_by_name_roundtrip(cls: Object): int;
 export native function static_field_by_name_roundtrip_named(class_name: string): int;
+export native function static_method_flag_by_name_named(class_name: string): boolean;
+export native function static_method_label_by_name_named(class_name: string, prefix: string, suffix: string): string;
+export native function static_method_reset_by_name_named(class_name: string, value: int): int;
+export native function static_method_sum_by_name_named(class_name: string, a: int, b: int): int;
 export native function static_ref_by_name_roundtrip(cls: Object, value: Object): boolean;
 export native function static_ref_by_name_roundtrip_named(class_name: string, value: Object): boolean;
 
@@ -85,6 +89,22 @@ console.log("[arkvm] smoke start: ani-example-class-static-by-name");
 class ByNameHost {
   static COUNT: int = 0;
   static PAYLOAD: Object = new Object();
+
+  static flag(): boolean {
+    return true;
+  }
+
+  static sum(a: int, b: int): int {
+    return a + b;
+  }
+
+  static label(prefix: string, suffix: string): string {
+    return prefix + "-" + suffix;
+  }
+
+  static resetTo(value: int): void {
+    ByNameHost.COUNT = value;
+  }
 }
 class ByNamePayload {
   key: string = "";
@@ -97,6 +117,25 @@ __assert_eq_int("static_field_by_name_roundtrip_named", byNameCount, 7);
 __assert_bool(
   "static_ref_by_name_roundtrip_named",
   static_ref_by_name_roundtrip_named("arkvm_test.ByNameHost", new ByNamePayload("ok")),
+);
+__assert_eq_int(
+  "static_method_sum_by_name_named",
+  static_method_sum_by_name_named("arkvm_test.ByNameHost", 3, 4),
+  7,
+);
+__assert_true(
+  "static_method_flag_by_name_named",
+  static_method_flag_by_name_named("arkvm_test.ByNameHost"),
+);
+__assert_eq_string(
+  "static_method_label_by_name_named",
+  static_method_label_by_name_named("arkvm_test.ByNameHost", "left", "right"),
+  "left-right",
+);
+__assert_eq_int(
+  "static_method_reset_by_name_named",
+  static_method_reset_by_name_named("arkvm_test.ByNameHost", 19),
+  19,
 );
 
 if (__ani_fail_count > 0) {
