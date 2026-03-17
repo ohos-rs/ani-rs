@@ -13,12 +13,17 @@ pub enum ClassMemberScope {
     Static,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClassCallableDescriptor {
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct ClassMemberMetadata {
     pub owner: String,
     pub public_name: String,
-    pub native_symbol_name: String,
     pub scope: ClassMemberScope,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassCallableDescriptor {
+    pub metadata: ClassMemberMetadata,
+    pub native_symbol_name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,9 +33,7 @@ pub struct ClassPropertyAccessorDescriptor {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClassPropertyDescriptor {
-    pub owner: String,
-    pub public_name: String,
-    pub scope: ClassMemberScope,
+    pub metadata: ClassMemberMetadata,
     pub getter: Option<ClassPropertyAccessorDescriptor>,
     pub setter: Option<ClassPropertyAccessorDescriptor>,
 }
@@ -54,18 +57,29 @@ impl ClassMemberScope {
     }
 }
 
+impl ClassMemberMetadata {
+    pub fn register_descriptor(&self) -> ClassRegisterDescriptor {
+        ClassRegisterDescriptor {
+            owner: self.owner.clone(),
+            scope: self.scope,
+        }
+    }
+
+    pub fn owner_name(&self) -> &str {
+        self.owner.rsplit('.').next().unwrap_or(self.owner.as_str())
+    }
+}
+
 impl ClassDescriptorMember {
     pub fn register_descriptor(&self) -> ClassRegisterDescriptor {
         match self {
             ClassDescriptorMember::Constructor(descriptor)
-            | ClassDescriptorMember::Method(descriptor) => ClassRegisterDescriptor {
-                owner: descriptor.owner.clone(),
-                scope: descriptor.scope,
-            },
-            ClassDescriptorMember::Property(descriptor) => ClassRegisterDescriptor {
-                owner: descriptor.owner.clone(),
-                scope: descriptor.scope,
-            },
+            | ClassDescriptorMember::Method(descriptor) => {
+                descriptor.metadata.register_descriptor()
+            }
+            ClassDescriptorMember::Property(descriptor) => {
+                descriptor.metadata.register_descriptor()
+            }
         }
     }
 
@@ -87,19 +101,16 @@ impl ClassCallableDescriptor {
         generate_fn_ets_binding(
             EtsDeclKind::Class,
             sig,
-            &self.public_name,
+            &self.metadata.public_name,
             skip_first,
-            self.scope.is_static(),
+            self.metadata.scope.is_static(),
         )
     }
 }
 
 impl ClassPropertyDescriptor {
     pub fn merge(&mut self, other: &ClassPropertyDescriptor) -> Result<(), String> {
-        if self.owner != other.owner
-            || self.public_name != other.public_name
-            || self.scope != other.scope
-        {
+        if self.metadata != other.metadata {
             return Err("property descriptor targets do not match".to_string());
         }
 
@@ -136,38 +147,38 @@ impl ClassPropertyDescriptor {
     }
 
     fn duplicate_accessor_error(&self, accessor_name: &str) -> String {
-        let scope_name = match self.scope {
+        let scope_name = match self.metadata.scope {
             ClassMemberScope::Instance => "instance",
             ClassMemberScope::Static => "static",
         };
         format!(
             "duplicate {scope_name} property {accessor_name} for `{}` on `{}`",
-            self.public_name, self.owner
+            self.metadata.public_name, self.metadata.owner
         )
     }
 
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
-        let owner_name = self.owner.rsplit('.').next().unwrap_or(self.owner.as_str());
+        let owner_name = self.metadata.owner_name();
 
         if let Some(getter) = &self.getter {
             return generate_getter_ets_decl(
                 sig,
-                &self.public_name,
+                &self.metadata.public_name,
                 &getter.native_symbol_name,
                 owner_name,
                 skip_first,
-                self.scope.is_static(),
+                self.metadata.scope.is_static(),
             );
         }
 
         if let Some(setter) = &self.setter {
             return generate_setter_ets_decl(
                 sig,
-                &self.public_name,
+                &self.metadata.public_name,
                 &setter.native_symbol_name,
                 owner_name,
                 skip_first,
-                self.scope.is_static(),
+                self.metadata.scope.is_static(),
             );
         }
 
@@ -226,21 +237,25 @@ pub fn emit_export_plan_ets(binding: &ExportPlan) {
 mod tests {
     use super::*;
 
+    fn metadata(owner: &str, public_name: &str, scope: ClassMemberScope) -> ClassMemberMetadata {
+        ClassMemberMetadata {
+            owner: owner.to_string(),
+            public_name: public_name.to_string(),
+            scope,
+        }
+    }
+
     #[test]
     fn property_descriptor_merges_getter_and_setter() {
         let mut property = ClassPropertyDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "count".to_string(),
-            scope: ClassMemberScope::Instance,
+            metadata: metadata("Widget", "count", ClassMemberScope::Instance),
             getter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_get_count".to_string(),
             }),
             setter: None,
         };
         let setter = ClassPropertyDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "count".to_string(),
-            scope: ClassMemberScope::Instance,
+            metadata: metadata("Widget", "count", ClassMemberScope::Instance),
             getter: None,
             setter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_set_count".to_string(),
@@ -268,18 +283,14 @@ mod tests {
     #[test]
     fn property_descriptor_rejects_duplicate_getter() {
         let mut property = ClassPropertyDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "count".to_string(),
-            scope: ClassMemberScope::Static,
+            metadata: metadata("Widget", "count", ClassMemberScope::Static),
             getter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_get_count".to_string(),
             }),
             setter: None,
         };
         let duplicate_getter = ClassPropertyDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "count".to_string(),
-            scope: ClassMemberScope::Static,
+            metadata: metadata("Widget", "count", ClassMemberScope::Static),
             getter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_read_count".to_string(),
             }),
@@ -296,11 +307,22 @@ mod tests {
     }
 
     #[test]
+    fn class_member_metadata_computes_register_descriptor() {
+        let metadata = metadata("demo.Widget", "count", ClassMemberScope::Static);
+
+        assert_eq!(
+            metadata.register_descriptor(),
+            ClassRegisterDescriptor {
+                owner: "demo.Widget".to_string(),
+                scope: ClassMemberScope::Static,
+            }
+        );
+    }
+
+    #[test]
     fn class_descriptor_register_descriptor_uses_owner_and_scope() {
         let member = ClassDescriptorMember::Property(ClassPropertyDescriptor {
-            owner: "demo.Widget".to_string(),
-            public_name: "count".to_string(),
-            scope: ClassMemberScope::Static,
+            metadata: metadata("demo.Widget", "count", ClassMemberScope::Static),
             getter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_get_count".to_string(),
             }),
@@ -319,19 +341,15 @@ mod tests {
     #[test]
     fn class_descriptor_preserves_method_names() {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "rename".to_string(),
+            metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
             native_symbol_name: "__ani_native_rename".to_string(),
-            scope: ClassMemberScope::Instance,
         });
 
         assert_eq!(
             member,
             ClassDescriptorMember::Method(ClassCallableDescriptor {
-                owner: "Widget".to_string(),
-                public_name: "rename".to_string(),
+                metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
                 native_symbol_name: "__ani_native_rename".to_string(),
-                scope: ClassMemberScope::Instance,
             })
         );
     }
@@ -339,19 +357,15 @@ mod tests {
     #[test]
     fn class_descriptor_preserves_constructor_shape() {
         let member = ClassDescriptorMember::Constructor(ClassCallableDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "constructor".to_string(),
+            metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
             native_symbol_name: "<ctor>".to_string(),
-            scope: ClassMemberScope::Instance,
         });
 
         assert_eq!(
             member,
             ClassDescriptorMember::Constructor(ClassCallableDescriptor {
-                owner: "Widget".to_string(),
-                public_name: "constructor".to_string(),
+                metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
                 native_symbol_name: "<ctor>".to_string(),
-                scope: ClassMemberScope::Instance,
             })
         );
     }
@@ -359,10 +373,8 @@ mod tests {
     #[test]
     fn class_method_descriptor_renders_static_binding() {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "sum".to_string(),
+            metadata: metadata("Widget", "sum", ClassMemberScope::Static),
             native_symbol_name: "sum".to_string(),
-            scope: ClassMemberScope::Static,
         });
         let sig: Signature = syn::parse_quote! {
             fn sum(a: i32, b: i32) -> i32
@@ -377,9 +389,7 @@ mod tests {
     #[test]
     fn class_property_descriptor_renders_nullish_setter_binding() {
         let member = ClassDescriptorMember::Property(ClassPropertyDescriptor {
-            owner: "Widget".to_string(),
-            public_name: "name".to_string(),
-            scope: ClassMemberScope::Instance,
+            metadata: metadata("Widget", "name", ClassMemberScope::Instance),
             getter: None,
             setter: Some(ClassPropertyAccessorDescriptor {
                 native_symbol_name: "__ani_native_set_name".to_string(),
@@ -391,7 +401,7 @@ mod tests {
 
         assert_eq!(
             member.render_ets_binding(&sig, false),
-            "native __ani_native_set_name(value: String | null): void;\nset name(value: String | null | undefined) {\n  this.__ani_native_set_name(value == undefined ? null : value);\n}"
+            "native __ani_native_set_name(value: string | null): void;\nset name(value: string | null | undefined) {\n  this.__ani_native_set_name(value == undefined ? null : value);\n}"
         );
     }
 }

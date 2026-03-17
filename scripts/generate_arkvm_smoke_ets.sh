@@ -223,8 +223,16 @@ class ByNameHost {
     return a + b;
   }
 
+  static tag(): string {
+    return "by-name-tag";
+  }
+
   static label(prefix: string, suffix: string): string {
     return prefix + "-" + suffix;
+  }
+
+  static clearCount(): void {
+    ByNameHost.COUNT = 0;
   }
 
   static resetTo(value: int): void {
@@ -253,9 +261,19 @@ __assert_true(
   __ANI_GENERATED__.static_method_flag_by_name_named("arkvm_test.ByNameHost"),
 );
 __assert_eq_string(
+  "static_method_tag_by_name_named",
+  __ANI_GENERATED__.static_method_tag_by_name_named("arkvm_test.ByNameHost"),
+  "by-name-tag",
+);
+__assert_eq_string(
   "static_method_label_by_name_named",
   __ANI_GENERATED__.static_method_label_by_name_named("arkvm_test.ByNameHost", "left", "right"),
   "left-right",
+);
+__assert_eq_int(
+  "static_method_clear_by_name_named",
+  __ANI_GENERATED__.static_method_clear_by_name_named("arkvm_test.ByNameHost"),
+  0,
 );
 __assert_eq_int(
   "static_method_reset_by_name_named",
@@ -340,13 +358,40 @@ function noArgsOk(): string {
 function wrapValue(input: string): string {
   return "wrapped:" + input;
 }
+function recursiveString(target: string, current: string): string {
+  if (target == current) {
+    return current;
+  }
+  return recursiveString(target, current + "1");
+}
+let closureValue = "closure:";
+let closureFn = (input: string): string => {
+  return closureValue + input;
+};
+let nestedFn = (input: string): string => {
+  let prefix = "hello ";
+  let inner = (value: string): string => {
+    return prefix + value;
+  };
+  return inner(input);
+};
+let recursiveFn = (input: string): string => {
+  return recursiveString("hello1111111111", input);
+};
 __ANI_GENERATED__.clear_callback();
 __assert_true("has_callback_false", !__ANI_GENERATED__.has_callback());
 __ANI_GENERATED__.register_string_transformer(wrapValue);
 __assert_true("has_string_transformer_true", __ANI_GENERATED__.has_string_transformer());
-__assert_eq_string("transform_string", __ANI_GENERATED__.transform_string("ani"), "wrapped:ani");
+__assert_eq_string("transform_string_basic", __ANI_GENERATED__.transform_string("ani"), "wrapped:ani");
 __assert_eq_string("call_no_args_callback", __ANI_GENERATED__.call_no_args_callback(noArgsOk), "ok");
-__assert_eq_string("call_string_callback", __ANI_GENERATED__.call_string_callback(wrapValue, "ark"), "wrapped:ark");
+__assert_eq_string("call_string_callback_basic", __ANI_GENERATED__.call_string_callback(wrapValue, "ark"), "wrapped:ark");
+__assert_eq_string("call_string_callback_closure", __ANI_GENERATED__.call_string_callback(closureFn, "arkts"), "closure:arkts");
+__assert_eq_string("call_string_callback_nested", __ANI_GENERATED__.call_string_callback(nestedFn, "world"), "hello world");
+__assert_eq_string("call_string_callback_recursive", __ANI_GENERATED__.call_string_callback(recursiveFn, "hello"), "hello1111111111");
+__ANI_GENERATED__.register_string_transformer(closureFn);
+__assert_eq_string("transform_string_closure", __ANI_GENERATED__.transform_string("vm"), "closure:vm");
+__ANI_GENERATED__.register_string_transformer(nestedFn);
+__assert_eq_string("transform_string_nested", __ANI_GENERATED__.transform_string("arkvm"), "hello arkvm");
 ETS
       ;;
     ani-example-function-variable)
@@ -394,15 +439,31 @@ ETS
 export function sum(a: int, b: int): int {
   return a + b;
 }
+export function join(left: string, right: string): string {
+  return left + ":" + right;
+}
 export let counter: int = 1;
+export let label: string = "seed";
 namespace sample {
   export function mul(a: int, b: int): int {
     return a * b;
   }
+  export function tag(value: string): string {
+    return "[" + value + "]";
+  }
   export let state: int = 2;
+  export let note: string = "note0";
 }
 __assert_bool("find_current_module_members", __ANI_GENERATED__.find_current_module_members());
+__assert_eq_int("call_current_module_sum", __ANI_GENERATED__.call_current_module_sum(3, 4), 7);
+__assert_eq_string("call_current_module_join", __ANI_GENERATED__.call_current_module_join("left", "right"), "left:right");
+__assert_eq_int("roundtrip_current_module_counter", __ANI_GENERATED__.roundtrip_current_module_counter(11), 11);
+__assert_eq_string("roundtrip_current_module_label", __ANI_GENERATED__.roundtrip_current_module_label("updated"), "updated");
 __assert_bool("find_current_namespace_members", __ANI_GENERATED__.find_current_namespace_members("sample"));
+__assert_eq_int("call_current_namespace_mul", __ANI_GENERATED__.call_current_namespace_mul("sample", 6, 7), 42);
+__assert_eq_string("call_current_namespace_tag", __ANI_GENERATED__.call_current_namespace_tag("sample", "arkts"), "[arkts]");
+__assert_eq_int("roundtrip_current_namespace_state", __ANI_GENERATED__.roundtrip_current_namespace_state("sample", 23), 23);
+__assert_eq_string("roundtrip_current_namespace_note", __ANI_GENERATED__.roundtrip_current_namespace_note("sample", "note1"), "note1");
 ETS
       ;;
     ani-example-nullish-union)
@@ -519,10 +580,42 @@ __assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_int("Widget.bump", widget.bump(3), 8);
 __assert_eq_int("Widget.count_after_bump", widget.count, 8);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(renamed, 8)");
+__assert_eq_string("Widget.index_get", widget.$_get(4.0), "renamed#4");
+widget.$_set(2.0, "slot");
+__assert_eq_string("Widget.index_set_text_name", widget.name, "slot@2");
+widget.$_set(6.0, true);
+__assert_eq_int("Widget.index_set_flag_true", widget.count, 6);
+widget.$_set(3.0, false);
+__assert_eq_int("Widget.index_set_flag_false", widget.count, -3);
+let widgetIter = widget.$_iterator();
+let widgetIterFirst = widgetIter.next();
+__assert_true("Widget.iterator_negative_done", widgetIterFirst.done);
+__assert_true("Widget.iterator_negative_value", widgetIterFirst.value == undefined);
+let widgetIterEnd = widgetIter.next();
+__assert_true("Widget.iterator_negative_repeat_done", widgetIterEnd.done);
+__assert_true("Widget.iterator_negative_repeat_value", widgetIterEnd.value == undefined);
+widget.count = 4;
+let widgetIterPositive = widget.$_iterator();
+let widgetIterPositiveFirst = widgetIterPositive.next();
+__assert_true("Widget.iterator_positive_first_done", !widgetIterPositiveFirst.done);
+__assert_eq_int("Widget.iterator_positive_first_value", widgetIterPositiveFirst.value as int, 0);
+let widgetIterPositiveSecond = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_second_value", widgetIterPositiveSecond.value as int, 1);
+let widgetIterPositiveThird = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_third_value", widgetIterPositiveThird.value as int, 2);
+let widgetIterPositiveFourth = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_fourth_value", widgetIterPositiveFourth.value as int, 3);
+let widgetIterPositiveEnd = widgetIterPositive.next();
+__assert_true("Widget.iterator_positive_end_done", widgetIterPositiveEnd.done);
+__assert_true("Widget.iterator_positive_end_value", widgetIterPositiveEnd.value == undefined);
 __assert_eq_int("Widget.sum", __ANI_GENERATED__.Widget.sum(2, 4), 6);
 __assert_eq_int("Widget.revision_initial", __ANI_GENERATED__.Widget.revision, 1);
 __ANI_GENERATED__.Widget.revision = 7;
 __assert_eq_int("Widget.revision_after_set", __ANI_GENERATED__.Widget.revision, 7);
+__assert_true(
+  "Widget.resolve_special_methods",
+  __ANI_GENERATED__.resolve_widget_special_methods("arkvm_test.Widget")
+);
 ETS
       ;;
     ani-example-object-typed)
@@ -774,13 +867,13 @@ ETS
     ani-example-optional)
       cat <<'ETS'
 __assert_eq_int("with_default_simple", __ANI_GENERATED__.with_default_simple(3, 4), 12);
-__assert_eq_int("with_optional_int_some", __ANI_GENERATED__.with_optional_int(8, new Int(2)), 10);
+__assert_eq_int("with_optional_int_some", __ANI_GENERATED__.with_optional_int(8, 2), 10);
 __assert_eq_int("with_optional_int_null", __ANI_GENERATED__.with_optional_int(8, null), 8);
-__assert_eq_double("with_optional_double_some", __ANI_GENERATED__.with_optional_double(1.5, new Double(2.0)), 3.5);
+__assert_eq_double("with_optional_double_some", __ANI_GENERATED__.with_optional_double(1.5, 2.0), 3.5);
 __assert_eq_double("with_optional_double_null", __ANI_GENERATED__.with_optional_double(1.5, null), 1.5);
 __assert_eq_int("with_optional_boolean_null", __ANI_GENERATED__.with_optional_boolean(8, null), 8);
-__assert_eq_int("with_optional_boolean_true", __ANI_GENERATED__.with_optional_boolean(8, new Boolean(true)), 16);
-__assert_eq_int("with_multiple_optional_mixed", __ANI_GENERATED__.with_multiple_optional(1, new Int(2), null, new Int(4)), 7);
+__assert_eq_int("with_optional_boolean_true", __ANI_GENERATED__.with_optional_boolean(8, true), 16);
+__assert_eq_int("with_multiple_optional_mixed", __ANI_GENERATED__.with_multiple_optional(1, 2, null, 4), 7);
 __assert_eq_int("with_optional_int_undefined", __ANI_GENERATED__.with_optional_int(8, undefined), 8);
 __assert_eq_string("with_optional_string_undefined", __ANI_GENERATED__.with_optional_string("x", undefined), "x");
 let madeInt = __ANI_GENERATED__.make_optional_int(true);
@@ -938,17 +1031,17 @@ __assert_eq_string(
 );
 __assert_eq_string(
   "handle_string_or_int_either_int",
-  __ANI_GENERATED__.handle_string_or_int_either(new Int(7)),
+  __ANI_GENERATED__.handle_string_or_int_either(7),
   "Int: 7",
 );
 __assert_eq_string(
   "handle_three_types_bool",
-  __ANI_GENERATED__.handle_three_types(new Boolean(true)),
+  __ANI_GENERATED__.handle_three_types(true),
   "Boolean: true",
 );
 __assert_eq_string(
   "handle_four_types_double",
-  __ANI_GENERATED__.handle_four_types(new Double(3.5)),
+  __ANI_GENERATED__.handle_four_types(3.5),
   "Double: 3.5",
 );
 let eitherString = __ANI_GENERATED__.return_either(true) as String;

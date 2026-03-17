@@ -7,7 +7,7 @@ use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope,
+    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
     ClassPropertyAccessorDescriptor, ClassPropertyDescriptor, ClassRegisterDescriptor,
     EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget, WrapperBindingKind,
     emit_export_plan_ets, generate_register_fn, generate_wrapper,
@@ -90,6 +90,84 @@ impl BindingResolveInput {
         match self.owner {
             BindingOwner::Global => None,
             BindingOwner::Class { scope } => Some(scope),
+        }
+    }
+
+    pub(crate) fn requires_nullish_bridge(self, sig: &Signature) -> bool {
+        function_requires_nullish_bridge(sig, self.skip_first_arg())
+    }
+
+    pub(crate) fn native_signature(self, sig: &Signature) -> String {
+        if self.is_constructor() {
+            generate_ctor_signature(sig, self.skip_first_arg())
+        } else {
+            generate_fn_signature(sig, self.skip_first_arg())
+        }
+    }
+
+    pub(crate) fn render_ets_binding(
+        self,
+        kind: EtsDeclKind,
+        sig: &Signature,
+        ets_name: &str,
+    ) -> String {
+        generate_fn_ets_binding(kind, sig, ets_name, self.skip_first_arg(), self.is_static())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolvedCallableBinding {
+    input: BindingResolveInput,
+    signature: String,
+    requires_nullish_bridge: bool,
+}
+
+impl ResolvedCallableBinding {
+    fn new(attrs: &BindgenAttrs, sig: &Signature, input: BindingResolveInput) -> Self {
+        Self {
+            input,
+            signature: attrs
+                .signature
+                .clone()
+                .unwrap_or_else(|| input.native_signature(sig)),
+            requires_nullish_bridge: input.requires_nullish_bridge(sig),
+        }
+    }
+
+    fn register_symbol_name(
+        &self,
+        ets_name: &str,
+        class_member_plan: Option<&ResolvedClassMemberPlan>,
+    ) -> String {
+        class_member_plan
+            .map(|plan| plan.register_symbol_name(ets_name, self.requires_nullish_bridge))
+            .unwrap_or_else(|| {
+                if self.requires_nullish_bridge {
+                    format!("__ani_native_{ets_name}")
+                } else {
+                    ets_name.to_string()
+                }
+            })
+    }
+
+    fn render_ets_emission(
+        &self,
+        ets_target: EtsBindingTarget,
+        sig: &Signature,
+        ets_name: &str,
+        class_descriptor: Option<&ClassDescriptorMember>,
+    ) -> EtsBindingEmission {
+        if let Some(class_descriptor) = class_descriptor {
+            EtsBindingEmission::ClassMember {
+                rendered: class_descriptor.render_ets_binding(sig, self.input.skip_first_arg()),
+            }
+        } else {
+            EtsBindingEmission::Rendered {
+                target: ets_target.clone(),
+                rendered: self
+                    .input
+                    .render_ets_binding(ets_target.kind, sig, ets_name),
+            }
         }
     }
 }
@@ -299,25 +377,31 @@ impl ResolvedClassMemberPlan {
         match &self.kind {
             ClassMemberPlanKind::Constructor => {
                 ClassDescriptorMember::Constructor(ClassCallableDescriptor {
-                    owner: self.owner.clone(),
-                    public_name: "constructor".to_string(),
+                    metadata: ClassMemberMetadata {
+                        owner: self.owner.clone(),
+                        public_name: "constructor".to_string(),
+                        scope: self.scope,
+                    },
                     native_symbol_name: native_symbol_name.to_string(),
-                    scope: self.scope,
                 })
             }
             ClassMemberPlanKind::Method { public_name } => {
                 ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: self.owner.clone(),
-                    public_name: public_name.clone(),
+                    metadata: ClassMemberMetadata {
+                        owner: self.owner.clone(),
+                        public_name: public_name.clone(),
+                        scope: self.scope,
+                    },
                     native_symbol_name: native_symbol_name.to_string(),
-                    scope: self.scope,
                 })
             }
             ClassMemberPlanKind::Property(accessor) => {
                 let mut property = ClassPropertyDescriptor {
-                    owner: self.owner.clone(),
-                    public_name: accessor.property_name.clone(),
-                    scope: self.scope,
+                    metadata: ClassMemberMetadata {
+                        owner: self.owner.clone(),
+                        public_name: accessor.property_name.clone(),
+                        scope: self.scope,
+                    },
                     getter: None,
                     setter: None,
                 };
@@ -409,53 +493,18 @@ pub(crate) fn resolve_binding_plan_with_class_plan(
     binding_input: BindingResolveInput,
     class_member_plan: Option<&ResolvedClassMemberPlan>,
 ) -> syn::Result<ExportPlan> {
-    let requires_nullish_bridge =
-        function_requires_nullish_bridge(sig, binding_input.skip_first_arg());
-
-    let register_symbol_name = class_member_plan
-        .map(|plan| plan.register_symbol_name(ets_name, requires_nullish_bridge))
-        .unwrap_or_else(|| {
-            if requires_nullish_bridge {
-                format!("__ani_native_{ets_name}")
-            } else {
-                ets_name.to_string()
-            }
-        });
-
-    let signature = attrs.signature.clone().unwrap_or_else(|| {
-        if binding_input.is_constructor() {
-            generate_ctor_signature(sig, binding_input.skip_first_arg())
-        } else {
-            generate_fn_signature(sig, binding_input.skip_first_arg())
-        }
-    });
+    let callable = ResolvedCallableBinding::new(attrs, sig, binding_input);
+    let register_symbol_name = callable.register_symbol_name(ets_name, class_member_plan);
     let ets_target = resolve_ets_binding_target(attrs);
-    let ets_kind = ets_target.kind;
     let class_descriptor = class_member_plan.map(|plan| plan.descriptor(&register_symbol_name));
     let class_register = class_descriptor
         .as_ref()
         .map(ClassDescriptorMember::register_descriptor);
-
-    let ets = if let Some(class_descriptor) = &class_descriptor {
-        EtsBindingEmission::ClassMember {
-            rendered: class_descriptor.render_ets_binding(sig, binding_input.skip_first_arg()),
-        }
-    } else {
-        EtsBindingEmission::Rendered {
-            target: ets_target,
-            rendered: generate_fn_ets_binding(
-                ets_kind,
-                sig,
-                ets_name,
-                binding_input.skip_first_arg(),
-                binding_input.is_static(),
-            ),
-        }
-    };
+    let ets = callable.render_ets_emission(ets_target, sig, ets_name, class_descriptor.as_ref());
 
     Ok(ExportPlan {
         register_symbol_name,
-        signature,
+        signature: callable.signature,
         register_target: resolve_register_target(attrs, class_register.as_ref()),
         ets,
         class_descriptor,
@@ -919,6 +968,84 @@ mod tests {
     }
 
     #[test]
+    fn binding_input_computes_native_signatures_and_bridge_policy() {
+        let method_sig: Signature = parse_quote! {
+            fn rename(&self, value: Option<String>) -> Option<String>
+        };
+        let method_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Instance,
+            },
+            signature_style: SignatureBindingStyle::SkipRustReceiver,
+        };
+        assert!(method_input.requires_nullish_bridge(&method_sig));
+        assert_eq!(
+            method_input.native_signature(&method_sig),
+            "X{C{std.core.String}C{std.core.Null}}:X{C{std.core.String}C{std.core.Null}}"
+        );
+
+        let ctor_sig: Signature = parse_quote! {
+            fn new(name: String)
+        };
+        let ctor_input = BindingResolveInput {
+            callable_kind: CallableKind::Constructor,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Instance,
+            },
+            signature_style: SignatureBindingStyle::Direct,
+        };
+        assert_eq!(
+            ctor_input.native_signature(&ctor_sig),
+            "C{std.core.String}:"
+        );
+    }
+
+    #[test]
+    fn resolved_callable_binding_centralizes_symbol_and_ets_rendering() {
+        let attrs = BindgenAttrs::default();
+        let sig: Signature = parse_quote! {
+            fn maybe_name(name: Option<String>) -> Option<String>
+        };
+        let input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Global,
+            signature_style: SignatureBindingStyle::Direct,
+        };
+        let callable = ResolvedCallableBinding::new(&attrs, &sig, input);
+
+        assert!(callable.requires_nullish_bridge);
+        assert_eq!(
+            callable.signature,
+            "X{C{std.core.String}C{std.core.Null}}:X{C{std.core.String}C{std.core.Null}}"
+        );
+        assert_eq!(
+            callable.register_symbol_name("maybe_name", None),
+            "__ani_native_maybe_name"
+        );
+
+        let ets = callable.render_ets_emission(
+            EtsBindingTarget {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+            },
+            &sig,
+            "maybe_name",
+            None,
+        );
+        assert_eq!(
+            ets,
+            EtsBindingEmission::Rendered {
+                target: EtsBindingTarget {
+                    kind: EtsDeclKind::Global,
+                    target: String::new(),
+                },
+                rendered: "native function __ani_native_maybe_name(name: string | null): string | null;\nfunction maybe_name(name: string | null | undefined): string | null | undefined {\n  let __ani_result = __ani_native_maybe_name(name == undefined ? null : name);\n  return __ani_result == null ? undefined : __ani_result;\n}".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn class_member_plan_tracks_property_and_register_symbol_policy() {
         let attrs = BindgenAttrs {
             class: Some("Widget".to_string()),
@@ -977,10 +1104,12 @@ mod tests {
         assert_eq!(
             plan.descriptor("renamePublic"),
             ClassDescriptorMember::Method(ClassCallableDescriptor {
-                owner: "Widget".to_string(),
-                public_name: "renamePublic".to_string(),
+                metadata: ClassMemberMetadata {
+                    owner: "Widget".to_string(),
+                    public_name: "renamePublic".to_string(),
+                    scope: ClassMemberScope::Instance,
+                },
                 native_symbol_name: "renamePublic".to_string(),
-                scope: ClassMemberScope::Instance,
             })
         );
     }
@@ -1008,7 +1137,7 @@ mod tests {
             EtsBindingEmission::ClassMember { rendered } => {
                 assert_eq!(
                     rendered,
-                    "native constructor(name: String | null | undefined);"
+                    "native constructor(name: string | null | undefined);"
                 );
             }
             other => panic!("expected class member emission, got {other:?}"),
@@ -1049,9 +1178,11 @@ mod tests {
         assert_eq!(
             plan.class_descriptor,
             Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                owner: "Widget".to_string(),
-                public_name: "value".to_string(),
-                scope: ClassMemberScope::Static,
+                metadata: ClassMemberMetadata {
+                    owner: "Widget".to_string(),
+                    public_name: "value".to_string(),
+                    scope: ClassMemberScope::Static,
+                },
                 getter: Some(ClassPropertyAccessorDescriptor {
                     native_symbol_name: "__ani_native_get_value".to_string(),
                 }),
@@ -1083,10 +1214,12 @@ mod tests {
             plan.class_descriptor,
             Some(ClassDescriptorMember::Constructor(
                 ClassCallableDescriptor {
-                    owner: "Widget".to_string(),
-                    public_name: "constructor".to_string(),
+                    metadata: ClassMemberMetadata {
+                        owner: "Widget".to_string(),
+                        public_name: "constructor".to_string(),
+                        scope: ClassMemberScope::Instance,
+                    },
                     native_symbol_name: "<ctor>".to_string(),
-                    scope: ClassMemberScope::Instance,
                 }
             ))
         );
@@ -1156,10 +1289,12 @@ mod tests {
             plan.class_descriptor,
             Some(ClassDescriptorMember::Method(
                 crate::codegen::ClassCallableDescriptor {
-                    owner: "Widget".to_string(),
-                    public_name: "rename".to_string(),
+                    metadata: ClassMemberMetadata {
+                        owner: "Widget".to_string(),
+                        public_name: "rename".to_string(),
+                        scope: ClassMemberScope::Instance,
+                    },
                     native_symbol_name: "rename".to_string(),
-                    scope: ClassMemberScope::Instance,
                 }
             ))
         );
@@ -1196,9 +1331,11 @@ mod tests {
         assert_eq!(
             plan.class_descriptor,
             Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                owner: "Widget".to_string(),
-                public_name: "total".to_string(),
-                scope: ClassMemberScope::Static,
+                metadata: ClassMemberMetadata {
+                    owner: "Widget".to_string(),
+                    public_name: "total".to_string(),
+                    scope: ClassMemberScope::Static,
+                },
                 getter: Some(ClassPropertyAccessorDescriptor {
                     native_symbol_name: "__ani_native_native_get_total".to_string(),
                 }),

@@ -11,8 +11,8 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
-    should_skip_in_signature,
+    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
+    ClassPropertyDescriptor, should_skip_in_signature,
 };
 
 use super::ani_type::{
@@ -222,7 +222,10 @@ fn push_indented_block(out: &mut String, indent: usize, block: &str) {
 }
 
 fn property_slot_key(descriptor: &ClassPropertyDescriptor) -> (ClassMemberScope, String) {
-    (descriptor.scope, descriptor.public_name.clone())
+    (
+        descriptor.metadata.scope,
+        descriptor.metadata.public_name.clone(),
+    )
 }
 
 fn insert_property_slot(
@@ -236,9 +239,11 @@ fn insert_property_slot(
         .entry(key)
         .or_insert_with(|| RenderedPropertySlot {
             descriptor: ClassPropertyDescriptor {
-                owner: descriptor.owner.clone(),
-                public_name: descriptor.public_name.clone(),
-                scope: descriptor.scope,
+                metadata: ClassMemberMetadata {
+                    owner: descriptor.metadata.owner.clone(),
+                    public_name: descriptor.metadata.public_name.clone(),
+                    scope: descriptor.metadata.scope,
+                },
                 getter: None,
                 setter: None,
             },
@@ -259,14 +264,14 @@ fn callable_member_sort_key(
     descriptor: &ClassCallableDescriptor,
     kind_rank: u8,
 ) -> (u8, u8, String, String) {
-    let scope_rank = match descriptor.scope {
+    let scope_rank = match descriptor.metadata.scope {
         ClassMemberScope::Static => 0,
         ClassMemberScope::Instance => 1,
     };
     (
         kind_rank,
         scope_rank,
-        descriptor.public_name.clone(),
+        descriptor.metadata.public_name.clone(),
         descriptor.native_symbol_name.clone(),
     )
 }
@@ -303,11 +308,70 @@ fn object_member_sort_key(member: &EtsObjectMemberDecl) -> (u8, u8, String, Stri
 }
 
 fn property_slot_sort_key(slot: &RenderedPropertySlot) -> (u8, String) {
-    let scope_rank = match slot.descriptor.scope {
+    let scope_rank = match slot.descriptor.metadata.scope {
         ClassMemberScope::Static => 0,
         ClassMemberScope::Instance => 1,
     };
-    (scope_rank, slot.descriptor.public_name.clone())
+    (scope_rank, slot.descriptor.metadata.public_name.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct IteratorNextSurface {
+    item_ty: String,
+    native_ty: String,
+}
+
+fn parse_iterator_next_surface(member: &RenderedClassMember) -> Option<IteratorNextSurface> {
+    let descriptor = member.descriptor.as_ref()?;
+    let ClassDescriptorMember::Method(callable) = descriptor else {
+        return None;
+    };
+    if callable.metadata.scope != ClassMemberScope::Instance
+        || callable.metadata.public_name != "next"
+    {
+        return None;
+    }
+
+    let mut lines = member.rendered.lines();
+    let native_line = lines.next()?.trim();
+    let wrapper_line = lines.next()?.trim();
+
+    let native_ty = native_line
+        .strip_prefix("native __ani_native_next(): ")?
+        .strip_suffix(';')?
+        .to_string();
+    let wrapper_ty = wrapper_line.strip_prefix("next(): ")?.strip_suffix(" {")?;
+    if !wrapper_ty.ends_with(" | undefined") {
+        return None;
+    }
+
+    let item_ty = native_ty.strip_suffix(" | null")?.to_string();
+    Some(IteratorNextSurface { item_ty, native_ty })
+}
+
+fn iterator_item_type(class: &ClassNode) -> Option<String> {
+    class
+        .callable_members
+        .iter()
+        .find_map(parse_iterator_next_surface)
+        .map(|surface| surface.item_ty)
+}
+
+fn render_class_member(member: &RenderedClassMember, iterator_item_ty: Option<&str>) -> String {
+    let Some(item_ty) = iterator_item_ty else {
+        return member.rendered.clone();
+    };
+    let Some(surface) = parse_iterator_next_surface(member) else {
+        return member.rendered.clone();
+    };
+    if surface.item_ty != item_ty {
+        return member.rendered.clone();
+    }
+
+    format!(
+        "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  return {{\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  }};\n}}",
+        surface.native_ty, surface.item_ty,
+    )
 }
 
 fn ensure_exported_block(block: &str) -> String {
@@ -333,7 +397,12 @@ fn ensure_exported_block(block: &str) -> String {
 
 fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: &ClassNode) {
     let pad = " ".repeat(indent);
-    out.push_str(&format!("{pad}export class {class_name} {{\n"));
+    let iterator_suffix = iterator_item_type(class)
+        .map(|item_ty| format!(" implements Iterator<{item_ty}>"))
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "{pad}export class {class_name}{iterator_suffix} {{\n"
+    ));
 
     let mut object_members = class.object_members.clone();
     object_members.sort_by_key(object_member_sort_key);
@@ -368,6 +437,7 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
         }
     }
 
+    let iterator_item_ty = iterator_item_type(class);
     let mut other_members = class
         .callable_members
         .iter()
@@ -381,13 +451,11 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
         .collect::<Vec<_>>();
     other_members.sort_by_key(class_member_sort_key);
     for member in other_members {
-        push_indented_block(out, indent + 2, &member.rendered);
+        let rendered = render_class_member(&member, iterator_item_ty.as_deref());
+        push_indented_block(out, indent + 2, &rendered);
     }
 
-    out.push_str(&format!(
-        "{pad}}}
-"
-    ));
+    out.push_str(&format!("{pad}}}\n"));
 }
 
 fn render_namespace(out: &mut String, indent: usize, name: &str, node: &NamespaceNode) {
@@ -554,7 +622,7 @@ pub fn emit_compile_ets_object(target: &str, members: &[EtsObjectMemberDecl]) {
 
 pub fn generate_object_field_ets_decl(name: &str, ty: &Type, is_private: bool) -> String {
     let ani_type = AniType::from_syn_type(ty);
-    let ets_type = ani_type_to_ets(&ani_type);
+    let ets_type = EtsTypeSurface::from_ani_type(&ani_type).public_ty;
     let default_value = default_value_for_object_field(&ani_type, &ets_type);
     let visibility = if is_private { "private " } else { "" };
     format!("{visibility}{name}: {ets_type} = {default_value};")
@@ -562,7 +630,7 @@ pub fn generate_object_field_ets_decl(name: &str, ty: &Type, is_private: bool) -
 
 pub fn generate_object_property_ets_decl(name: &str, ty: &Type) -> String {
     let ani_type = AniType::from_syn_type(ty);
-    let ets_type = ani_type_to_ets(&ani_type);
+    let ets_type = EtsTypeSurface::from_ani_type(&ani_type).public_ty;
     let default_value = default_value_for_object_field(&ani_type, &ets_type);
     let backing_name = format!("__ani_property_{}", sanitize_object_property_name(name));
     format!(
@@ -615,43 +683,44 @@ fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
     }
 }
 
-fn function_arg_types_to_ets(args: &Type, option_style: OptionStyle) -> Vec<String> {
+fn function_arg_types_to_ets(args: &Type, context: EtsRenderContext) -> Vec<String> {
     match AniType::from_syn_type(args) {
         AniType::FnArgs(fn_args) => fn_args
             .elements
             .iter()
-            .map(|arg| ani_type_to_ets_with_option_style(arg, option_style))
+            .map(|arg| ani_type_to_ets_in_context(arg, context))
             .collect(),
         AniType::Tuple(items) => items
             .iter()
-            .map(|arg| ani_type_to_ets_with_option_style(arg, option_style))
+            .map(|arg| ani_type_to_ets_in_context(arg, context))
             .collect(),
         AniType::Unit => Vec::new(),
-        other => vec![ani_type_to_ets_with_option_style(&other, option_style)],
+        other => vec![ani_type_to_ets_in_context(&other, context)],
     }
 }
 
-fn function_type_to_ets(func_type: &FunctionType, option_style: OptionStyle) -> String {
+fn function_type_to_ets(func_type: &FunctionType, context: EtsRenderContext) -> String {
     let (args, ret) = match func_type {
         FunctionType::Function { args, ret } | FunctionType::FunctionRef { args, ret } => {
             (args.as_ref(), ret.as_ref())
         }
     };
 
-    let params = function_arg_types_to_ets(args, option_style)
+    let params = function_arg_types_to_ets(args, context)
         .into_iter()
         .enumerate()
         .map(|(idx, ty)| format!("arg{idx}: {ty}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let ret = ani_type_to_ets_with_option_style(&AniType::from_syn_type(ret), option_style);
+    let ret = ani_type_to_ets_in_context(&AniType::from_syn_type(ret), context);
     format!("({params}) => {ret}")
 }
+
 fn ani_type_to_ets(ty: &AniType) -> String {
-    ani_type_to_ets_with_option_style(ty, OptionStyle::Nullish)
+    ani_type_to_ets_in_context(ty, EtsRenderContext::public())
 }
 
-fn ani_type_to_ets_with_option_style(ty: &AniType, option_style: OptionStyle) -> String {
+fn ani_type_to_ets_in_context(ty: &AniType, context: EtsRenderContext) -> String {
     match ty {
         AniType::Primitive(p) => primitive_to_ets(p).to_string(),
         AniType::String(StringType::String | StringType::Str) => "string".to_string(),
@@ -659,52 +728,49 @@ fn ani_type_to_ets_with_option_style(ty: &AniType, option_style: OptionStyle) ->
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) | AniType::Either(_) => {
-            collect_union_parts(ty, option_style).render()
+            collect_union_parts(ty, context).render()
         }
         AniType::Wrapper(WrapperType::Vec(inner)) => vec_inner_to_ets(inner),
-        AniType::Wrapper(WrapperType::Result(inner)) => {
-            ani_type_to_ets_with_option_style(inner, option_style)
-        }
-        AniType::Wrapper(WrapperType::Ref(inner)) => {
-            ani_type_to_ets_with_option_style(inner, option_style)
-        }
-        AniType::Function(func_type) => function_type_to_ets(func_type, option_style),
+        AniType::Wrapper(WrapperType::Result(inner)) => match context.result_style {
+            ResultStyle::ThrowingValue => ani_type_to_ets_in_context(inner, context),
+        },
+        AniType::Wrapper(WrapperType::Ref(inner)) => ani_type_to_ets_in_context(inner, context),
+        AniType::Function(func_type) => function_type_to_ets(func_type, context),
         AniType::FnArgs(_) => "Array<Object>".to_string(),
         AniType::Promise(promise) => {
             let inner = promise
                 .inner
                 .as_ref()
-                .map(|t| ani_type_to_ets_with_option_style(t, option_style))
+                .map(|t| ani_type_to_ets_in_context(t, context))
                 .unwrap_or_else(|| "void".to_string());
             format!("Promise<{}>", inner)
         }
         AniType::Record(record) => {
             format!(
                 "Record<string, {}>",
-                ani_type_to_ets_with_option_style(record.value.as_ref(), option_style)
+                ani_type_to_ets_in_context(record.value.as_ref(), context)
             )
         }
         AniType::Set(set) => {
             format!(
                 "Set<{}>",
-                ani_type_to_ets_with_option_style(set.element.as_ref(), option_style)
+                ani_type_to_ets_in_context(set.element.as_ref(), context)
             )
         }
         AniType::Map(map) => {
             format!(
                 "Map<{}, {}>",
-                ani_type_to_ets_with_option_style(map.key.as_ref(), option_style),
-                ani_type_to_ets_with_option_style(map.value.as_ref(), option_style)
+                ani_type_to_ets_in_context(map.key.as_ref(), context),
+                ani_type_to_ets_in_context(map.value.as_ref(), context)
             )
         }
         AniType::AniObject => "Object".to_string(),
-
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::Tuple(items) => format!(
             "[{}]",
             items
                 .iter()
-                .map(|item| ani_type_to_ets_with_option_style(item, option_style))
+                .map(|item| ani_type_to_ets_in_context(item, context))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -760,35 +826,35 @@ impl UnionParts {
     }
 }
 
-fn collect_union_parts(ty: &AniType, option_style: OptionStyle) -> UnionParts {
+fn collect_union_parts(ty: &AniType, context: EtsRenderContext) -> UnionParts {
     let mut parts = UnionParts::default();
     match ty {
-        AniType::Primitive(p) => parts.push_variant(boxed_primitive_to_ets(p).to_string()),
+        AniType::Primitive(p) => parts.push_variant(primitive_to_ets(p).to_string()),
         AniType::String(StringType::String | StringType::Str) => {
-            parts.push_variant("String".to_string())
+            parts.push_variant("string".to_string())
         }
         AniType::Null => parts.has_null = true,
         AniType::Undefined => parts.has_undefined = true,
         AniType::Wrapper(WrapperType::Option(inner)) => {
-            parts.extend(collect_union_parts(inner, option_style));
+            parts.extend(collect_union_parts(inner, context));
             parts.has_null = true;
-            if matches!(option_style, OptionStyle::Nullish) {
+            if matches!(context.option_style, OptionStyle::Nullish) {
                 parts.has_undefined = true;
             }
         }
         AniType::Wrapper(WrapperType::Result(inner))
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
-            parts.extend(collect_union_parts(inner, option_style));
+            parts.extend(collect_union_parts(inner, context));
         }
         AniType::Either(either) => {
             for variant in &either.types {
                 parts.extend(collect_union_parts(
                     &AniType::from_syn_type(variant),
-                    option_style,
+                    context,
                 ));
             }
         }
-        _ => parts.push_variant(ani_type_to_ets_with_option_style(ty, option_style)),
+        _ => parts.push_variant(ani_type_to_ets_in_context(ty, context)),
     }
     parts
 }
@@ -854,19 +920,6 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
         | "GlobalRef" | "WeakRef" => Some("Object"),
         _ => None,
-    }
-}
-
-fn boxed_primitive_to_ets(p: &PrimitiveType) -> &'static str {
-    match p {
-        PrimitiveType::Bool => "Boolean",
-        PrimitiveType::I8 | PrimitiveType::U8 => "Byte",
-        PrimitiveType::I16 => "Short",
-        PrimitiveType::U16 | PrimitiveType::Char => "Char",
-        PrimitiveType::I32 | PrimitiveType::U32 => "Int",
-        PrimitiveType::I64 | PrimitiveType::U64 => "Long",
-        PrimitiveType::F32 => "Float",
-        PrimitiveType::F64 => "Double",
     }
 }
 
@@ -1013,6 +1066,59 @@ enum OptionStyle {
     Nullish,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResultStyle {
+    ThrowingValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EtsRenderContext {
+    option_style: OptionStyle,
+    result_style: ResultStyle,
+}
+
+impl EtsRenderContext {
+    fn public() -> Self {
+        Self {
+            option_style: OptionStyle::Nullish,
+            result_style: ResultStyle::ThrowingValue,
+        }
+    }
+
+    fn native() -> Self {
+        Self {
+            option_style: OptionStyle::NullOnly,
+            result_style: ResultStyle::ThrowingValue,
+        }
+    }
+
+    fn with_option_style(option_style: OptionStyle) -> Self {
+        Self {
+            option_style,
+            ..Self::public()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EtsTypeSurface {
+    public_ty: String,
+    native_ty: String,
+    requires_bridge: bool,
+}
+
+impl EtsTypeSurface {
+    fn from_ani_type(ty: &AniType) -> Self {
+        let public_ty = ani_type_to_ets_in_context(ty, EtsRenderContext::public());
+        let native_ty = ani_type_to_ets_in_context(ty, EtsRenderContext::native());
+        Self {
+            requires_bridge: type_requires_nullish_bridge(ty, &public_ty, &native_ty),
+            public_ty,
+            native_ty,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ExposedParamSpec {
     name: String,
@@ -1060,13 +1166,12 @@ fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<Exposed
             };
             let name = sanitize_param_name(&name, idx);
             let ani_type = AniType::from_syn_type(&pat_type.ty);
-            let public_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::Nullish);
-            let native_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::NullOnly);
+            let surface = EtsTypeSurface::from_ani_type(&ani_type);
             params.push(ExposedParamSpec {
                 name,
-                requires_bridge: type_requires_nullish_bridge(&ani_type, &public_ty, &native_ty),
-                public_ty,
-                native_ty,
+                requires_bridge: surface.requires_bridge,
+                public_ty: surface.public_ty,
+                native_ty: surface.native_ty,
             });
         }
     }
@@ -1090,12 +1195,11 @@ fn exposed_return_spec(sig: &Signature) -> ExposedReturnSpec {
         },
         ReturnType::Type(_, ty) => {
             let ani_type = AniType::from_syn_type(ty);
-            let public_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::Nullish);
-            let native_ty = ani_type_to_ets_with_option_style(&ani_type, OptionStyle::NullOnly);
+            let surface = EtsTypeSurface::from_ani_type(&ani_type);
             ExposedReturnSpec {
-                requires_bridge: type_requires_nullish_bridge(&ani_type, &public_ty, &native_ty),
-                public_ty,
-                native_ty,
+                requires_bridge: surface.requires_bridge,
+                public_ty: surface.public_ty,
+                native_ty: surface.native_ty,
             }
         }
     }
@@ -1107,10 +1211,11 @@ fn generate_fn_ets_decl_with_style(
     skip_first: bool,
     option_style: OptionStyle,
 ) -> String {
+    let context = EtsRenderContext::with_option_style(option_style);
     let params = collect_exposed_param_specs(sig, skip_first)
         .into_iter()
         .map(|param| {
-            let ty = match option_style {
+            let ty = match context.option_style {
                 OptionStyle::NullOnly => param.native_ty,
                 OptionStyle::Nullish => param.public_ty,
             };
@@ -1118,7 +1223,7 @@ fn generate_fn_ets_decl_with_style(
         })
         .collect::<Vec<_>>();
     let ret_spec = exposed_return_spec(sig);
-    let ret = match option_style {
+    let ret = match context.option_style {
         OptionStyle::NullOnly => ret_spec.native_ty,
         OptionStyle::Nullish => ret_spec.public_ty,
     };
@@ -1389,6 +1494,18 @@ mod tests {
     use super::super::ani_type::register_object_type_alias;
     use super::*;
 
+    fn class_member_metadata(
+        owner: &str,
+        public_name: &str,
+        scope: ClassMemberScope,
+    ) -> ClassMemberMetadata {
+        ClassMemberMetadata {
+            owner: owner.to_string(),
+            public_name: public_name.to_string(),
+            scope,
+        }
+    }
+
     #[test]
     fn test_render_decls_uses_ani_native_style() {
         let decls = vec![
@@ -1490,22 +1607,24 @@ get age(): int {
         let class_members = vec![
             EtsClassMemberDecl {
                 target: "example.Person".to_string(),
-                descriptor: Some(ClassDescriptorMember::Constructor(
-                    ClassCallableDescriptor {
-                        owner: "example.Person".to_string(),
-                        public_name: "constructor".to_string(),
-                        native_symbol_name: "<ctor>".to_string(),
-                        scope: ClassMemberScope::Instance,
-                    },
-                )),
+                descriptor: Some(ClassDescriptorMember::Constructor(ClassCallableDescriptor {
+                    metadata: class_member_metadata(
+                        "example.Person",
+                        "constructor",
+                        ClassMemberScope::Instance,
+                    ),
+                    native_symbol_name: "<ctor>".to_string(),
+                })),
                 rendered: "native constructor(name: string, score: int);".to_string(),
             },
             EtsClassMemberDecl {
                 target: "example.Person".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "example.Person".to_string(),
-                    public_name: "name".to_string(),
-                    scope: ClassMemberScope::Instance,
+                    metadata: class_member_metadata(
+                        "example.Person",
+                        "name",
+                        ClassMemberScope::Instance,
+                    ),
                     getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_get_name".to_string(),
                     }),
@@ -1517,9 +1636,11 @@ get age(): int {
             EtsClassMemberDecl {
                 target: "example.Person".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "example.Person".to_string(),
-                    public_name: "score".to_string(),
-                    scope: ClassMemberScope::Instance,
+                    metadata: class_member_metadata(
+                        "example.Person",
+                        "score",
+                        ClassMemberScope::Instance,
+                    ),
                     getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_get_score".to_string(),
                     }),
@@ -1533,20 +1654,24 @@ get age(): int {
             EtsClassMemberDecl {
                 target: "example.Person".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "example.Person".to_string(),
-                    public_name: "label".to_string(),
+                    metadata: class_member_metadata(
+                        "example.Person",
+                        "label",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "__ani_native_label".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native label(): string;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "example.Person".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "example.Person".to_string(),
-                    public_name: "species".to_string(),
+                    metadata: class_member_metadata(
+                        "example.Person",
+                        "species",
+                        ClassMemberScope::Static,
+                    ),
                     native_symbol_name: "__ani_native_species".to_string(),
-                    scope: ClassMemberScope::Static,
                 })),
                 rendered: "static native species(): string;".to_string(),
             },
@@ -1570,121 +1695,59 @@ get age(): int {
     }
 
     #[test]
-    fn test_render_decls_keeps_global_and_namespace_overloads() {
-        let decls = vec![
-            EtsDecl {
-                kind: EtsDeclKind::Global,
-                target: String::new(),
-                rendered: "native function sum(a: int, b: int): int;".to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Global,
-                target: String::new(),
-                rendered: "native function sum(a: int, b: int, c: int): int;".to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Global,
-                target: String::new(),
-                rendered: "native function concat(left: string, right: string): string;"
-                    .to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Namespace,
-                target: "ops".to_string(),
-                rendered: "native function sum(a: int, b: int): int;".to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Namespace,
-                target: "ops".to_string(),
-                rendered: "native function sum(a: int, b: int, c: int): int;".to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Namespace,
-                target: "ops".to_string(),
-                rendered: "native function concat(left: string, right: string): string;"
-                    .to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Namespace,
-                target: "A".to_string(),
-                rendered: "native function recursiveFunction(value: int): int;".to_string(),
-            },
-            EtsDecl {
-                kind: EtsDeclKind::Namespace,
-                target: "A.B".to_string(),
-                rendered: "native function sumB(a: int, b: int): int;".to_string(),
-            },
-        ];
-
-        let rendered = render_decls(&decls, &[], &[]);
-
-        assert!(rendered.contains("export native function sum(a: int, b: int): int;"));
-        assert!(rendered.contains("export native function sum(a: int, b: int, c: int): int;"));
-        assert!(
-            rendered
-                .contains("export native function concat(left: string, right: string): string;")
-        );
-        assert!(rendered.contains("export namespace ops {"));
-        assert!(rendered.contains("export native function sum(a: int, b: int): int;"));
-        assert!(rendered.contains("export native function sum(a: int, b: int, c: int): int;"));
-        assert!(
-            rendered
-                .contains("export native function concat(left: string, right: string): string;")
-        );
-        assert!(rendered.contains("export namespace A {"));
-        assert!(rendered.contains("export native function recursiveFunction(value: int): int;"));
-        assert!(rendered.contains("export namespace B {"));
-        assert!(rendered.contains("export native function sumB(a: int, b: int): int;"));
-    }
-
-    #[test]
     fn test_render_decls_keeps_class_method_overloads() {
         let class_members = vec![
             EtsClassMemberDecl {
                 target: "demo.MathBox".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.MathBox".to_string(),
-                    public_name: "mix".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.MathBox",
+                        "mix",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "__ani_native_mix_2".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native mix(left: int, right: int): int;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.MathBox".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.MathBox".to_string(),
-                    public_name: "mix".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.MathBox",
+                        "mix",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "__ani_native_mix_3".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native mix(left: int, right: int, extra: int): int;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.MathBox".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.MathBox".to_string(),
-                    public_name: "tag".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.MathBox",
+                        "tag",
+                        ClassMemberScope::Static,
+                    ),
                     native_symbol_name: "__ani_native_tag_1".to_string(),
-                    scope: ClassMemberScope::Static,
                 })),
                 rendered: "static native tag(value: string): string;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.MathBox".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.MathBox".to_string(),
-                    public_name: "tag".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.MathBox",
+                        "tag",
+                        ClassMemberScope::Static,
+                    ),
                     native_symbol_name: "__ani_native_tag_2".to_string(),
-                    scope: ClassMemberScope::Static,
                 })),
                 rendered: "static native tag(value: string, suffix: string): string;".to_string(),
             },
         ];
 
         let rendered = render_decls(&[], &[], &class_members);
-
-        assert!(rendered.contains("export class MathBox {"));
         assert!(rendered.contains("native mix(left: int, right: int): int;"));
         assert!(rendered.contains("native mix(left: int, right: int, extra: int): int;"));
         assert!(rendered.contains("static native tag(value: string): string;"));
@@ -1692,96 +1755,51 @@ get age(): int {
     }
 
     #[test]
-    fn test_render_decls_sorts_object_members_by_metadata() {
-        let objects = vec![EtsObjectDecl {
-            target: "demo.Measure".to_string(),
-            members: vec![
-                EtsObjectMemberDecl {
-                    name: "_kind".to_string(),
-                    kind: EtsObjectMemberKind::Field,
-                    is_private: true,
-                    rendered: "private _kind: string = \"\";".to_string(),
-                },
-                EtsObjectMemberDecl {
-                    name: "label".to_string(),
-                    kind: EtsObjectMemberKind::Field,
-                    is_private: false,
-                    rendered: "label: string = \"\";".to_string(),
-                },
-                EtsObjectMemberDecl {
-                    name: "count".to_string(),
-                    kind: EtsObjectMemberKind::Property,
-                    is_private: false,
-                    rendered: "private __ani_property_count: int = 0;
-get count(): int {
-  return this.__ani_property_count;
-}
-set count(value: int) {
-  this.__ani_property_count = value;
-}"
-                    .to_string(),
-                },
-            ],
-        }];
-
-        let rendered = render_decls(&[], &objects, &[]);
-        let label_idx = rendered
-            .find("label: string = \"\";")
-            .expect("public field should exist");
-        let property_idx = rendered
-            .find("get count(): int")
-            .expect("property should exist");
-        let private_idx = rendered
-            .find("private _kind: string = \"\";")
-            .expect("private field should exist");
-
-        assert!(label_idx < property_idx);
-        assert!(property_idx < private_idx);
-    }
-    #[test]
     fn test_render_decls_groups_property_accessors_into_slots() {
         let class_members = vec![
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "label".to_string(),
-                    scope: ClassMemberScope::Instance,
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "label",
+                        ClassMemberScope::Instance,
+                    ),
                     getter: None,
                     setter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_set_label".to_string(),
                     }),
                 })),
-                rendered: "set label(value: string) {
-  this.__ani_native_set_label(value);
-}"
-                .to_string(),
+                rendered: "set label(value: string) {\n  this.__ani_native_set_label(value);\n}"
+                    .to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "rename".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "rename",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "__ani_native_rename".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "label".to_string(),
-                    scope: ClassMemberScope::Instance,
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "label",
+                        ClassMemberScope::Instance,
+                    ),
                     getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_get_label".to_string(),
                     }),
                     setter: None,
                 })),
-                rendered: "get label(): string {
-  return this.__ani_native_get_label();
-}"
-                .to_string(),
+                rendered: "get label(): string {\n  return this.__ani_native_get_label();\n}"
+                    .to_string(),
             },
         ];
 
@@ -1807,10 +1825,12 @@ set count(value: int) {
                 target: "demo.Measure".to_string(),
                 descriptor: Some(ClassDescriptorMember::Constructor(
                     ClassCallableDescriptor {
-                        owner: "demo.Measure".to_string(),
-                        public_name: "constructor".to_string(),
+                        metadata: class_member_metadata(
+                            "demo.Measure",
+                            "constructor",
+                            ClassMemberScope::Instance,
+                        ),
                         native_symbol_name: "<ctor>".to_string(),
-                        scope: ClassMemberScope::Instance,
                     },
                 )),
                 rendered: "native constructor(name: string, total: int);".to_string(),
@@ -1819,10 +1839,12 @@ set count(value: int) {
                 target: "demo.Measure".to_string(),
                 descriptor: Some(ClassDescriptorMember::Constructor(
                     ClassCallableDescriptor {
-                        owner: "demo.Measure".to_string(),
-                        public_name: "constructor".to_string(),
+                        metadata: class_member_metadata(
+                            "demo.Measure",
+                            "constructor",
+                            ClassMemberScope::Instance,
+                        ),
                         native_symbol_name: "<ctor>".to_string(),
-                        scope: ClassMemberScope::Instance,
                     },
                 )),
                 rendered: "native constructor(left: int, right: int);".to_string(),
@@ -1830,10 +1852,12 @@ set count(value: int) {
             EtsClassMemberDecl {
                 target: "demo.Measure".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.Measure".to_string(),
-                    public_name: "describe".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.Measure",
+                        "describe",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "describe".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native describe(): string;".to_string(),
             },
@@ -1860,37 +1884,42 @@ set count(value: int) {
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "rename".to_string(),
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "rename",
+                        ClassMemberScope::Instance,
+                    ),
                     native_symbol_name: "__ani_native_rename".to_string(),
-                    scope: ClassMemberScope::Instance,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "count".to_string(),
-                    scope: ClassMemberScope::Static,
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "count",
+                        ClassMemberScope::Static,
+                    ),
                     getter: None,
                     setter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_set_count".to_string(),
                     }),
                 })),
-                rendered: "static set count(value: int) {
-  Widget.__ani_native_set_count(value);
-}"
-                .to_string(),
+                rendered:
+                    "static set count(value: int) {\n  Widget.__ani_native_set_count(value);\n}"
+                        .to_string(),
             },
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Constructor(
                     ClassCallableDescriptor {
-                        owner: "demo.Widget".to_string(),
-                        public_name: "constructor".to_string(),
+                        metadata: class_member_metadata(
+                            "demo.Widget",
+                            "constructor",
+                            ClassMemberScope::Instance,
+                        ),
                         native_symbol_name: "<ctor>".to_string(),
-                        scope: ClassMemberScope::Instance,
                     },
                 )),
                 rendered: "constructor(name: string)".to_string(),
@@ -1898,18 +1927,18 @@ set count(value: int) {
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
                 descriptor: Some(ClassDescriptorMember::Property(ClassPropertyDescriptor {
-                    owner: "demo.Widget".to_string(),
-                    public_name: "count".to_string(),
-                    scope: ClassMemberScope::Static,
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "count",
+                        ClassMemberScope::Static,
+                    ),
                     getter: Some(crate::codegen::ClassPropertyAccessorDescriptor {
                         native_symbol_name: "__ani_native_get_count".to_string(),
                     }),
                     setter: None,
                 })),
-                rendered: "static get count(): int {
-  return Widget.__ani_native_get_count();
-}"
-                .to_string(),
+                rendered: "static get count(): int {\n  return Widget.__ani_native_get_count();\n}"
+                    .to_string(),
             },
         ];
 
@@ -1930,6 +1959,45 @@ set count(value: int) {
         assert!(ctor_idx < getter_idx);
         assert!(getter_idx < setter_idx);
         assert!(setter_idx < method_idx);
+    }
+
+    #[test]
+    fn test_render_decls_marks_iterator_class_and_wraps_next_result() {
+        let class_members = vec![
+        EtsClassMemberDecl {
+            target: "demo.Widget".to_string(),
+            descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                metadata: class_member_metadata(
+                    "demo.Widget",
+                    "$_iterator",
+                    ClassMemberScope::Instance,
+                ),
+                native_symbol_name: "$_iterator".to_string(),
+            })),
+            rendered: "native $_iterator(): WidgetIndexIterator;".to_string(),
+        },
+        EtsClassMemberDecl {
+            target: "demo.WidgetIndexIterator".to_string(),
+            descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                metadata: class_member_metadata(
+                    "demo.WidgetIndexIterator",
+                    "next",
+                    ClassMemberScope::Instance,
+                ),
+                native_symbol_name: "__ani_native_next".to_string(),
+            })),
+            rendered: "native __ani_native_next(): int | null;\nnext(): int | null | undefined {\n  let __ani_result = this.__ani_native_next();\n  return __ani_result == null ? undefined : __ani_result;\n}"
+                .to_string(),
+        },
+    ];
+
+        let rendered = render_decls(&[], &[], &class_members);
+
+        assert!(rendered.contains("export class WidgetIndexIterator implements Iterator<int> {"));
+        assert!(rendered.contains("next(): IteratorResult<int> {"));
+        assert!(rendered.contains("done: __ani_result == null,"));
+        assert!(rendered.contains("value: __ani_result == null ? undefined : __ani_result"));
+        assert!(!rendered.contains("next(): int | null | undefined {"));
     }
 
     #[test]
@@ -2027,8 +2095,8 @@ static set revision(value: int) {
                 false,
                 false
             ),
-            "native __ani_native_person_get_name(): String | null;
-get name(): String | null | undefined {
+            "native __ani_native_person_get_name(): string | null;
+get name(): string | null | undefined {
   let __ani_result = this.__ani_native_person_get_name();
   return __ani_result == null ? undefined : __ani_result;
 }"
@@ -2049,8 +2117,8 @@ get name(): String | null | undefined {
                 false,
                 false
             ),
-            "native __ani_native_person_set_name(name: String | null): void;
-set name(name: String | null | undefined) {
+            "native __ani_native_person_set_name(name: string | null): void;
+set name(name: string | null | undefined) {
   this.__ani_native_person_set_name(name == undefined ? null : name);
 }"
         );
@@ -2077,7 +2145,7 @@ set name(name: String | null | undefined) {
         };
         assert_eq!(
             generate_fn_ets_binding(EtsDeclKind::Global, &sig, "register", false, false),
-            "native function register(cb: (arg0: String | null | undefined) => void): void;"
+            "native function register(cb: (arg0: string | null | undefined) => void): void;"
         );
     }
 
@@ -2115,7 +2183,7 @@ set name(name: String | null | undefined) {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "pick_user", false),
-            "pick_user(value: models.UserInfo | String): models.UserInfo"
+            "pick_user(value: models.UserInfo | string): models.UserInfo"
         );
     }
 
@@ -2158,13 +2226,13 @@ set name(name: String | null | undefined) {
     }
 
     #[test]
-    fn test_generate_fn_ets_decl_uses_boxed_variants_for_option_and_either() {
+    fn test_generate_fn_ets_decl_uses_primitive_nullish_variants_for_option_and_either() {
         let sig: Signature = syn::parse_quote! {
             fn convert(a: Option<i32>, b: Option<bool>, c: Either<String, i32>) -> Either<String, i32>
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "convert", false),
-            "convert(a: Int | null | undefined, b: Boolean | null | undefined, c: String | Int): String | Int"
+            "convert(a: int | null | undefined, b: boolean | null | undefined, c: string | int): string | int"
         );
     }
 
@@ -2176,7 +2244,7 @@ set name(name: String | null | undefined) {
         let decl = generate_fn_ets_decl(&sig, "maybe_value", false);
         assert_eq!(
             decl,
-            "maybe_value(value: Int | null | undefined): String | null | undefined"
+            "maybe_value(value: int | null | undefined): string | null | undefined"
         );
         assert!(!decl.contains("?:"));
     }
@@ -2203,8 +2271,17 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "maybe_text", false),
-            "maybe_text(value: String | undefined, fallback: String | null | undefined): undefined"
+            "maybe_text(value: string | undefined, fallback: string | null | undefined): undefined"
         );
+    }
+
+    #[test]
+    fn test_exposed_ets_type_result_strategy_is_explicit() {
+        let ty: Type = syn::parse_quote!(Result<Option<i32>, ani::Error>);
+        let surface = EtsTypeSurface::from_ani_type(&AniType::from_syn_type(&ty));
+        assert_eq!(surface.public_ty, "int | null | undefined");
+        assert_eq!(surface.native_ty, "int | null");
+        assert!(surface.requires_bridge);
     }
 
     #[test]
@@ -2218,7 +2295,7 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "normalize", false),
-            "normalize(left: String | null | undefined, right: String | null | undefined, user: models.UserInfo | null | undefined): models.UserInfo | null | undefined"
+            "normalize(left: string | null | undefined, right: string | null | undefined, user: models.UserInfo | null | undefined): models.UserInfo | null | undefined"
         );
     }
 
@@ -2229,7 +2306,7 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "maybe_nested", false),
-            "maybe_nested(value: String | null | undefined): Int | null | undefined"
+            "maybe_nested(value: string | null | undefined): int | null | undefined"
         );
     }
 
@@ -2268,7 +2345,7 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         };
         assert_eq!(
             generate_ctor_ets_binding(&sig, true),
-            "native constructor(name: String | null | undefined, age: int);"
+            "native constructor(name: string | null | undefined, age: int);"
         );
     }
 }

@@ -35,7 +35,7 @@ function maybe_user_profile_result(flag: boolean): UserProfile | null | undefine
   let __ani_result = __ani_native_maybe_user_profile_result(flag);
   return __ani_result == null ? undefined : __ani_result;
 }
-export native function choose_user_profile(flag: boolean): UserProfile | String;
+export native function choose_user_profile(flag: boolean): UserProfile | string;
 export native function describe_user_profile(user: UserProfile): string;
 export native function make_user_profile(id: int, name: string, active: boolean): UserProfile;
 export native function make_user_profile_directory(): Map<string, UserProfile>;

@@ -5,10 +5,10 @@
 
 export native function create_by_type(type_code: int, int_val: int, str_val: string): string;
 export native function get_type_code(value_type: int): int;
-export native function handle_four_types(value: String | Int | Boolean | Double): string;
-export native function handle_string_or_int_either(value: String | Int): string;
-export native function handle_three_types(value: String | Int | Boolean): string;
-export native function return_either(use_string: boolean): String | Int;
+export native function handle_four_types(value: string | int | boolean | double): string;
+export native function handle_string_or_int_either(value: string | int): string;
+export native function handle_three_types(value: string | int | boolean): string;
+export native function return_either(use_string: boolean): string | int;
 
 
 
@@ -91,17 +91,17 @@ __assert_eq_string(
 );
 __assert_eq_string(
   "handle_string_or_int_either_int",
-  handle_string_or_int_either(new Int(7)),
+  handle_string_or_int_either(7),
   "Int: 7",
 );
 __assert_eq_string(
   "handle_three_types_bool",
-  handle_three_types(new Boolean(true)),
+  handle_three_types(true),
   "Boolean: true",
 );
 __assert_eq_string(
   "handle_four_types_double",
-  handle_four_types(new Double(3.5)),
+  handle_four_types(3.5),
   "Double: 3.5",
 );
 let eitherString = return_either(true) as String;

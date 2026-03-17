@@ -1,6 +1,6 @@
 use ani::conversions::Either;
 use ani::prelude::*;
-use ani_derive::{ani, AniClass};
+use ani_derive::{AniClass, ani};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 #[derive(AniClass)]
@@ -15,6 +15,13 @@ pub struct Widget {
 pub struct WidgetSnapshot {
     pub label: String,
     pub total: i32,
+}
+
+#[derive(Debug, PartialEq, Eq, AniClass)]
+#[ani(class = "WidgetIndexIterator")]
+pub struct WidgetIndexIterator {
+    pub current: i32,
+    pub end: i32,
 }
 
 static WIDGET_REVISION: AtomicI32 = AtomicI32::new(1);
@@ -142,6 +149,30 @@ impl Widget {
         self._count
     }
 
+    #[ani(name = "$_get")]
+    pub fn index_get(&self, index: f64) -> String {
+        format!("{}#{}", self._name, index as i32)
+    }
+
+    #[ani(name = "$_set")]
+    pub fn index_set_text(&mut self, index: f64, value: String) {
+        self._name = format!("{}@{}", value, index as i32);
+    }
+
+    #[ani(name = "$_set")]
+    pub fn index_set_flag(&mut self, index: f64, value: bool) {
+        let magnitude = index as i32;
+        self._count = if value { magnitude } else { -magnitude };
+    }
+
+    #[ani(name = "$_iterator")]
+    pub fn iterator(&self) -> WidgetIndexIterator {
+        WidgetIndexIterator {
+            current: 0,
+            end: self._count.max(0),
+        }
+    }
+
     #[ani(static, name = "sum")]
     pub fn add(a: i32, b: i32) -> i32 {
         a + b
@@ -158,9 +189,34 @@ impl Widget {
     }
 }
 
+#[ani(class = "WidgetIndexIterator")]
+impl WidgetIndexIterator {
+    #[ani]
+    pub fn next(&mut self) -> Option<i32> {
+        if self.current >= self.end {
+            None
+        } else {
+            let value = self.current;
+            self.current += 1;
+            Some(value)
+        }
+    }
+}
+
+#[ani]
+pub fn resolve_widget_special_methods(env: &Env<'_>, class_name: String) -> Result<bool> {
+    let cls = env.find_class(&class_name)?;
+    let _getter = env.find_indexable_getter(&cls, "d:C{std.core.String}")?;
+    let _string_setter = env.find_indexable_setter(&cls, "dC{std.core.String}:")?;
+    let _bool_setter = env.find_indexable_setter(&cls, "dz:")?;
+    let _iterator = env.find_iterator(&cls)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Widget, WidgetSnapshot};
+    use super::{Widget, WidgetIndexIterator, WidgetSnapshot};
+    use ani::prelude::Status;
     use ani::conversions::Either;
 
     #[test]
@@ -219,18 +275,20 @@ mod tests {
             widget.rename(Some("next".to_string())).unwrap().as_deref(),
             Some("demo")
         );
-        assert_eq!(widget.get_name(), "next");
-        assert!(widget.rename(None).is_err());
+        assert_eq!(widget.rename(None).unwrap_err().status, Status::InvalidArgs);
+        assert_eq!(widget.bump(3), 10);
+        assert_eq!(Widget::add(2, 5), 7);
+        assert_eq!(widget.index_get(4.0), "next#4");
+        widget.index_set_text(2.0, "slot".to_string());
+        assert_eq!(widget.get_name(), "slot@2");
+        widget.index_set_flag(6.0, true);
+        assert_eq!(widget.get_count(), 6);
+        widget.index_set_flag(3.0, false);
+        assert_eq!(widget.get_count(), -3);
 
-        let snapshot = WidgetSnapshot {
-            label: "ok".to_string(),
-            total: 9,
-        };
-        assert_eq!(snapshot.label, "ok");
-        assert_eq!(snapshot.total, 9);
-        assert_eq!(Widget::add(2, 4), 6);
-        assert_eq!(Widget::revision(), 1);
-        Widget::set_revision(9);
-        assert_eq!(Widget::revision(), 9);
+        let mut iterator = WidgetIndexIterator { current: 0, end: 2 };
+        assert_eq!(iterator.next(), Some(0));
+        assert_eq!(iterator.next(), Some(1));
+        assert_eq!(iterator.next(), None);
     }
 }

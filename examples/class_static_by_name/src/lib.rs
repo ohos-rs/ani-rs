@@ -57,7 +57,15 @@ pub fn static_method_sum_by_name_named(
 #[ani]
 pub fn static_method_flag_by_name_named(env: &Env<'_>, class_name: String) -> Result<bool> {
     let cls = env.find_class(&class_name)?;
-    env.call_static_method_by_name_boolean(&cls, "flag", Some(":z"))
+    env.call_static_method_by_name_boolean(&cls, "flag", None)
+}
+
+#[ani]
+pub fn static_method_tag_by_name_named(env: &Env<'_>, class_name: String) -> Result<String> {
+    let cls = env.find_class(&class_name)?;
+    let result = env.call_static_method_by_name_ref(&cls, "tag", None)?;
+    let result = unsafe { AniString::from_raw(result.into_raw() as ani::sys::ani_string) };
+    env.get_string(&result)
 }
 
 #[ani]
@@ -85,6 +93,13 @@ pub fn static_method_label_by_name_named(
 }
 
 #[ani]
+pub fn static_method_clear_by_name_named(env: &Env<'_>, class_name: String) -> Result<i32> {
+    let cls = env.find_class(&class_name)?;
+    env.call_static_method_by_name_void(&cls, "clearCount", None)?;
+    env.get_static_field_by_name_int(&cls, "COUNT")
+}
+
+#[ani]
 pub fn static_method_reset_by_name_named(
     env: &Env<'_>,
     class_name: String,
@@ -108,7 +123,9 @@ mod tests {
         let _ = static_ref_by_name_roundtrip_named;
         let _ = static_method_sum_by_name_named;
         let _ = static_method_flag_by_name_named;
+        let _ = static_method_tag_by_name_named;
         let _ = static_method_label_by_name_named;
+        let _ = static_method_clear_by_name_named;
         let _ = static_method_reset_by_name_named;
         assert_eq!(BY_NAME_HOST_CLASS, "arkvm_test.ByNameHost");
     }

@@ -28,17 +28,21 @@ export class Widget {
     return this.__ani_native_get_name();
   }
   static native sum(a: int, b: int): int;
+  native $_get(index: double): string;
+  native $_iterator(): WidgetIndexIterator;
+  native $_set(index: double, value: boolean): void;
+  native $_set(index: double, value: string): void;
   native bump(delta: int): int;
   native checked_snapshot(min_count: int): WidgetSnapshot;
-  native choose_snapshot(detailed: boolean): WidgetSnapshot | String;
+  native choose_snapshot(detailed: boolean): WidgetSnapshot | string;
   native describe(): string;
   native __ani_native_maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null;
   maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null | undefined {
     let __ani_result = this.__ani_native_maybe_checked_snapshot(include, min_count);
     return __ani_result == null ? undefined : __ani_result;
   }
-  native __ani_native_maybe_name(include: boolean): String | null;
-  maybe_name(include: boolean): String | null | undefined {
+  native __ani_native_maybe_name(include: boolean): string | null;
+  maybe_name(include: boolean): string | null | undefined {
     let __ani_result = this.__ani_native_maybe_name(include);
     return __ani_result == null ? undefined : __ani_result;
   }
@@ -47,19 +51,34 @@ export class Widget {
     let __ani_result = this.__ani_native_maybe_snapshot(include);
     return __ani_result == null ? undefined : __ani_result;
   }
-  native merge_snapshot_input(value: WidgetSnapshot | String): string;
-  native __ani_native_rename(name: String | null): String | null;
-  rename(name: String | null | undefined): String | null | undefined {
+  native merge_snapshot_input(value: WidgetSnapshot | string): string;
+  native __ani_native_rename(name: string | null): string | null;
+  rename(name: string | null | undefined): string | null | undefined {
     let __ani_result = this.__ani_native_rename(name == undefined ? null : name);
     return __ani_result == null ? undefined : __ani_result;
   }
   native snapshot(): WidgetSnapshot;
 }
 
+export class WidgetIndexIterator implements Iterator<int> {
+  current: int = 0;
+  end: int = 0;
+  native __ani_native_next(): int | null;
+  next(): IteratorResult<int> {
+    let __ani_result = this.__ani_native_next();
+    return {
+      done: __ani_result == null,
+      value: __ani_result == null ? undefined : __ani_result
+    };
+  }
+}
+
 export class WidgetSnapshot {
   label: string = "";
   total: int = 0;
 }
+
+export native function resolve_widget_special_methods(class_name: string): boolean;
 
 
 
@@ -177,10 +196,42 @@ __assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_int("Widget.bump", widget.bump(3), 8);
 __assert_eq_int("Widget.count_after_bump", widget.count, 8);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(renamed, 8)");
+__assert_eq_string("Widget.index_get", widget.$_get(4.0), "renamed#4");
+widget.$_set(2.0, "slot");
+__assert_eq_string("Widget.index_set_text_name", widget.name, "slot@2");
+widget.$_set(6.0, true);
+__assert_eq_int("Widget.index_set_flag_true", widget.count, 6);
+widget.$_set(3.0, false);
+__assert_eq_int("Widget.index_set_flag_false", widget.count, -3);
+let widgetIter = widget.$_iterator();
+let widgetIterFirst = widgetIter.next();
+__assert_true("Widget.iterator_negative_done", widgetIterFirst.done);
+__assert_true("Widget.iterator_negative_value", widgetIterFirst.value == undefined);
+let widgetIterEnd = widgetIter.next();
+__assert_true("Widget.iterator_negative_repeat_done", widgetIterEnd.done);
+__assert_true("Widget.iterator_negative_repeat_value", widgetIterEnd.value == undefined);
+widget.count = 4;
+let widgetIterPositive = widget.$_iterator();
+let widgetIterPositiveFirst = widgetIterPositive.next();
+__assert_true("Widget.iterator_positive_first_done", !widgetIterPositiveFirst.done);
+__assert_eq_int("Widget.iterator_positive_first_value", widgetIterPositiveFirst.value as int, 0);
+let widgetIterPositiveSecond = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_second_value", widgetIterPositiveSecond.value as int, 1);
+let widgetIterPositiveThird = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_third_value", widgetIterPositiveThird.value as int, 2);
+let widgetIterPositiveFourth = widgetIterPositive.next();
+__assert_eq_int("Widget.iterator_positive_fourth_value", widgetIterPositiveFourth.value as int, 3);
+let widgetIterPositiveEnd = widgetIterPositive.next();
+__assert_true("Widget.iterator_positive_end_done", widgetIterPositiveEnd.done);
+__assert_true("Widget.iterator_positive_end_value", widgetIterPositiveEnd.value == undefined);
 __assert_eq_int("Widget.sum", Widget.sum(2, 4), 6);
 __assert_eq_int("Widget.revision_initial", Widget.revision, 1);
 Widget.revision = 7;
 __assert_eq_int("Widget.revision_after_set", Widget.revision, 7);
+__assert_true(
+  "Widget.resolve_special_methods",
+  resolve_widget_special_methods("arkvm_test.Widget")
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

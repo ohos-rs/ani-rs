@@ -256,9 +256,9 @@ fn validate_property_slot_conflict(
     };
 
     let key = (
-        property_descriptor.owner.clone(),
-        property_descriptor.scope,
-        property_descriptor.public_name.clone(),
+        property_descriptor.metadata.owner.clone(),
+        property_descriptor.metadata.scope,
+        property_descriptor.metadata.public_name.clone(),
     );
 
     if let Some(existing) = property_slots.get_mut(&key) {

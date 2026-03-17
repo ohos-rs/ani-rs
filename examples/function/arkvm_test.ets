@@ -107,13 +107,40 @@ function noArgsOk(): string {
 function wrapValue(input: string): string {
   return "wrapped:" + input;
 }
+function recursiveString(target: string, current: string): string {
+  if (target == current) {
+    return current;
+  }
+  return recursiveString(target, current + "1");
+}
+let closureValue = "closure:";
+let closureFn = (input: string): string => {
+  return closureValue + input;
+};
+let nestedFn = (input: string): string => {
+  let prefix = "hello ";
+  let inner = (value: string): string => {
+    return prefix + value;
+  };
+  return inner(input);
+};
+let recursiveFn = (input: string): string => {
+  return recursiveString("hello1111111111", input);
+};
 clear_callback();
 __assert_true("has_callback_false", !has_callback());
 register_string_transformer(wrapValue);
 __assert_true("has_string_transformer_true", has_string_transformer());
-__assert_eq_string("transform_string", transform_string("ani"), "wrapped:ani");
+__assert_eq_string("transform_string_basic", transform_string("ani"), "wrapped:ani");
 __assert_eq_string("call_no_args_callback", call_no_args_callback(noArgsOk), "ok");
-__assert_eq_string("call_string_callback", call_string_callback(wrapValue, "ark"), "wrapped:ark");
+__assert_eq_string("call_string_callback_basic", call_string_callback(wrapValue, "ark"), "wrapped:ark");
+__assert_eq_string("call_string_callback_closure", call_string_callback(closureFn, "arkts"), "closure:arkts");
+__assert_eq_string("call_string_callback_nested", call_string_callback(nestedFn, "world"), "hello world");
+__assert_eq_string("call_string_callback_recursive", call_string_callback(recursiveFn, "hello"), "hello1111111111");
+register_string_transformer(closureFn);
+__assert_eq_string("transform_string_closure", transform_string("vm"), "closure:vm");
+register_string_transformer(nestedFn);
+__assert_eq_string("transform_string_nested", transform_string("arkvm"), "hello arkvm");
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

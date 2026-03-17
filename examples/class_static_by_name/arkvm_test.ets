@@ -5,10 +5,12 @@
 
 export native function static_field_by_name_roundtrip(cls: Object): int;
 export native function static_field_by_name_roundtrip_named(class_name: string): int;
+export native function static_method_clear_by_name_named(class_name: string): int;
 export native function static_method_flag_by_name_named(class_name: string): boolean;
 export native function static_method_label_by_name_named(class_name: string, prefix: string, suffix: string): string;
 export native function static_method_reset_by_name_named(class_name: string, value: int): int;
 export native function static_method_sum_by_name_named(class_name: string, a: int, b: int): int;
+export native function static_method_tag_by_name_named(class_name: string): string;
 export native function static_ref_by_name_roundtrip(cls: Object, value: Object): boolean;
 export native function static_ref_by_name_roundtrip_named(class_name: string, value: Object): boolean;
 
@@ -98,8 +100,16 @@ class ByNameHost {
     return a + b;
   }
 
+  static tag(): string {
+    return "by-name-tag";
+  }
+
   static label(prefix: string, suffix: string): string {
     return prefix + "-" + suffix;
+  }
+
+  static clearCount(): void {
+    ByNameHost.COUNT = 0;
   }
 
   static resetTo(value: int): void {
@@ -128,9 +138,19 @@ __assert_true(
   static_method_flag_by_name_named("arkvm_test.ByNameHost"),
 );
 __assert_eq_string(
+  "static_method_tag_by_name_named",
+  static_method_tag_by_name_named("arkvm_test.ByNameHost"),
+  "by-name-tag",
+);
+__assert_eq_string(
   "static_method_label_by_name_named",
   static_method_label_by_name_named("arkvm_test.ByNameHost", "left", "right"),
   "left-right",
+);
+__assert_eq_int(
+  "static_method_clear_by_name_named",
+  static_method_clear_by_name_named("arkvm_test.ByNameHost"),
+  0,
 );
 __assert_eq_int(
   "static_method_reset_by_name_named",

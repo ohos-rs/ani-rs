@@ -4,8 +4,8 @@
 //! This is not the same as an optional parameter (`param?: T`) and does not imply
 //! that the argument may be omitted at the call site.
 //!
-//! Primitive `Option<T>` values use boxed ArkTS wrapper classes, for example
-//! `Option<i32>` becomes `Int | null | undefined`.
+//! Primitive `Option<T>` values keep ArkTS primitive unions at the ETS boundary, for example
+//! `Option<i32>` becomes `int | null | undefined`.
 
 use ani_derive::ani;
 
@@ -17,11 +17,11 @@ use ani_derive::ani;
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_int(required: int, optional: Int | null | undefined): int;
+/// native function with_optional_int(required: int, optional: int | null | undefined): int;
 /// ```
 ///
 /// Mangling: X{C{std.core.Int}C{std.core.Null}U}:I
-/// `None` maps to `undefined`, and `Some(i32)` maps to boxed `Int`.
+/// `None` maps to `undefined`, and `Some(i32)` maps to `int` at the ETS boundary.
 #[ani]
 pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
     match optional {
@@ -34,7 +34,7 @@ pub fn with_optional_int(required: i32, optional: Option<i32>) -> i32 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_double(required: double, optional: Double | null | undefined): double;
+/// native function with_optional_double(required: double, optional: double | null | undefined): double;
 /// ```
 ///
 /// Mangling: DX{C{std.core.Double}C{std.core.Null}U}:D
@@ -50,7 +50,7 @@ pub fn with_optional_double(required: f64, optional: Option<f64>) -> f64 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_boolean(value: int, flag: Boolean | null | undefined): int;
+/// native function with_optional_boolean(value: int, flag: boolean | null | undefined): int;
 /// ```
 ///
 /// Mangling: IX{C{std.core.Boolean}C{std.core.Null}U}:I
@@ -70,7 +70,7 @@ pub fn with_optional_boolean(value: i32, flag: Option<bool>) -> i32 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_string(required: string, optional: String | null | undefined): string;
+/// native function with_optional_string(required: string, optional: string | null | undefined): string;
 /// ```
 ///
 /// Mangling: Lstd/core/String;X{C{std.core.String}C{std.core.Null}U}:Lstd/core/String;
@@ -93,9 +93,9 @@ pub fn with_optional_string(required: String, optional: Option<String>) -> Strin
 /// ```typescript
 /// native function with_multiple_optional(
 ///     a: int,
-///     b: Int | null | undefined,
-///     c: Int | null | undefined,
-///     d: Int | null | undefined
+///     b: int | null | undefined,
+///     c: int | null | undefined,
+///     d: int | null | undefined
 /// ): int;
 /// ```
 ///
@@ -113,7 +113,7 @@ pub fn with_multiple_optional(a: i32, b: Option<i32>, c: Option<i32>, d: Option<
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_long(required: long, optional: Long | null | undefined): long;
+/// native function with_optional_long(required: long, optional: long | null | undefined): long;
 /// ```
 #[ani]
 pub fn with_optional_long(required: i64, optional: Option<i64>) -> i64 {
@@ -127,7 +127,7 @@ pub fn with_optional_long(required: i64, optional: Option<i64>) -> i64 {
 ///
 /// Corresponding ArkTS definition:
 /// ```typescript
-/// native function with_optional_float(required: float, optional: Float | null | undefined): float;
+/// native function with_optional_float(required: float, optional: float | null | undefined): float;
 /// ```
 #[ani]
 pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
@@ -137,7 +137,7 @@ pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
     }
 }
 
-/// Return boxed optional int to exercise Option<T> return conversion.
+/// Return optional int to exercise Option<T> return conversion.
 #[ani]
 pub fn make_optional_int(use_value: bool) -> Option<i32> {
     if use_value {
