@@ -11,8 +11,8 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
-    ClassPropertyDescriptor, should_skip_in_signature,
+    ClassCallableDescriptor, ClassCallableSpecial, ClassDescriptorMember, ClassMemberMetadata,
+    ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
 };
 
 use super::ani_type::{
@@ -315,63 +315,45 @@ fn property_slot_sort_key(slot: &RenderedPropertySlot) -> (u8, String) {
     (scope_rank, slot.descriptor.metadata.public_name.clone())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct IteratorNextSurface {
-    item_ty: String,
-    native_ty: String,
-}
-
-fn parse_iterator_next_surface(member: &RenderedClassMember) -> Option<IteratorNextSurface> {
+fn iterator_factory_target(member: &RenderedClassMember) -> Option<&str> {
     let descriptor = member.descriptor.as_ref()?;
     let ClassDescriptorMember::Method(callable) = descriptor else {
         return None;
     };
-    if callable.metadata.scope != ClassMemberScope::Instance
-        || callable.metadata.public_name != "next"
-    {
-        return None;
+    match &callable.special {
+        ClassCallableSpecial::IteratorFactory { iterator_class } => Some(iterator_class.as_str()),
+        _ => None,
     }
-
-    let mut lines = member.rendered.lines();
-    let native_line = lines.next()?.trim();
-    let wrapper_line = lines.next()?.trim();
-
-    let native_ty = native_line
-        .strip_prefix("native __ani_native_next(): ")?
-        .strip_suffix(';')?
-        .to_string();
-    let wrapper_ty = wrapper_line.strip_prefix("next(): ")?.strip_suffix(" {")?;
-    if !wrapper_ty.ends_with(" | undefined") {
-        return None;
-    }
-
-    let item_ty = native_ty.strip_suffix(" | null")?.to_string();
-    Some(IteratorNextSurface { item_ty, native_ty })
 }
 
-fn iterator_item_type(class: &ClassNode) -> Option<String> {
-    class
-        .callable_members
-        .iter()
-        .find_map(parse_iterator_next_surface)
-        .map(|surface| surface.item_ty)
+fn iterator_next_item_type(class: &ClassNode) -> Option<&str> {
+    class.callable_members.iter().find_map(|member| {
+        let descriptor = member.descriptor.as_ref()?;
+        let ClassDescriptorMember::Method(callable) = descriptor else {
+            return None;
+        };
+        match &callable.special {
+            ClassCallableSpecial::IteratorNext { item_type } => Some(item_type.as_str()),
+            _ => None,
+        }
+    })
 }
 
-fn render_class_member(member: &RenderedClassMember, iterator_item_ty: Option<&str>) -> String {
-    let Some(item_ty) = iterator_item_ty else {
-        return member.rendered.clone();
-    };
-    let Some(surface) = parse_iterator_next_surface(member) else {
-        return member.rendered.clone();
-    };
-    if surface.item_ty != item_ty {
-        return member.rendered.clone();
+fn collect_iterator_factory_targets(
+    node: &NamespaceNode,
+    iterator_targets: &mut std::collections::BTreeSet<String>,
+) {
+    for class in node.classes.values() {
+        for member in &class.callable_members {
+            if let Some(target) = iterator_factory_target(member) {
+                iterator_targets.insert(target.to_string());
+            }
+        }
     }
 
-    format!(
-        "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  return {{\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  }};\n}}",
-        surface.native_ty, surface.item_ty,
-    )
+    for child in node.children.values() {
+        collect_iterator_factory_targets(child, iterator_targets);
+    }
 }
 
 fn ensure_exported_block(block: &str) -> String {
@@ -395,11 +377,22 @@ fn ensure_exported_block(block: &str) -> String {
     out
 }
 
-fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: &ClassNode) {
+fn render_class_block(
+    out: &mut String,
+    indent: usize,
+    class_target: &str,
+    class_name: &str,
+    class: &ClassNode,
+    iterator_targets: &std::collections::BTreeSet<String>,
+) {
     let pad = " ".repeat(indent);
-    let iterator_suffix = iterator_item_type(class)
-        .map(|item_ty| format!(" implements Iterator<{item_ty}>"))
-        .unwrap_or_default();
+    let iterator_suffix = if iterator_targets.contains(class_target) {
+        iterator_next_item_type(class)
+            .map(|item_ty| format!(" implements Iterator<{item_ty}>"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
         "{pad}export class {class_name}{iterator_suffix} {{\n"
     ));
@@ -437,7 +430,6 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
         }
     }
 
-    let iterator_item_ty = iterator_item_type(class);
     let mut other_members = class
         .callable_members
         .iter()
@@ -451,19 +443,37 @@ fn render_class_block(out: &mut String, indent: usize, class_name: &str, class: 
         .collect::<Vec<_>>();
     other_members.sort_by_key(class_member_sort_key);
     for member in other_members {
-        let rendered = render_class_member(&member, iterator_item_ty.as_deref());
-        push_indented_block(out, indent + 2, &rendered);
+        push_indented_block(out, indent + 2, &member.rendered);
     }
 
     out.push_str(&format!("{pad}}}\n"));
 }
 
-fn render_namespace(out: &mut String, indent: usize, name: &str, node: &NamespaceNode) {
+fn render_namespace(
+    out: &mut String,
+    indent: usize,
+    path: &str,
+    name: &str,
+    node: &NamespaceNode,
+    iterator_targets: &std::collections::BTreeSet<String>,
+) {
     let pad = " ".repeat(indent);
     out.push_str(&format!("{pad}export namespace {name} {{\n"));
 
     for (class_name, class) in &node.classes {
-        render_class_block(out, indent + 2, class_name, class);
+        let class_target = if path.is_empty() {
+            format!("{name}.{class_name}")
+        } else {
+            format!("{path}.{name}.{class_name}")
+        };
+        render_class_block(
+            out,
+            indent + 2,
+            &class_target,
+            class_name,
+            class,
+            iterator_targets,
+        );
     }
 
     let mut fns = node.functions.clone();
@@ -472,8 +482,20 @@ fn render_namespace(out: &mut String, indent: usize, name: &str, node: &Namespac
         push_indented_block(out, indent + 2, &ensure_exported_block(&function));
     }
 
+    let next_path = if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path}.{name}")
+    };
     for (child, child_node) in &node.children {
-        render_namespace(out, indent + 2, child, child_node);
+        render_namespace(
+            out,
+            indent + 2,
+            &next_path,
+            child,
+            child_node,
+            iterator_targets,
+        );
     }
 
     out.push_str(&format!("{pad}}}\n"));
@@ -517,17 +539,27 @@ fn render_decls(
         }
     }
 
+    let mut iterator_targets = std::collections::BTreeSet::new();
+    collect_iterator_factory_targets(&root, &mut iterator_targets);
+
     globals.sort();
     let mut has_content = false;
 
     for (class_name, class) in &root.classes {
         section_break(&mut out, &mut has_content);
-        render_class_block(&mut out, 0, class_name, class);
+        render_class_block(
+            &mut out,
+            0,
+            class_name,
+            class_name,
+            class,
+            &iterator_targets,
+        );
     }
 
     for (name, node) in &root.children {
         section_break(&mut out, &mut has_content);
-        render_namespace(&mut out, 0, name, node);
+        render_namespace(&mut out, 0, "", name, node, &iterator_targets);
     }
 
     if !globals.is_empty() {
@@ -718,6 +750,14 @@ fn function_type_to_ets(func_type: &FunctionType, context: EtsRenderContext) -> 
 
 fn ani_type_to_ets(ty: &AniType) -> String {
     ani_type_to_ets_in_context(ty, EtsRenderContext::public())
+}
+
+pub fn ets_public_type_for_ani_type(ty: &AniType) -> String {
+    EtsTypeSurface::from_ani_type(ty).public_ty
+}
+
+pub fn ets_public_type_for_syn_type(ty: &Type) -> String {
+    ets_public_type_for_ani_type(&AniType::from_syn_type(ty))
 }
 
 fn ani_type_to_ets_in_context(ty: &AniType, context: EtsRenderContext) -> String {
@@ -1332,6 +1372,24 @@ pub fn function_requires_nullish_bridge(sig: &Signature, skip_first: bool) -> bo
     params.iter().any(|param| param.requires_bridge) || ret.requires_bridge
 }
 
+pub fn generate_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> String {
+    let params = collect_exposed_params(sig, skip_first);
+    debug_assert!(
+        params.is_empty(),
+        "iterator next should not expose parameters"
+    );
+    let ret_spec = exposed_return_spec(sig);
+    let item_ty = ret_spec
+        .native_ty
+        .strip_suffix(" | null")
+        .unwrap_or(ret_spec.native_ty.as_str());
+
+    format!(
+        "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  return {{\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  }};\n}}",
+        ret_spec.native_ty, item_ty,
+    )
+}
+
 pub fn generate_fn_ets_binding(
     kind: EtsDeclKind,
     sig: &Signature,
@@ -1614,6 +1672,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "<ctor>".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native constructor(name: string, score: int);".to_string(),
             },
@@ -1660,6 +1719,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_label".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native label(): string;".to_string(),
             },
@@ -1672,6 +1732,7 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_species".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native species(): string;".to_string(),
             },
@@ -1706,6 +1767,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_mix_2".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native mix(left: int, right: int): int;".to_string(),
             },
@@ -1718,6 +1780,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_mix_3".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native mix(left: int, right: int, extra: int): int;".to_string(),
             },
@@ -1730,6 +1793,7 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_tag_1".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native tag(value: string): string;".to_string(),
             },
@@ -1742,6 +1806,7 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_tag_2".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native tag(value: string, suffix: string): string;".to_string(),
             },
@@ -1782,6 +1847,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_rename".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
@@ -1831,6 +1897,7 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
+                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "native constructor(name: string, total: int);".to_string(),
@@ -1845,6 +1912,7 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
+                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "native constructor(left: int, right: int);".to_string(),
@@ -1858,6 +1926,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "describe".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native describe(): string;".to_string(),
             },
@@ -1890,6 +1959,7 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_rename".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
@@ -1920,6 +1990,7 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
+                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "constructor(name: string)".to_string(),
@@ -1964,32 +2035,40 @@ get age(): int {
     #[test]
     fn test_render_decls_marks_iterator_class_and_wraps_next_result() {
         let class_members = vec![
-        EtsClassMemberDecl {
-            target: "demo.Widget".to_string(),
-            descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                metadata: class_member_metadata(
-                    "demo.Widget",
-                    "$_iterator",
-                    ClassMemberScope::Instance,
+            EtsClassMemberDecl {
+                target: "demo.Widget".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    metadata: class_member_metadata(
+                        "demo.Widget",
+                        "$_iterator",
+                        ClassMemberScope::Instance,
+                    ),
+                    native_symbol_name: "$_iterator".to_string(),
+                    special: ClassCallableSpecial::IteratorFactory {
+                        iterator_class: "demo.WidgetIndexIterator".to_string(),
+                    },
+                })),
+                rendered: "native $_iterator(): WidgetIndexIterator;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: "demo.WidgetIndexIterator".to_string(),
+                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    metadata: class_member_metadata(
+                        "demo.WidgetIndexIterator",
+                        "next",
+                        ClassMemberScope::Instance,
+                    ),
+                    native_symbol_name: "__ani_native_next".to_string(),
+                    special: ClassCallableSpecial::IteratorNext {
+                        item_type: "int".to_string(),
+                    },
+                })),
+                rendered: generate_iterator_next_ets_binding(
+                    &syn::parse_quote! { fn next() -> Option<i32> },
+                    false,
                 ),
-                native_symbol_name: "$_iterator".to_string(),
-            })),
-            rendered: "native $_iterator(): WidgetIndexIterator;".to_string(),
-        },
-        EtsClassMemberDecl {
-            target: "demo.WidgetIndexIterator".to_string(),
-            descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
-                metadata: class_member_metadata(
-                    "demo.WidgetIndexIterator",
-                    "next",
-                    ClassMemberScope::Instance,
-                ),
-                native_symbol_name: "__ani_native_next".to_string(),
-            })),
-            rendered: "native __ani_native_next(): int | null;\nnext(): int | null | undefined {\n  let __ani_result = this.__ani_native_next();\n  return __ani_result == null ? undefined : __ani_result;\n}"
-                .to_string(),
-        },
-    ];
+            },
+        ];
 
         let rendered = render_decls(&[], &[], &class_members);
 

@@ -1,6 +1,6 @@
 use ani::conversions::Either;
 use ani::prelude::*;
-use ani_derive::{AniClass, ani};
+use ani_derive::{ani, AniClass};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 #[derive(AniClass)]
@@ -216,8 +216,8 @@ pub fn resolve_widget_special_methods(env: &Env<'_>, class_name: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{Widget, WidgetIndexIterator, WidgetSnapshot};
-    use ani::prelude::Status;
     use ani::conversions::Either;
+    use ani::prelude::Status;
 
     #[test]
     fn widget_impl_methods_work() {

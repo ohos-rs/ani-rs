@@ -7,16 +7,18 @@ use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
-    ClassPropertyAccessorDescriptor, ClassPropertyDescriptor, ClassRegisterDescriptor,
-    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget, WrapperBindingKind,
-    emit_export_plan_ets, generate_register_fn, generate_wrapper,
+    ClassCallableDescriptor, ClassCallableSpecial, ClassDescriptorMember, ClassMemberMetadata,
+    ClassMemberScope, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
+    ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
+    WrapperBindingKind, emit_export_plan_ets, generate_register_fn, generate_wrapper,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
-    EtsDeclKind, class_to_descriptor, current_module_name, function_requires_nullish_bridge,
-    generate_ctor_signature, generate_fn_ets_binding, generate_fn_signature, module_to_descriptor,
-    namespace_to_descriptor, qualify_member_descriptor,
+    EtsDeclKind, ani_type::AniType, ani_type::WrapperType, class_to_descriptor,
+    current_module_name, ets_public_type_for_ani_type, ets_public_type_for_syn_type,
+    function_requires_nullish_bridge, generate_ctor_signature, generate_fn_ets_binding,
+    generate_fn_signature, module_to_descriptor, namespace_to_descriptor,
+    qualify_member_descriptor,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,7 +345,10 @@ pub(crate) struct AccessorConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ClassMemberPlanKind {
     Constructor,
-    Method { public_name: String },
+    Method {
+        public_name: String,
+        special: ClassCallableSpecial,
+    },
     Property(AccessorConfig),
 }
 
@@ -383,18 +388,21 @@ impl ResolvedClassMemberPlan {
                         scope: self.scope,
                     },
                     native_symbol_name: native_symbol_name.to_string(),
+                    special: ClassCallableSpecial::Regular,
                 })
             }
-            ClassMemberPlanKind::Method { public_name } => {
-                ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    metadata: ClassMemberMetadata {
-                        owner: self.owner.clone(),
-                        public_name: public_name.clone(),
-                        scope: self.scope,
-                    },
-                    native_symbol_name: native_symbol_name.to_string(),
-                })
-            }
+            ClassMemberPlanKind::Method {
+                public_name,
+                special,
+            } => ClassDescriptorMember::Method(ClassCallableDescriptor {
+                metadata: ClassMemberMetadata {
+                    owner: self.owner.clone(),
+                    public_name: public_name.clone(),
+                    scope: self.scope,
+                },
+                native_symbol_name: native_symbol_name.to_string(),
+                special: special.clone(),
+            }),
             ClassMemberPlanKind::Property(accessor) => {
                 let mut property = ClassPropertyDescriptor {
                     metadata: ClassMemberMetadata {
@@ -416,6 +424,55 @@ impl ResolvedClassMemberPlan {
             }
         }
     }
+}
+
+fn owner_short_name(owner: &str) -> &str {
+    owner.rsplit('.').next().unwrap_or(owner)
+}
+
+fn qualify_class_target(owner: &str, target: &str) -> String {
+    if target.contains('.') {
+        target.to_string()
+    } else if let Some((namespace, _class_name)) = owner.rsplit_once('.') {
+        format!("{namespace}.{target}")
+    } else {
+        target.to_string()
+    }
+}
+
+fn resolve_method_special(
+    owner: &str,
+    scope: ClassMemberScope,
+    ets_name: &str,
+    sig: &Signature,
+) -> ClassCallableSpecial {
+    if scope == ClassMemberScope::Instance && ets_name == "$_get" {
+        return ClassCallableSpecial::IndexGetter;
+    }
+    if scope == ClassMemberScope::Instance && ets_name == "$_set" {
+        return ClassCallableSpecial::IndexSetter;
+    }
+    if scope == ClassMemberScope::Instance && ets_name == "$_iterator" {
+        if let ReturnType::Type(_, ty) = &sig.output {
+            let iterator_class = ets_public_type_for_syn_type(ty);
+            return ClassCallableSpecial::IteratorFactory {
+                iterator_class: qualify_class_target(owner, &iterator_class),
+            };
+        }
+    }
+    if scope == ClassMemberScope::Instance
+        && ets_name == "next"
+        && owner_short_name(owner).ends_with("Iterator")
+    {
+        if let ReturnType::Type(_, ty) = &sig.output {
+            if let AniType::Wrapper(WrapperType::Option(inner)) = AniType::from_syn_type(ty) {
+                return ClassCallableSpecial::IteratorNext {
+                    item_type: ets_public_type_for_ani_type(&inner),
+                };
+            }
+        }
+    }
+    ClassCallableSpecial::Regular
 }
 
 pub(crate) fn resolve_accessor_config(
@@ -544,10 +601,11 @@ pub(crate) fn resolve_class_member_plan(
     }
 
     Ok(Some(ResolvedClassMemberPlan {
-        owner,
+        owner: owner.clone(),
         scope,
         kind: ClassMemberPlanKind::Method {
             public_name: ets_name.to_string(),
+            special: resolve_method_special(&owner, scope, ets_name, sig),
         },
     }))
 }
@@ -1110,6 +1168,7 @@ mod tests {
                     scope: ClassMemberScope::Instance,
                 },
                 native_symbol_name: "renamePublic".to_string(),
+                special: ClassCallableSpecial::Regular,
             })
         );
     }
@@ -1220,6 +1279,7 @@ mod tests {
                         scope: ClassMemberScope::Instance,
                     },
                     native_symbol_name: "<ctor>".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 }
             ))
         );
@@ -1295,6 +1355,7 @@ mod tests {
                         scope: ClassMemberScope::Instance,
                     },
                     native_symbol_name: "rename".to_string(),
+                    special: ClassCallableSpecial::Regular,
                 }
             ))
         );
@@ -1304,6 +1365,66 @@ mod tests {
                 owner: "Widget".to_string(),
                 scope: ClassMemberScope::Instance,
             })
+        );
+    }
+
+    #[test]
+    fn binding_plan_marks_iterator_factory_and_next_metadata() {
+        let iterator_attrs = BindgenAttrs {
+            class: Some("demo.Widget".to_string()),
+            name: Some("$_iterator".to_string()),
+            ..Default::default()
+        };
+        let iterator_sig: Signature = parse_quote! {
+            fn iterator() -> WidgetIndexIterator
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Instance,
+            },
+            signature_style: SignatureBindingStyle::Direct,
+        };
+        let iterator_plan =
+            resolve_binding_plan(&iterator_attrs, "iterator", &iterator_sig, binding_input)
+                .expect("iterator binding plan should resolve");
+        assert_eq!(
+            iterator_plan.class_descriptor,
+            Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                metadata: ClassMemberMetadata {
+                    owner: "demo.Widget".to_string(),
+                    public_name: "$_iterator".to_string(),
+                    scope: ClassMemberScope::Instance,
+                },
+                native_symbol_name: "$_iterator".to_string(),
+                special: ClassCallableSpecial::IteratorFactory {
+                    iterator_class: "demo.WidgetIndexIterator".to_string(),
+                },
+            }))
+        );
+
+        let next_attrs = BindgenAttrs {
+            class: Some("demo.WidgetIndexIterator".to_string()),
+            ..Default::default()
+        };
+        let next_sig: Signature = parse_quote! {
+            fn next() -> Option<i32>
+        };
+        let next_plan = resolve_binding_plan(&next_attrs, "next", &next_sig, binding_input)
+            .expect("next binding plan should resolve");
+        assert_eq!(
+            next_plan.class_descriptor,
+            Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                metadata: ClassMemberMetadata {
+                    owner: "demo.WidgetIndexIterator".to_string(),
+                    public_name: "next".to_string(),
+                    scope: ClassMemberScope::Instance,
+                },
+                native_symbol_name: "__ani_native_next".to_string(),
+                special: ClassCallableSpecial::IteratorNext {
+                    item_type: "int".to_string(),
+                },
+            }))
         );
     }
 

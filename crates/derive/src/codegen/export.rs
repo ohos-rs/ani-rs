@@ -4,7 +4,7 @@ use crate::codegen::RegisterTarget;
 use crate::types::{
     EtsDeclKind, emit_compile_ets_class_member, emit_compile_ets_rendered_decl,
     generate_ctor_ets_binding, generate_fn_ets_binding, generate_getter_ets_decl,
-    generate_setter_ets_decl,
+    generate_iterator_next_ets_binding, generate_setter_ets_decl,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -21,9 +21,19 @@ pub struct ClassMemberMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClassCallableSpecial {
+    Regular,
+    IndexGetter,
+    IndexSetter,
+    IteratorFactory { iterator_class: String },
+    IteratorNext { item_type: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClassCallableDescriptor {
     pub metadata: ClassMemberMetadata,
     pub native_symbol_name: String,
+    pub special: ClassCallableSpecial,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,13 +108,18 @@ impl ClassDescriptorMember {
 
 impl ClassCallableDescriptor {
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
-        generate_fn_ets_binding(
-            EtsDeclKind::Class,
-            sig,
-            &self.metadata.public_name,
-            skip_first,
-            self.metadata.scope.is_static(),
-        )
+        match &self.special {
+            ClassCallableSpecial::IteratorNext { .. } => {
+                generate_iterator_next_ets_binding(sig, skip_first)
+            }
+            _ => generate_fn_ets_binding(
+                EtsDeclKind::Class,
+                sig,
+                &self.metadata.public_name,
+                skip_first,
+                self.metadata.scope.is_static(),
+            ),
+        }
     }
 }
 
@@ -343,6 +358,7 @@ mod tests {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
             metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
             native_symbol_name: "__ani_native_rename".to_string(),
+            special: ClassCallableSpecial::Regular,
         });
 
         assert_eq!(
@@ -350,6 +366,7 @@ mod tests {
             ClassDescriptorMember::Method(ClassCallableDescriptor {
                 metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
                 native_symbol_name: "__ani_native_rename".to_string(),
+                special: ClassCallableSpecial::Regular,
             })
         );
     }
@@ -359,6 +376,7 @@ mod tests {
         let member = ClassDescriptorMember::Constructor(ClassCallableDescriptor {
             metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
             native_symbol_name: "<ctor>".to_string(),
+            special: ClassCallableSpecial::Regular,
         });
 
         assert_eq!(
@@ -366,6 +384,7 @@ mod tests {
             ClassDescriptorMember::Constructor(ClassCallableDescriptor {
                 metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
                 native_symbol_name: "<ctor>".to_string(),
+                special: ClassCallableSpecial::Regular,
             })
         );
     }
@@ -375,6 +394,7 @@ mod tests {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
             metadata: metadata("Widget", "sum", ClassMemberScope::Static),
             native_symbol_name: "sum".to_string(),
+            special: ClassCallableSpecial::Regular,
         });
         let sig: Signature = syn::parse_quote! {
             fn sum(a: i32, b: i32) -> i32
@@ -383,6 +403,25 @@ mod tests {
         assert_eq!(
             member.render_ets_binding(&sig, false),
             "static native sum(a: int, b: int): int;"
+        );
+    }
+
+    #[test]
+    fn class_method_descriptor_renders_iterator_next_binding() {
+        let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
+            metadata: metadata("WidgetIndexIterator", "next", ClassMemberScope::Instance),
+            native_symbol_name: "__ani_native_next".to_string(),
+            special: ClassCallableSpecial::IteratorNext {
+                item_type: "int".to_string(),
+            },
+        });
+        let sig: Signature = syn::parse_quote! {
+            fn next() -> Option<i32>
+        };
+
+        assert_eq!(
+            member.render_ets_binding(&sig, false),
+            "native __ani_native_next(): int | null;\nnext(): IteratorResult<int> {\n  let __ani_result = this.__ani_native_next();\n  return {\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  };\n}"
         );
     }
 
