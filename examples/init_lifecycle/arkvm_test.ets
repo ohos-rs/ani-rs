@@ -81,10 +81,10 @@ function __assert_throws(name: string, fn: () => void): void {
 
 console.log("[arkvm] smoke start: ani-example-init-lifecycle");
 let before = init_state();
-__assert_true("init_state_non_negative", before >= 0);
+__assert_eq_int("init_state_runs_all_registered_init_callbacks", before, 111);
 reset_init_state();
 let after = init_state();
-__assert_true("init_state_after_reset_non_negative", after >= 0);
+__assert_eq_int("init_state_reset_clears_runtime_flags", after, 0);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

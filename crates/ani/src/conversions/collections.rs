@@ -6,7 +6,7 @@
 //! - BTreeMap<K, V> <-> Map<K, V>
 //! - Tuple types
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::env::Env;
@@ -293,6 +293,81 @@ where
 }
 
 // ============================================================================
+impl<T: TypeInfo> TypeInfo for BTreeSet<T> {
+    fn type_signature() -> &'static str {
+        "Lstd/core/Set;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_object"
+    }
+}
+
+impl<'env, T> ToAni<'env> for BTreeSet<T>
+where
+    T: RecordValue<'env> + Ord,
+{
+    type Output = AniObject<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let set_class = env.find_class("std.core.Set")?;
+        let ctor = env.find_constructor(&set_class, "i:")?;
+        let ctor_args = [ani_value_int(0)];
+        let set = env.new_object(&set_class, &ctor, &ctor_args)?;
+
+        let add_method = find_method_no_signature(env, &set_class, "add")?;
+
+        for item in self {
+            let item_ref = item.to_record_ref(env)?;
+            let args = [ani_value_ref(item_ref.as_raw())];
+            let _ = env.call_ref_method(&set, &add_method, &args)?;
+        }
+
+        Ok(set)
+    }
+}
+
+impl<'env, T> FromAni<'env> for BTreeSet<T>
+where
+    T: RecordValue<'env> + Ord,
+{
+    type Input = sys::ani_object;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                "Null pointer: set",
+            ));
+        }
+
+        let set = unsafe { AniObject::from_raw(value) };
+        let set_class = env.find_class("std.core.Set")?;
+        let values_method = find_method_no_signature(env, &set_class, "values")?;
+        let values_iter_ref = env.call_ref_method(&set, &values_method, &[])?;
+        let values_iter =
+            unsafe { AniObject::from_raw(values_iter_ref.as_raw() as sys::ani_object) };
+        let values_iter_type = env.get_object_type(&values_iter)?;
+        let values_iter_class =
+            unsafe { AniClass::from_raw(values_iter_type.as_raw() as sys::ani_class) };
+        let next_method = find_method_no_signature(env, &values_iter_class, "next")?;
+        let mut out = BTreeSet::new();
+
+        loop {
+            let next_ref = env.call_ref_method(&values_iter, &next_method, &[])?;
+            let next = unsafe { AniObject::from_raw(next_ref.as_raw() as sys::ani_object) };
+            if env.get_property_by_name_boolean(&next, "done")? {
+                break;
+            }
+
+            let value_ref = env.get_property_by_name_ref(&next, "value")?;
+            let item = T::from_record_ref(env, &value_ref)?;
+            out.insert(item);
+        }
+
+        Ok(out)
+    }
+}
+
 // BTreeMap<K, V> - Map<K, V>
 // ============================================================================
 
@@ -603,6 +678,11 @@ mod tests {
     #[test]
     fn test_hashset_type_signature() {
         assert_eq!(<HashSet<String>>::type_signature(), "Lstd/core/Set;");
+    }
+
+    #[test]
+    fn test_btreeset_type_signature() {
+        assert_eq!(<BTreeSet<String>>::type_signature(), "Lstd/core/Set;");
     }
 
     #[test]

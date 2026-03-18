@@ -6,6 +6,7 @@
 export native function add_ref(ptr: long): int;
 export native function create_db_connection(connection_string: string): long;
 export native function create_native_resource(id: int, name: string): long;
+export native function create_native_resource_handle(id: int, name: string): long;
 export native function create_typed_ptr(type_id: int, value: long): long;
 export native function db_connect(ptr: long): boolean;
 export native function db_disconnect(ptr: long): void;
@@ -14,6 +15,8 @@ export native function db_get_query_count(ptr: long): int;
 export native function db_is_connected(ptr: long): boolean;
 export native function destroy_db_connection(ptr: long): void;
 export native function destroy_native_resource(ptr: long): void;
+export native function destroy_native_resource_handle(ptr: long): void;
+export native function get_native_resource_handle_id(ptr: long): int;
 export native function get_ptr_type_id(encoded: long): int;
 export native function get_ptr_value(encoded: long): long;
 export native function get_ref_count(ptr: long): int;
@@ -106,6 +109,11 @@ __assert_eq_string("get_resource_name", get_resource_name(res), "r1");
 set_resource_name(res, "r2");
 __assert_eq_string("set_resource_name", get_resource_name(res), "r2");
 destroy_native_resource(res);
+
+let typedRes = create_native_resource_handle(9, "typed");
+__assert_true("create_native_resource_typed_handle", typedRes > 0);
+__assert_eq_int("get_native_resource_handle_id", get_native_resource_handle_id(typedRes), 9);
+destroy_native_resource_handle(typedRes);
 
 let db = create_db_connection("db://local");
 __assert_true("db_handle", db > 0);

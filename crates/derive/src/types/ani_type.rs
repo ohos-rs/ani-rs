@@ -153,6 +153,8 @@ pub enum AniType {
     ArrayBuffer,
     /// Tuple type (for function arguments)
     Tuple(Vec<AniType>),
+    /// NativePointer<T> - typed native pointer wrapper exposed as ArkTS `long`
+    NativePointer(Box<Type>),
     /// Unknown/custom type - fallback to object
     Unknown(Box<Type>),
 }
@@ -349,6 +351,12 @@ impl AniType {
             return AniType::Either(either);
         }
 
+        if ident == "NativePointer" {
+            let inner = extract_first_generic_type(&segment.arguments)
+                .unwrap_or_else(|| syn::parse_quote!(()));
+            return AniType::NativePointer(Box::new(inner));
+        }
+
         // Check for Promise types
         if ident == "PromiseRaw" {
             return AniType::Promise(PromiseType {
@@ -364,8 +372,8 @@ impl AniType {
             }
         }
 
-        // HashSet<T> maps to ArkTS Set<T>
-        if ident == "HashSet" {
+        // HashSet<T> and BTreeSet<T> map to ArkTS Set<T>
+        if ident == "HashSet" || ident == "BTreeSet" {
             if let Some(set) = parse_set_type(&segment.arguments) {
                 return AniType::Set(set);
             }
@@ -542,6 +550,7 @@ impl AniType {
 
             AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
+            AniType::NativePointer(_) => quote! { ani::sys::ani_long },
             AniType::Unknown(_) => quote! { ani::sys::ani_object },
         }
     }
@@ -661,6 +670,7 @@ impl AniType {
             AniType::AniObject => "Lstd/core/Object;".to_string(),
 
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
+            AniType::NativePointer(_) => "J".to_string(),
             AniType::Tuple(elements) => {
                 // Tuple generates signature for each element
                 elements
@@ -682,6 +692,7 @@ impl AniType {
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
+            AniType::NativePointer(_) => PrimitiveType::I64.to_boxed_new_signature().to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
             AniType::Set(_) => to_new_style_ref_signature("Lstd/core/Set;"),
             AniType::Map(_) => to_new_style_ref_signature("Lstd/core/Map;"),
@@ -1168,9 +1179,17 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Set;");
 
+        let ty: Type = syn::parse_quote!(BTreeSet<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Set;");
+
         let ty: Type = syn::parse_quote!(BTreeMap<String, i32>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Map;");
+
+        let ty: Type = syn::parse_quote!(ani::conversions::NativePointer<crate::NativeResource>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "J");
 
         let ty: Type = syn::parse_quote!(Undefined);
 
@@ -1266,6 +1285,28 @@ mod tests {
         } else {
             panic!("Expected Set type");
         }
+
+        let ty: Type = syn::parse_quote!(BTreeSet<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::Set(set) = ani_type {
+            assert!(matches!(
+                set.element.as_ref(),
+                AniType::String(StringType::String)
+            ));
+        } else {
+            panic!("Expected Set type");
+        }
+    }
+
+    #[test]
+    fn test_parse_native_pointer() {
+        let ty: Type = syn::parse_quote!(ani::conversions::NativePointer<crate::NativeResource>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::NativePointer(inner) = ani_type {
+            assert_eq!(quote!(#inner).to_string(), "crate :: NativeResource");
+        } else {
+            panic!("Expected NativePointer type");
+        }
     }
 
     #[test]
@@ -1299,6 +1340,14 @@ mod tests {
         let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
         let set = AniType::from_syn_type(&set_ty);
         if let AniType::Set(set) = set {
+            assert!(matches!(set.element.as_ref(), AniType::Unknown(_)));
+        } else {
+            panic!("Expected Set type");
+        }
+
+        let btree_set_ty: Type = syn::parse_quote!(BTreeSet<crate::models::UserInfo>);
+        let btree_set = AniType::from_syn_type(&btree_set_ty);
+        if let AniType::Set(set) = btree_set {
             assert!(matches!(set.element.as_ref(), AniType::Unknown(_)));
         } else {
             panic!("Expected Set type");

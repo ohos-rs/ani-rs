@@ -411,10 +411,10 @@ ETS
     ani-example-init-lifecycle)
       cat <<'ETS'
 let before = __ANI_GENERATED__.init_state();
-__assert_true("init_state_non_negative", before >= 0);
+__assert_eq_int("init_state_runs_all_registered_init_callbacks", before, 111);
 __ANI_GENERATED__.reset_init_state();
 let after = __ANI_GENERATED__.init_state();
-__assert_true("init_state_after_reset_non_negative", after >= 0);
+__assert_eq_int("init_state_reset_clears_runtime_flags", after, 0);
 ETS
       ;;
     ani-example-interface)
@@ -923,6 +923,11 @@ inputWords.add("ets");
 __assert_eq_int("count_word_set", __ANI_GENERATED__.count_word_set(inputWords), 3);
 __assert_true("has_word_true", __ANI_GENERATED__.has_word(inputWords, "ani"));
 __assert_true("has_word_false", !__ANI_GENERATED__.has_word(inputWords, "missing"));
+let sortedWords = __ANI_GENERATED__.make_sorted_word_set();
+__assert_true("make_sorted_word_set_has_ani", sortedWords.has("ani"));
+__assert_true("make_sorted_word_set_has_arkts", sortedWords.has("arkts"));
+__assert_true("make_sorted_word_set_has_ets", sortedWords.has("ets"));
+__assert_eq_int("count_sorted_word_set", __ANI_GENERATED__.count_sorted_word_set(inputWords), 3);
 ETS
       ;;
 
@@ -1079,6 +1084,11 @@ __assert_eq_string("get_resource_name", __ANI_GENERATED__.get_resource_name(res)
 __ANI_GENERATED__.set_resource_name(res, "r2");
 __assert_eq_string("set_resource_name", __ANI_GENERATED__.get_resource_name(res), "r2");
 __ANI_GENERATED__.destroy_native_resource(res);
+
+let typedRes = __ANI_GENERATED__.create_native_resource_handle(9, "typed");
+__assert_true("create_native_resource_typed_handle", typedRes > 0);
+__assert_eq_int("get_native_resource_handle_id", __ANI_GENERATED__.get_native_resource_handle_id(typedRes), 9);
+__ANI_GENERATED__.destroy_native_resource_handle(typedRes);
 
 let db = __ANI_GENERATED__.create_db_connection("db://local");
 __assert_true("db_handle", db > 0);

@@ -4,7 +4,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
+use syn::{FnArg, ItemFn, ReturnType, Signature, Type};
 
 use crate::codegen::{
     ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
@@ -316,7 +316,7 @@ pub(crate) fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) ->
     match &func.sig.output {
         ReturnType::Default => Ok(()),
         ReturnType::Type(_, ty) if is_unit_type(ty) => Ok(()),
-        ReturnType::Type(_, ty) if is_ani_result_unit_type(ty) => Ok(()),
+        ReturnType::Type(_, ty) if is_result_unit_type(ty) => Ok(()),
         _ => Err(syn::Error::new_spanned(
             &func.sig.output,
             "#[ani(constructor)] return type must be `()` or `ani::error::Result<()>`",
@@ -518,7 +518,7 @@ fn resolve_class_op_kind(
             }
             match &sig.output {
                 ReturnType::Default => {}
-                ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => {}
+                ReturnType::Type(_, ty) if is_unit_type(ty) || is_result_unit_type(ty) => {}
                 _ => {
                     return Err(syn::Error::new_spanned(
                         &sig.output,
@@ -776,7 +776,7 @@ fn validate_getter_signature(
             &sig.output,
             "#[ani(getter)] must return a value or Result<T>",
         )),
-        ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => {
+        ReturnType::Type(_, ty) if is_unit_type(ty) || is_result_unit_type(ty) => {
             Err(syn::Error::new_spanned(
                 &sig.output,
                 "#[ani(getter)] must return a value or Result<T>",
@@ -799,7 +799,7 @@ fn validate_setter_signature(
 
     match &sig.output {
         ReturnType::Default => Ok(()),
-        ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => Ok(()),
+        ReturnType::Type(_, ty) if is_unit_type(ty) || is_result_unit_type(ty) => Ok(()),
         _ => Err(syn::Error::new_spanned(
             &sig.output,
             "#[ani(setter)] return type must be `()` or `ani::error::Result<()>`",
@@ -981,11 +981,11 @@ fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
     let return_kind = match &func.sig.output {
         ReturnType::Default => InitReturnKind::Unit,
         ReturnType::Type(_, ty) if is_unit_type(ty) => InitReturnKind::Unit,
-        ReturnType::Type(_, ty) if is_ani_result_unit_type(ty) => InitReturnKind::Result,
+        ReturnType::Type(_, ty) if is_result_unit_type(ty) => InitReturnKind::Result,
         _ => {
             return Err(syn::Error::new_spanned(
                 &func.sig.output,
-                "#[ani(init)] return type must be `()` or `ani::error::Result<()>`",
+                "#[ani(init)] return type must be `()`, `ani::error::Result<()>`, or `Result<(), ani::error::Error>`",
             ));
         }
     };
@@ -1016,29 +1016,15 @@ fn is_unit_type(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
 }
 
-fn is_ani_result_unit_type(ty: &Type) -> bool {
-    let Type::Path(type_path) = ty else {
-        return false;
-    };
-
-    let Some(segment) = type_path.path.segments.last() else {
-        return false;
-    };
-    if segment.ident != "Result" {
-        return false;
+fn is_result_unit_type(ty: &Type) -> bool {
+    match AniType::from_syn_type(ty) {
+        AniType::Wrapper(WrapperType::Result(inner)) => is_unit_ani_type(inner.as_ref()),
+        _ => false,
     }
+}
 
-    let PathArguments::AngleBracketed(args) = &segment.arguments else {
-        return false;
-    };
-    if args.args.len() != 1 {
-        return false;
-    }
-
-    let Some(GenericArgument::Type(ok_ty)) = args.args.first() else {
-        return false;
-    };
-    is_unit_type(ok_ty)
+fn is_unit_ani_type(ty: &AniType) -> bool {
+    matches!(ty, AniType::Unit)
 }
 
 #[cfg(test)]
@@ -1071,6 +1057,42 @@ mod tests {
             }
         };
         let parsed = validate_init_signature(&func).expect("should parse init signature");
+        assert_eq!(
+            parsed,
+            InitSignature {
+                accepts_env: true,
+                return_kind: InitReturnKind::Result
+            }
+        );
+    }
+
+    #[test]
+    fn init_supports_std_result_unit_error() {
+        let func: ItemFn = parse_quote! {
+            fn setup() -> Result<(), ani::error::Error> {
+                Ok(())
+            }
+        };
+        let parsed = validate_init_signature(&func).expect("should parse std result init signature");
+        assert_eq!(
+            parsed,
+            InitSignature {
+                accepts_env: false,
+                return_kind: InitReturnKind::Result
+            }
+        );
+    }
+
+    #[test]
+    fn init_supports_fully_qualified_std_result_unit_error() {
+        let func: ItemFn = parse_quote! {
+            fn setup(env: &Env<'_>) -> std::result::Result<(), ani::error::Error> {
+                let _ = env;
+                Ok(())
+            }
+        };
+        let parsed = validate_init_signature(&func)
+            .expect("should parse fully qualified std result init signature");
         assert_eq!(
             parsed,
             InitSignature {

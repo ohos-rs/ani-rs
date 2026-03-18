@@ -5,9 +5,9 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{FnArg, Pat, ReturnType, Type};
+use syn::{FnArg, Pat, ReturnType, Type, TypePath};
 
-use super::ani_type::{AniType, FunctionType, PrimitiveType, StringType, WrapperType};
+use super::ani_type::{AniType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias};
 
 // ============================================================================
 // ANI Type Mapping
@@ -70,62 +70,38 @@ fn generate_type_conversion(
     on_error_return: &TokenStream,
 ) -> TokenStream {
     match ani_type {
-        // Primitives - direct pass-through (except bool)
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
-
-        // String types
         AniType::String(s) => {
             generate_string_type_conversion(param_name, converted_name, s, on_error_return)
         }
-
-        // AniObject and nullish singleton handle-like types - use FromAni for strong typing
-        AniType::AniObject | AniType::Null | AniType::Undefined => {
+        _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
         }
-
-        // Option<T> - delegate to the typed runtime conversion instead of
-        // synthesizing partially-typed nullable handling in the macro.
-        AniType::Wrapper(WrapperType::Option(_)) => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // Either types
-        AniType::Either(_) => {
-            generate_either_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // Function types
-        AniType::Function(func_type) => generate_function_type_conversion(
-            param_name,
-            converted_name,
-            ty,
-            func_type,
-            on_error_return,
-        ),
-
-        // Ref<T> types
-        AniType::Wrapper(WrapperType::Ref(_)) => {
-            generate_ref_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // ArrayBuffer / ArrayBufferSlice - from_ani(ani_arraybuffer)
-        AniType::ArrayBuffer => {
-            generate_arraybuffer_param_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // Record/Set/Map containers - use FromAni on the typed Rust container.
-        AniType::Record(_) | AniType::Set(_) | AniType::Map(_) => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // Unknown/custom types - fallback to FromAni
-        AniType::Unknown(_) => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
-        }
-
-        // Default - pass-through
         _ => quote! { let #converted_name = #param_name; },
     }
+}
+
+fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
+    matches!(
+        ani_type,
+        AniType::AniObject
+            | AniType::Null
+            | AniType::Undefined
+            | AniType::Function(_)
+            | AniType::FnArgs(_)
+            | AniType::Either(_)
+            | AniType::Promise(_)
+            | AniType::Record(_)
+            | AniType::Set(_)
+            | AniType::Map(_)
+            | AniType::ArrayBuffer
+            | AniType::Tuple(_)
+            | AniType::NativePointer(_)
+            | AniType::Unknown(_)
+            | AniType::Wrapper(WrapperType::Option(_))
+            | AniType::Wrapper(WrapperType::Vec(_))
+            | AniType::Wrapper(WrapperType::Ref(_))
+    )
 }
 
 /// Generate primitive type conversion
@@ -180,106 +156,6 @@ fn generate_string_type_conversion(
             };
             let #converted_name = #converted_name.as_str();
         },
-    }
-}
-
-/// Generate Either type conversion code
-fn generate_either_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-    on_error_return: &TokenStream,
-) -> TokenStream {
-    let on_error = generate_param_conversion_error(on_error_return);
-    quote! {
-        let #converted_name: #ty = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            match ani::conversions::FromAni::from_ani(&env_wrapper, #param_name) {
-                Ok(v) => v,
-                Err(e) => { #on_error }
-            }
-        };
-    }
-}
-
-/// Generate Function/FunctionRef type conversion code
-fn generate_function_type_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-    func_type: &FunctionType,
-    on_error_return: &TokenStream,
-) -> TokenStream {
-    let on_error = generate_param_conversion_error(on_error_return);
-    match func_type {
-        FunctionType::Function { .. } => quote! {
-            let #converted_name: #ty = {
-                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                match ani::conversions::FromAni::from_ani(
-                    &env_wrapper,
-                    #param_name as ani::sys::ani_fn_object,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => { #on_error }
-                }
-            };
-        },
-        FunctionType::FunctionRef { .. } => quote! {
-            let #converted_name: #ty = {
-                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-                match ani::conversions::FromAni::from_ani(
-                    &env_wrapper,
-                    #param_name as ani::sys::ani_fn_object,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => { #on_error }
-                }
-            };
-        },
-    }
-}
-
-/// Generate Ref<T> type conversion code
-fn generate_ref_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-    on_error_return: &TokenStream,
-) -> TokenStream {
-    let on_error = generate_param_conversion_error(on_error_return);
-    quote! {
-        let #converted_name: #ty = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            match ani::conversions::FromAni::from_ani(
-                &env_wrapper,
-                #param_name as ani::sys::ani_object,
-            ) {
-                Ok(v) => v,
-                Err(e) => { #on_error }
-            }
-        };
-    }
-}
-
-/// Generate ArrayBuffer / ArrayBufferSlice parameter conversion (ani_arraybuffer -> Rust)
-fn generate_arraybuffer_param_conversion(
-    param_name: &Ident,
-    converted_name: &Ident,
-    ty: &Type,
-    on_error_return: &TokenStream,
-) -> TokenStream {
-    let on_error = generate_param_conversion_error(on_error_return);
-    quote! {
-        let #converted_name: #ty = {
-            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-            match ani::conversions::FromAni::from_ani(
-                &env_wrapper,
-                #param_name as ani::sys::ani_arraybuffer,
-            ) {
-                Ok(v) => v,
-                Err(e) => { #on_error }
-            }
-        };
     }
 }
 
@@ -366,19 +242,131 @@ fn extract_result_ok_type(ty: &Type) -> Option<&Type> {
     })
 }
 
-fn is_direct_passthrough_type(ty: &Type) -> bool {
-    let ty_str = quote::quote!(#ty).to_string();
-    ty_str.contains("ani_") || ty_str.contains("* mut") || ty_str.contains("*mut")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnknownTypeReturnStrategy {
+    DirectPassthrough,
+    ToAniNullFallback,
 }
 
-fn looks_like_custom_object_type(ty: &Type) -> bool {
-    let ty_str = quote::quote!(#ty).to_string();
-    ty_str.contains("::")
-        || ty_str
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false)
+fn unknown_type_return_strategy(ty: &Type) -> UnknownTypeReturnStrategy {
+    match ty {
+        Type::Ptr(_) => UnknownTypeReturnStrategy::DirectPassthrough,
+        Type::Reference(type_ref) => unknown_type_return_strategy(type_ref.elem.as_ref()),
+        Type::Paren(type_paren) => unknown_type_return_strategy(type_paren.elem.as_ref()),
+        Type::Group(type_group) => unknown_type_return_strategy(type_group.elem.as_ref()),
+        Type::Path(type_path) => classify_type_path_return_strategy(type_path),
+        _ => UnknownTypeReturnStrategy::DirectPassthrough,
+    }
+}
+
+fn classify_type_path_return_strategy(type_path: &TypePath) -> UnknownTypeReturnStrategy {
+    if is_raw_ani_type_path(type_path) {
+        return UnknownTypeReturnStrategy::DirectPassthrough;
+    }
+
+    let Some(last) = type_path.path.segments.last() else {
+        return UnknownTypeReturnStrategy::DirectPassthrough;
+    };
+    let ident = last.ident.to_string();
+
+    if is_known_runtime_wrapper_type(&ident) || is_custom_object_path(type_path) {
+        UnknownTypeReturnStrategy::ToAniNullFallback
+    } else {
+        UnknownTypeReturnStrategy::DirectPassthrough
+    }
+}
+
+fn is_raw_ani_type_path(type_path: &TypePath) -> bool {
+    type_path
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .map(|ident| ident.starts_with("ani_"))
+        .unwrap_or(false)
+}
+
+fn is_known_runtime_wrapper_type(ident: &str) -> bool {
+    matches!(
+        ident,
+        "AniRef"
+            | "AniObject"
+            | "AniClass"
+            | "AniType"
+            | "AniModule"
+            | "AniNamespace"
+            | "AniString"
+            | "AniEnum"
+            | "AniEnumItem"
+            | "AniTupleValue"
+            | "AniArray"
+            | "AniArrayRef"
+            | "AniFixedArray"
+            | "AniFixedArrayRef"
+            | "AniMethod"
+            | "AniStaticMethod"
+            | "AniField"
+            | "AniStaticField"
+            | "AniVariable"
+            | "AniResolver"
+            | "AnyValue"
+            | "TupleValue"
+            | "EnumItem"
+            | "GlobalRef"
+            | "WeakRef"
+    )
+}
+
+fn is_custom_object_path(type_path: &TypePath) -> bool {
+    let Some(last) = type_path.path.segments.last() else {
+        return false;
+    };
+    let ident = last.ident.to_string();
+    let qualified = type_path
+        .path
+        .segments
+        .iter()
+        .map(|seg| seg.ident.to_string())
+        .filter(|seg| !matches!(seg.as_str(), "crate" | "self" | "super"))
+        .collect::<Vec<_>>()
+        .join(".");
+
+    resolve_object_type_alias(&qualified)
+        .or_else(|| resolve_object_type_alias(&ident))
+        .is_some()
+        || is_custom_object_name(&ident)
+}
+
+fn is_custom_object_name(ident: &str) -> bool {
+    if ident.is_empty() {
+        return false;
+    }
+
+    let Some(first) = ident.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+
+    !matches!(
+        ident,
+        "String"
+            | "Option"
+            | "Result"
+            | "Vec"
+            | "Box"
+            | "Rc"
+            | "Arc"
+            | "HashMap"
+            | "BTreeMap"
+            | "HashSet"
+            | "BTreeSet"
+            | "VecDeque"
+            | "LinkedList"
+            | "Cow"
+            | "PathBuf"
+    )
 }
 
 fn generate_to_ani_conversion(
@@ -409,12 +397,44 @@ fn generate_to_ani_conversion(
     }
 }
 
+fn is_to_ani_object_raw_type(ani_type: &AniType) -> bool {
+    matches!(ani_type, AniType::Record(_) | AniType::Set(_) | AniType::Map(_))
+}
+
+fn is_to_ani_value_type(ani_type: &AniType) -> bool {
+    matches!(
+        ani_type,
+        AniType::String(StringType::Str)
+            | AniType::AniObject
+            | AniType::ArrayBuffer
+            | AniType::Either(_)
+            | AniType::Null
+            | AniType::Undefined
+            | AniType::Function(_)
+            | AniType::Tuple(_)
+            | AniType::Wrapper(WrapperType::Option(_))
+            | AniType::Wrapper(WrapperType::Vec(_))
+            | AniType::Wrapper(WrapperType::Ref(_))
+    )
+}
+
+fn is_to_ani_default_value_type(ani_type: &AniType) -> bool {
+    matches!(ani_type, AniType::NativePointer(_))
+}
+
+fn uses_null_pointer_error_fallback(ani_type: &AniType) -> bool {
+    matches!(ani_type, AniType::String(StringType::String) | AniType::Promise(_))
+        || is_to_ani_object_raw_type(ani_type)
+        || is_to_ani_value_type(ani_type)
+}
+
 fn generate_value_return_conversion(
     ani_type: &AniType,
     value_expr: TokenStream,
     original_ty: Option<&Type>,
 ) -> TokenStream {
     let on_null_error = generate_return_conversion_error(quote! { std::ptr::null_mut() });
+    let on_default_error = generate_return_conversion_error(quote! { Default::default() });
 
     match ani_type {
         AniType::Primitive(p) => match p {
@@ -425,7 +445,7 @@ fn generate_value_return_conversion(
             PrimitiveType::Char => quote! { (#value_expr as u32) as ani::sys::ani_char },
             _ => quote! { #value_expr },
         },
-        AniType::String(StringType::String) => quote! {
+        AniType::String(StringType::String | StringType::Str) => quote! {
             {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
                 match env_wrapper.create_string(&#value_expr) {
@@ -436,20 +456,22 @@ fn generate_value_return_conversion(
         },
         AniType::Unit => quote! {},
         AniType::Promise(_) => quote! { #value_expr.into_raw() },
-        AniType::Record(_) | AniType::Set(_) | AniType::Map(_) => {
+        _ if is_to_ani_object_raw_type(ani_type) => {
             generate_to_ani_conversion(value_expr, on_null_error, true)
         }
-        AniType::ArrayBuffer | AniType::Either(_) | AniType::Null | AniType::Undefined => {
+        _ if is_to_ani_default_value_type(ani_type) => {
+            generate_to_ani_conversion(value_expr, on_default_error, false)
+        }
+        _ if is_to_ani_value_type(ani_type) => {
             generate_to_ani_conversion(value_expr, on_null_error, false)
         }
         _ => {
             if let Some(original_ty) = original_ty {
-                if is_direct_passthrough_type(original_ty) {
-                    quote! { #value_expr }
-                } else if looks_like_custom_object_type(original_ty) {
-                    generate_to_ani_conversion(value_expr, on_null_error, false)
-                } else {
-                    quote! { #value_expr }
+                match unknown_type_return_strategy(original_ty) {
+                    UnknownTypeReturnStrategy::DirectPassthrough => quote! { #value_expr },
+                    UnknownTypeReturnStrategy::ToAniNullFallback => {
+                        generate_to_ani_conversion(value_expr, on_null_error, false)
+                    }
                 }
             } else {
                 generate_to_ani_conversion(value_expr, on_null_error, false)
@@ -462,23 +484,13 @@ fn generate_result_error_fallback(ok_type: &AniType, original_ok_ty: Option<&Typ
     match ok_type {
         AniType::Primitive(_) => quote! { Default::default() },
         AniType::Unit => quote! { return; },
-        AniType::String(StringType::String)
-        | AniType::Promise(_)
-        | AniType::Record(_)
-        | AniType::Set(_)
-        | AniType::Map(_)
-        | AniType::ArrayBuffer
-        | AniType::Either(_)
-        | AniType::Null
-        | AniType::Undefined => quote! { std::ptr::null_mut() },
+        _ if is_to_ani_default_value_type(ok_type) => quote! { Default::default() },
+        _ if uses_null_pointer_error_fallback(ok_type) => quote! { std::ptr::null_mut() },
         _ => {
             if let Some(original_ok_ty) = original_ok_ty {
-                if is_direct_passthrough_type(original_ok_ty)
-                    || !looks_like_custom_object_type(original_ok_ty)
-                {
-                    quote! { Default::default() }
-                } else {
-                    quote! { std::ptr::null_mut() }
+                match unknown_type_return_strategy(original_ok_ty) {
+                    UnknownTypeReturnStrategy::DirectPassthrough => quote! { Default::default() },
+                    UnknownTypeReturnStrategy::ToAniNullFallback => quote! { std::ptr::null_mut() },
                 }
             } else {
                 quote! { std::ptr::null_mut() }
@@ -561,6 +573,36 @@ mod tests {
     }
 
     #[test]
+    fn param_conversion_vec_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(items: Vec<String>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("Vec < String > as ani :: conversions :: FromAni"));
+        assert!(code.contains("items as < Vec < String > as ani :: conversions :: FromAni"));
+        assert!(code.contains(":: Input"));
+    }
+
+    #[test]
+    fn param_conversion_function_ref_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(cb: FunctionRef<(i32,), String>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
+        assert!(code.contains("cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
+        assert!(code.contains(":: Input"));
+    }
+
+    #[test]
+    fn param_conversion_arraybuffer_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(buffer: ArrayBuffer);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("ArrayBuffer as ani :: conversions :: FromAni"));
+        assert!(code.contains("buffer as < ArrayBuffer as ani :: conversions :: FromAni"));
+        assert!(code.contains(":: Input"));
+    }
+
+    #[test]
     fn return_conversion_string_throws_on_conversion_failure() {
         let output: ReturnType = parse_quote!(-> String);
         let code = generate_return_conversion(&output).to_string();
@@ -602,10 +644,94 @@ mod tests {
     }
 
     #[test]
+    fn return_conversion_option_uses_to_ani() {
+        let output: ReturnType = parse_quote!(-> Option<i32>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("Ok (v) => v"));
+    }
+
+    #[test]
+    fn result_option_return_conversion_uses_null_mut_fallback() {
+        let output: ReturnType = parse_quote!(-> Result<Option<i32>, ani::Error>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("null_mut"));
+        assert!(code.contains("ToAni :: to_ani"));
+    }
+
+    #[test]
+    fn return_conversion_function_uses_to_ani() {
+        let output: ReturnType = parse_quote!(-> Function<(), String>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("Ok (v) => v"));
+    }
+
+    #[test]
+    fn return_conversion_native_pointer_uses_typed_to_ani_with_default_fallback() {
+        let output: ReturnType = parse_quote!(-> ani::conversions::NativePointer<crate::NativeResource>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("Default :: default ()"));
+        assert!(!code.contains("null_mut"));
+    }
+
+    #[test]
+    fn result_native_pointer_return_conversion_uses_default_fallback() {
+        let output: ReturnType = parse_quote!(-> Result<ani::conversions::NativePointer<crate::NativeResource>, ani::Error>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("Default :: default ()"));
+        assert!(!code.contains("null_mut"));
+    }
+
+    #[test]
+    fn param_conversion_native_pointer_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(ptr: ani::conversions::NativePointer<crate::NativeResource>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("NativePointer < crate :: NativeResource > as ani :: conversions :: FromAni"));
+        assert!(code.contains(":: Input"));
+    }
+
+    #[test]
+    fn return_conversion_str_creates_string() {
+        let output: ReturnType = parse_quote!(-> &str);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("create_string"));
+        assert!(code.contains("into_raw"));
+    }
+
+    #[test]
     fn explicit_nullish_param_conversion_uses_typed_from_ani() {
         let arg: FnArg = parse_quote!(value: Undefined);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("Undefined as ani :: conversions :: FromAni"));
+    }
+
+
+    #[test]
+    fn return_conversion_raw_ani_object_is_passthrough() {
+        let output: ReturnType = parse_quote!(-> ani::sys::ani_object);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(!code.contains("ToAni :: to_ani"));
+        assert_eq!(code.trim(), "result");
+    }
+
+    #[test]
+    fn return_conversion_raw_pointer_is_passthrough() {
+        let output: ReturnType = parse_quote!(-> *mut core::ffi::c_void);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(!code.contains("ToAni :: to_ani"));
+        assert_eq!(code.trim(), "result");
+    }
+
+    #[test]
+    fn return_conversion_custom_object_uses_to_ani() {
+        let output: ReturnType = parse_quote!(-> crate::models::UserInfo);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("null_mut"));
     }
 }

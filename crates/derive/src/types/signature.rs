@@ -355,8 +355,16 @@ mod tests {
             "Lstd/core/Set;"
         );
         assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(BTreeSet<String>)),
+            "Lstd/core/Set;"
+        );
+        assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(BTreeMap<String, i32>)),
             "Lstd/core/Map;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::NativePointer<crate::NativeResource>)),
+            "J"
         );
     }
 
@@ -371,8 +379,16 @@ mod tests {
             "Lstd/core/Set;"
         );
         assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(BTreeSet<crate::models::UserInfo>)),
+            "Lstd/core/Set;"
+        );
+        assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>)),
             "Lstd/core/Map;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>)),
+            "J"
         );
     }
 

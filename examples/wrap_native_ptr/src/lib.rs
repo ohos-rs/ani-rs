@@ -3,6 +3,7 @@
 //! Demonstrates how to store and manage Rust object pointers in ArkTS objects
 //! This is the core technique for implementing class bindings
 
+use ani::conversions::NativePointer;
 use ani_derive::ani;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -49,6 +50,23 @@ pub fn create_native_resource(id: i32, name: String) -> i64 {
 }
 
 /// Get resource ID
+#[ani]
+pub fn create_native_resource_handle(id: i32, name: String) -> NativePointer<NativeResource> {
+    NativePointer::from_box(Box::new(NativeResource::new(id, name)))
+}
+
+#[ani]
+pub fn get_native_resource_handle_id(ptr: NativePointer<NativeResource>) -> i32 {
+    unsafe { ptr.as_ref().id }
+}
+
+#[ani]
+pub fn destroy_native_resource_handle(ptr: NativePointer<NativeResource>) {
+    unsafe {
+        let _ = ptr.into_box();
+    }
+}
+
 #[ani]
 pub fn get_resource_id(ptr: i64) -> i32 {
     if ptr == 0 {

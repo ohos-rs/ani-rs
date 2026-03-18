@@ -663,6 +663,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Set(_) => format!("new {}()", ets_type),
         AniType::Map(_) => format!("new {}()", ets_type),
         AniType::Tuple(_) => format!("[] as {}", ets_type),
+        AniType::NativePointer(_) => "0".to_string(),
         AniType::Either(_)
         | AniType::Promise(_)
         | AniType::AniObject
@@ -770,6 +771,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         }
         AniType::AniObject => "Object".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
+        AniType::NativePointer(_) => "long".to_string(),
         AniType::Tuple(items) => format!(
             "[{}]",
             items
@@ -2415,6 +2417,7 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         let record_ty: Type = syn::parse_quote!(HashMap<String, crate::models::UserInfo>);
         let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
         let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
+        let native_ptr_ty: Type = syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>);
         let result_ty: Type = syn::parse_quote!(Result<crate::models::UserInfo, ani::Error>);
         let either_ty: Type = syn::parse_quote!(Either<crate::models::UserInfo, String>);
 
@@ -2429,6 +2432,14 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         assert_eq!(
             EtsTypeSurface::from_syn_type(&map_ty).object_default_value,
             "new Map<string, models.UserInfo>()"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&native_ptr_ty).public_ty,
+            "long"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&native_ptr_ty).object_default_value,
+            "0"
         );
         assert_eq!(
             EtsTypeSurface::from_syn_type(&result_ty).object_default_value,
