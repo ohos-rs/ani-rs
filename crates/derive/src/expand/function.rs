@@ -7,8 +7,8 @@ use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, ItemFn, PathArguments, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassCallableSpecial, ClassDescriptorMember, ClassMemberMetadata,
-    ClassMemberScope, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
+    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
+    ClassOpDescriptor, ClassOpKind, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
     ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
     WrapperBindingKind, emit_export_plan_ets, generate_register_fn, generate_wrapper,
 };
@@ -93,6 +93,14 @@ impl BindingResolveInput {
             BindingOwner::Global => None,
             BindingOwner::Class { scope } => Some(scope),
         }
+    }
+
+    pub(crate) fn exposed_arg_count(self, sig: &Signature) -> usize {
+        sig.inputs
+            .iter()
+            .skip(if self.skip_first_arg() { 1 } else { 0 })
+            .filter(|arg| !crate::codegen::should_skip_in_signature(arg))
+            .count()
     }
 
     pub(crate) fn requires_nullish_bridge(self, sig: &Signature) -> bool {
@@ -345,11 +353,76 @@ pub(crate) struct AccessorConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ClassMemberPlanKind {
     Constructor,
-    Method {
-        public_name: String,
-        special: ClassCallableSpecial,
-    },
+    Method { public_name: String },
     Property(AccessorConfig),
+    Op(ClassOpKind),
+}
+
+impl ClassMemberPlanKind {
+    fn public_name(&self) -> &str {
+        match self {
+            ClassMemberPlanKind::Constructor => "constructor",
+            ClassMemberPlanKind::Method { public_name } => public_name.as_str(),
+            ClassMemberPlanKind::Property(accessor) => accessor.property_name.as_str(),
+            ClassMemberPlanKind::Op(kind) => kind.public_name(),
+        }
+    }
+
+    fn register_symbol_name(&self, ets_name: &str, requires_nullish_bridge: bool) -> String {
+        match self {
+            ClassMemberPlanKind::Constructor => "<ctor>".to_string(),
+            ClassMemberPlanKind::Property(_) => format!("__ani_native_{ets_name}"),
+            ClassMemberPlanKind::Method { .. } | ClassMemberPlanKind::Op(..)
+                if requires_nullish_bridge =>
+            {
+                format!("__ani_native_{ets_name}")
+            }
+            ClassMemberPlanKind::Method { .. } | ClassMemberPlanKind::Op(..) => {
+                ets_name.to_string()
+            }
+        }
+    }
+
+    fn descriptor(
+        &self,
+        metadata: ClassMemberMetadata,
+        native_symbol_name: &str,
+    ) -> ClassDescriptorMember {
+        match self {
+            ClassMemberPlanKind::Constructor => {
+                ClassDescriptorMember::Constructor(ClassCallableDescriptor {
+                    metadata,
+                    native_symbol_name: native_symbol_name.to_string(),
+                })
+            }
+            ClassMemberPlanKind::Method { .. } => {
+                ClassDescriptorMember::Method(ClassCallableDescriptor {
+                    metadata,
+                    native_symbol_name: native_symbol_name.to_string(),
+                })
+            }
+            ClassMemberPlanKind::Property(accessor) => {
+                let mut property = ClassPropertyDescriptor {
+                    metadata,
+                    getter: None,
+                    setter: None,
+                };
+                let accessor_descriptor = ClassPropertyAccessorDescriptor {
+                    native_symbol_name: native_symbol_name.to_string(),
+                };
+                match accessor.kind {
+                    AccessorKind::Getter => property.getter = Some(accessor_descriptor),
+                    AccessorKind::Setter => property.setter = Some(accessor_descriptor),
+                }
+                ClassDescriptorMember::Property(property)
+            }
+            ClassMemberPlanKind::Op(kind) => ClassDescriptorMember::Op(ClassOpDescriptor {
+                metadata,
+                native_symbol_name: native_symbol_name.to_string(),
+                kind: kind.clone(),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -367,62 +440,21 @@ impl ResolvedClassMemberPlan {
         }
     }
 
-    fn register_symbol_name(&self, ets_name: &str, requires_nullish_bridge: bool) -> String {
-        match self.kind {
-            ClassMemberPlanKind::Constructor => "<ctor>".to_string(),
-            ClassMemberPlanKind::Property(_) => format!("__ani_native_{ets_name}"),
-            ClassMemberPlanKind::Method { .. } if requires_nullish_bridge => {
-                format!("__ani_native_{ets_name}")
-            }
-            ClassMemberPlanKind::Method { .. } => ets_name.to_string(),
+    pub(crate) fn metadata(&self) -> ClassMemberMetadata {
+        ClassMemberMetadata {
+            owner: self.owner.clone(),
+            public_name: self.kind.public_name().to_string(),
+            scope: self.scope,
         }
     }
 
+    fn register_symbol_name(&self, ets_name: &str, requires_nullish_bridge: bool) -> String {
+        self.kind
+            .register_symbol_name(ets_name, requires_nullish_bridge)
+    }
+
     fn descriptor(&self, native_symbol_name: &str) -> ClassDescriptorMember {
-        match &self.kind {
-            ClassMemberPlanKind::Constructor => {
-                ClassDescriptorMember::Constructor(ClassCallableDescriptor {
-                    metadata: ClassMemberMetadata {
-                        owner: self.owner.clone(),
-                        public_name: "constructor".to_string(),
-                        scope: self.scope,
-                    },
-                    native_symbol_name: native_symbol_name.to_string(),
-                    special: ClassCallableSpecial::Regular,
-                })
-            }
-            ClassMemberPlanKind::Method {
-                public_name,
-                special,
-            } => ClassDescriptorMember::Method(ClassCallableDescriptor {
-                metadata: ClassMemberMetadata {
-                    owner: self.owner.clone(),
-                    public_name: public_name.clone(),
-                    scope: self.scope,
-                },
-                native_symbol_name: native_symbol_name.to_string(),
-                special: special.clone(),
-            }),
-            ClassMemberPlanKind::Property(accessor) => {
-                let mut property = ClassPropertyDescriptor {
-                    metadata: ClassMemberMetadata {
-                        owner: self.owner.clone(),
-                        public_name: accessor.property_name.clone(),
-                        scope: self.scope,
-                    },
-                    getter: None,
-                    setter: None,
-                };
-                let accessor_descriptor = ClassPropertyAccessorDescriptor {
-                    native_symbol_name: native_symbol_name.to_string(),
-                };
-                match accessor.kind {
-                    AccessorKind::Getter => property.getter = Some(accessor_descriptor),
-                    AccessorKind::Setter => property.setter = Some(accessor_descriptor),
-                }
-                ClassDescriptorMember::Property(property)
-            }
-        }
+        self.kind.descriptor(self.metadata(), native_symbol_name)
     }
 }
 
@@ -440,39 +472,119 @@ fn qualify_class_target(owner: &str, target: &str) -> String {
     }
 }
 
-fn resolve_method_special(
+fn resolve_class_op_kind(
     owner: &str,
-    scope: ClassMemberScope,
     ets_name: &str,
     sig: &Signature,
-) -> ClassCallableSpecial {
-    if scope == ClassMemberScope::Instance && ets_name == "$_get" {
-        return ClassCallableSpecial::IndexGetter;
-    }
-    if scope == ClassMemberScope::Instance && ets_name == "$_set" {
-        return ClassCallableSpecial::IndexSetter;
-    }
-    if scope == ClassMemberScope::Instance && ets_name == "$_iterator" {
-        if let ReturnType::Type(_, ty) = &sig.output {
-            let iterator_class = ets_public_type_for_syn_type(ty);
-            return ClassCallableSpecial::IteratorFactory {
-                iterator_class: qualify_class_target(owner, &iterator_class),
-            };
+    binding_input: BindingResolveInput,
+) -> syn::Result<Option<ClassOpKind>> {
+    let is_class_op_name = matches!(ets_name, "$_get" | "$_set" | "$_iterator");
+    if binding_input.class_scope() != Some(ClassMemberScope::Instance) {
+        if is_class_op_name {
+            return Err(syn::Error::new_spanned(
+                sig,
+                format!("#[ani(name = \"{ets_name}\")] is only valid on instance class members"),
+            ));
         }
+        return Ok(None);
     }
-    if scope == ClassMemberScope::Instance
-        && ets_name == "next"
-        && owner_short_name(owner).ends_with("Iterator")
-    {
-        if let ReturnType::Type(_, ty) = &sig.output {
-            if let AniType::Wrapper(WrapperType::Option(inner)) = AniType::from_syn_type(ty) {
-                return ClassCallableSpecial::IteratorNext {
-                    item_type: ets_public_type_for_ani_type(&inner),
-                };
+
+    let kind = match ets_name {
+        "$_get" => {
+            let arg_count = binding_input.exposed_arg_count(sig);
+            if arg_count != 1 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "#[ani(name = \"$_get\")] requires exactly one exposed index parameter",
+                ));
+            }
+            match &sig.output {
+                ReturnType::Default => {
+                    return Err(syn::Error::new_spanned(
+                        sig,
+                        "#[ani(name = \"$_get\")] must return a value",
+                    ));
+                }
+                ReturnType::Type(_, _) => ClassOpKind::IndexGetter,
             }
         }
-    }
-    ClassCallableSpecial::Regular
+        "$_set" => {
+            let arg_count = binding_input.exposed_arg_count(sig);
+            if arg_count != 2 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "#[ani(name = \"$_set\")] requires exactly two exposed parameters: index and value",
+                ));
+            }
+            match &sig.output {
+                ReturnType::Default => {}
+                ReturnType::Type(_, ty) if is_unit_type(ty) || is_ani_result_unit_type(ty) => {}
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        &sig.output,
+                        "#[ani(name = \"$_set\")] return type must be `()` or `ani::error::Result<()>`",
+                    ));
+                }
+            }
+            ClassOpKind::IndexSetter
+        }
+        "$_iterator" => {
+            let arg_count = binding_input.exposed_arg_count(sig);
+            if arg_count != 0 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "#[ani(name = \"$_iterator\")] cannot expose parameters",
+                ));
+            }
+            let ReturnType::Type(_, ty) = &sig.output else {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "#[ani(name = \"$_iterator\")] must return an iterator class object",
+                ));
+            };
+            let ani_type = AniType::from_syn_type(ty);
+            match ani_type {
+                AniType::Unknown(_) => ClassOpKind::IteratorFactory {
+                    iterator_class: qualify_class_target(owner, &ets_public_type_for_syn_type(ty)),
+                },
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        ty,
+                        "#[ani(name = \"$_iterator\")] return type must be a concrete iterator class",
+                    ));
+                }
+            }
+        }
+        "next" if owner_short_name(owner).ends_with("Iterator") => {
+            let arg_count = binding_input.exposed_arg_count(sig);
+            if arg_count != 0 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "iterator next() cannot expose parameters",
+                ));
+            }
+            let ReturnType::Type(_, ty) = &sig.output else {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "iterator next() must return Option<T>",
+                ));
+            };
+            match AniType::from_syn_type(ty) {
+                AniType::Wrapper(WrapperType::Option(inner)) => ClassOpKind::IteratorNext {
+                    item_type: ets_public_type_for_ani_type(&inner),
+                },
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        ty,
+                        "iterator next() must return Option<T>",
+                    ));
+                }
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    Ok(Some(kind))
 }
 
 pub(crate) fn resolve_accessor_config(
@@ -509,8 +621,8 @@ pub(crate) fn resolve_accessor_config(
         ));
     }
     match kind {
-        AccessorKind::Getter => validate_getter_signature(sig, binding_input.skip_first_arg())?,
-        AccessorKind::Setter => validate_setter_signature(sig, binding_input.skip_first_arg())?,
+        AccessorKind::Getter => validate_getter_signature(sig, binding_input)?,
+        AccessorKind::Setter => validate_setter_signature(sig, binding_input)?,
     }
 
     let property_name = if explicit_name.trim().is_empty() {
@@ -600,12 +712,19 @@ pub(crate) fn resolve_class_member_plan(
         }));
     }
 
+    if let Some(kind) = resolve_class_op_kind(&owner, ets_name, sig, binding_input)? {
+        return Ok(Some(ResolvedClassMemberPlan {
+            owner,
+            scope,
+            kind: ClassMemberPlanKind::Op(kind),
+        }));
+    }
+
     Ok(Some(ResolvedClassMemberPlan {
-        owner: owner.clone(),
+        owner,
         scope,
         kind: ClassMemberPlanKind::Method {
             public_name: ets_name.to_string(),
-            special: resolve_method_special(&owner, scope, ets_name, sig),
         },
     }))
 }
@@ -641,8 +760,11 @@ fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
     }
 }
 
-fn validate_getter_signature(sig: &Signature, skip_first: bool) -> syn::Result<()> {
-    if exposed_arg_count(sig, skip_first) != 0 {
+fn validate_getter_signature(
+    sig: &Signature,
+    binding_input: BindingResolveInput,
+) -> syn::Result<()> {
+    if binding_input.exposed_arg_count(sig) != 0 {
         return Err(syn::Error::new_spanned(
             sig,
             "#[ani(getter)] must not expose any ArkTS parameters",
@@ -664,8 +786,11 @@ fn validate_getter_signature(sig: &Signature, skip_first: bool) -> syn::Result<(
     }
 }
 
-fn validate_setter_signature(sig: &Signature, skip_first: bool) -> syn::Result<()> {
-    if exposed_arg_count(sig, skip_first) != 1 {
+fn validate_setter_signature(
+    sig: &Signature,
+    binding_input: BindingResolveInput,
+) -> syn::Result<()> {
+    if binding_input.exposed_arg_count(sig) != 1 {
         return Err(syn::Error::new_spanned(
             sig,
             "#[ani(setter)] must expose exactly one ArkTS parameter",
@@ -680,14 +805,6 @@ fn validate_setter_signature(sig: &Signature, skip_first: bool) -> syn::Result<(
             "#[ani(setter)] return type must be `()` or `ani::error::Result<()>`",
         )),
     }
-}
-
-fn exposed_arg_count(sig: &Signature, skip_first: bool) -> usize {
-    sig.inputs
-        .iter()
-        .skip(if skip_first { 1 } else { 0 })
-        .filter(|arg| !crate::codegen::should_skip_in_signature(arg))
-        .count()
 }
 
 fn infer_accessor_property_name(rust_name: &str, kind: AccessorKind) -> String {
@@ -1026,6 +1143,22 @@ mod tests {
     }
 
     #[test]
+    fn binding_input_computes_exposed_arg_count_from_signature_style() {
+        let sig: Signature = parse_quote! {
+            fn rename(&self, value: String)
+        };
+        let input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Instance,
+            },
+            signature_style: SignatureBindingStyle::SkipRustReceiver,
+        };
+
+        assert_eq!(input.exposed_arg_count(&sig), 1);
+    }
+
+    #[test]
     fn binding_input_computes_native_signatures_and_bridge_policy() {
         let method_sig: Signature = parse_quote! {
             fn rename(&self, value: Option<String>) -> Option<String>
@@ -1168,9 +1301,43 @@ mod tests {
                     scope: ClassMemberScope::Instance,
                 },
                 native_symbol_name: "renamePublic".to_string(),
-                special: ClassCallableSpecial::Regular,
             })
         );
+    }
+
+    #[test]
+    fn class_member_plan_metadata_uses_kind_public_name() {
+        let property_plan = ResolvedClassMemberPlan {
+            owner: "Widget".to_string(),
+            scope: ClassMemberScope::Static,
+            kind: ClassMemberPlanKind::Property(AccessorConfig {
+                kind: AccessorKind::Getter,
+                property_name: "value".to_string(),
+            }),
+        };
+        let op_plan = ResolvedClassMemberPlan {
+            owner: "WidgetIndexIterator".to_string(),
+            scope: ClassMemberScope::Instance,
+            kind: ClassMemberPlanKind::Op(ClassOpKind::IteratorNext {
+                item_type: "int".to_string(),
+            }),
+        };
+        let ctor_plan = ResolvedClassMemberPlan {
+            owner: "Widget".to_string(),
+            scope: ClassMemberScope::Instance,
+            kind: ClassMemberPlanKind::Constructor,
+        };
+
+        assert_eq!(
+            property_plan.metadata(),
+            ClassMemberMetadata {
+                owner: "Widget".to_string(),
+                public_name: "value".to_string(),
+                scope: ClassMemberScope::Static,
+            }
+        );
+        assert_eq!(op_plan.metadata().public_name, "next");
+        assert_eq!(ctor_plan.metadata().public_name, "constructor");
     }
 
     #[test]
@@ -1279,7 +1446,6 @@ mod tests {
                         scope: ClassMemberScope::Instance,
                     },
                     native_symbol_name: "<ctor>".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 }
             ))
         );
@@ -1355,7 +1521,6 @@ mod tests {
                         scope: ClassMemberScope::Instance,
                     },
                     native_symbol_name: "rename".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 }
             ))
         );
@@ -1365,6 +1530,111 @@ mod tests {
                 owner: "Widget".to_string(),
                 scope: ClassMemberScope::Instance,
             })
+        );
+    }
+
+    #[test]
+    fn special_method_validation_rejects_bad_iterator_and_index_signatures() {
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Instance,
+            },
+            signature_style: SignatureBindingStyle::Direct,
+        };
+
+        let bad_get_attrs = BindgenAttrs {
+            class: Some("demo.Widget".to_string()),
+            name: Some("$_get".to_string()),
+            ..Default::default()
+        };
+        let bad_get_sig: Signature = parse_quote! {
+            fn index_get(left: i32, right: i32) -> i32
+        };
+        let bad_get_err =
+            resolve_binding_plan(&bad_get_attrs, "index_get", &bad_get_sig, binding_input)
+                .expect_err("$_get with wrong arity should fail");
+        assert!(
+            bad_get_err
+                .to_string()
+                .contains("exactly one exposed index parameter")
+        );
+
+        let bad_iterator_attrs = BindgenAttrs {
+            class: Some("demo.Widget".to_string()),
+            name: Some("$_iterator".to_string()),
+            ..Default::default()
+        };
+        let bad_iterator_sig: Signature = parse_quote! {
+            fn iterator() -> i32
+        };
+        let bad_iterator_err = resolve_binding_plan(
+            &bad_iterator_attrs,
+            "iterator",
+            &bad_iterator_sig,
+            binding_input,
+        )
+        .expect_err("$_iterator returning primitive should fail");
+        assert!(
+            bad_iterator_err
+                .to_string()
+                .contains("concrete iterator class")
+        );
+
+        let bad_next_attrs = BindgenAttrs {
+            class: Some("demo.WidgetIndexIterator".to_string()),
+            ..Default::default()
+        };
+        let bad_next_sig: Signature = parse_quote! {
+            fn next() -> i32
+        };
+        let bad_next_err =
+            resolve_binding_plan(&bad_next_attrs, "next", &bad_next_sig, binding_input)
+                .expect_err("iterator next without Option should fail");
+        assert!(bad_next_err.to_string().contains("must return Option<T>"));
+
+        let bad_set_attrs = BindgenAttrs {
+            class: Some("demo.Widget".to_string()),
+            name: Some("$_set".to_string()),
+            ..Default::default()
+        };
+        let bad_set_sig: Signature = parse_quote! {
+            fn index_set(index: i32, value: i32) -> i32
+        };
+        let bad_set_err =
+            resolve_binding_plan(&bad_set_attrs, "index_set", &bad_set_sig, binding_input)
+                .expect_err("$_set returning a value should fail");
+        assert!(
+            bad_set_err
+                .to_string()
+                .contains("return type must be `()` or `ani::error::Result<()>`")
+        );
+    }
+
+    #[test]
+    fn special_method_validation_rejects_static_class_op_names() {
+        let attrs = BindgenAttrs {
+            class: Some("demo.Widget".to_string()),
+            name: Some("$_iterator".to_string()),
+            is_static: true,
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote! {
+            fn iterator() -> WidgetIndexIterator
+        };
+        let binding_input = BindingResolveInput {
+            callable_kind: CallableKind::Function,
+            owner: BindingOwner::Class {
+                scope: ClassMemberScope::Static,
+            },
+            signature_style: SignatureBindingStyle::Direct,
+        };
+
+        let err = resolve_binding_plan(&attrs, "iterator", &sig, binding_input)
+            .expect_err("static class ops should be rejected");
+        assert!(
+            err.to_string()
+                .contains("only valid on instance class members")
         );
     }
 
@@ -1390,14 +1660,14 @@ mod tests {
                 .expect("iterator binding plan should resolve");
         assert_eq!(
             iterator_plan.class_descriptor,
-            Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+            Some(ClassDescriptorMember::Op(ClassOpDescriptor {
                 metadata: ClassMemberMetadata {
                     owner: "demo.Widget".to_string(),
                     public_name: "$_iterator".to_string(),
                     scope: ClassMemberScope::Instance,
                 },
                 native_symbol_name: "$_iterator".to_string(),
-                special: ClassCallableSpecial::IteratorFactory {
+                kind: ClassOpKind::IteratorFactory {
                     iterator_class: "demo.WidgetIndexIterator".to_string(),
                 },
             }))
@@ -1414,14 +1684,14 @@ mod tests {
             .expect("next binding plan should resolve");
         assert_eq!(
             next_plan.class_descriptor,
-            Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+            Some(ClassDescriptorMember::Op(ClassOpDescriptor {
                 metadata: ClassMemberMetadata {
                     owner: "demo.WidgetIndexIterator".to_string(),
                     public_name: "next".to_string(),
                     scope: ClassMemberScope::Instance,
                 },
                 native_symbol_name: "__ani_native_next".to_string(),
-                special: ClassCallableSpecial::IteratorNext {
+                kind: ClassOpKind::IteratorNext {
                     item_type: "int".to_string(),
                 },
             }))

@@ -20,9 +20,8 @@ pub struct ClassMemberMetadata {
     pub scope: ClassMemberScope,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ClassCallableSpecial {
-    Regular,
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ClassOpKind {
     IndexGetter,
     IndexSetter,
     IteratorFactory { iterator_class: String },
@@ -33,7 +32,13 @@ pub enum ClassCallableSpecial {
 pub struct ClassCallableDescriptor {
     pub metadata: ClassMemberMetadata,
     pub native_symbol_name: String,
-    pub special: ClassCallableSpecial,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassOpDescriptor {
+    pub metadata: ClassMemberMetadata,
+    pub native_symbol_name: String,
+    pub kind: ClassOpKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,16 +59,31 @@ pub struct ClassRegisterDescriptor {
     pub scope: ClassMemberScope,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClassMemberRenderGroup {
+    Constructor,
+    Property,
+    Callable,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClassDescriptorMember {
     Constructor(ClassCallableDescriptor),
     Method(ClassCallableDescriptor),
     Property(ClassPropertyDescriptor),
+    Op(ClassOpDescriptor),
 }
 
 impl ClassMemberScope {
     pub fn is_static(self) -> bool {
         matches!(self, ClassMemberScope::Static)
+    }
+
+    pub fn sort_rank(self) -> u8 {
+        match self {
+            ClassMemberScope::Static => 0,
+            ClassMemberScope::Instance => 1,
+        }
     }
 }
 
@@ -81,16 +101,69 @@ impl ClassMemberMetadata {
 }
 
 impl ClassDescriptorMember {
-    pub fn register_descriptor(&self) -> ClassRegisterDescriptor {
+    pub fn metadata(&self) -> &ClassMemberMetadata {
         match self {
             ClassDescriptorMember::Constructor(descriptor)
-            | ClassDescriptorMember::Method(descriptor) => {
-                descriptor.metadata.register_descriptor()
-            }
-            ClassDescriptorMember::Property(descriptor) => {
-                descriptor.metadata.register_descriptor()
+            | ClassDescriptorMember::Method(descriptor) => &descriptor.metadata,
+            ClassDescriptorMember::Property(descriptor) => &descriptor.metadata,
+            ClassDescriptorMember::Op(descriptor) => &descriptor.metadata,
+        }
+    }
+
+    pub fn render_group(&self) -> ClassMemberRenderGroup {
+        match self {
+            ClassDescriptorMember::Constructor(_) => ClassMemberRenderGroup::Constructor,
+            ClassDescriptorMember::Property(_) => ClassMemberRenderGroup::Property,
+            ClassDescriptorMember::Method(_) | ClassDescriptorMember::Op(_) => {
+                ClassMemberRenderGroup::Callable
             }
         }
+    }
+
+    pub fn property(&self) -> Option<&ClassPropertyDescriptor> {
+        match self {
+            ClassDescriptorMember::Property(descriptor) => Some(descriptor),
+            _ => None,
+        }
+    }
+
+    pub fn op_kind(&self) -> Option<&ClassOpKind> {
+        match self {
+            ClassDescriptorMember::Op(descriptor) => Some(&descriptor.kind),
+            _ => None,
+        }
+    }
+
+    pub fn iterator_factory_target(&self) -> Option<&str> {
+        self.op_kind()
+            .and_then(ClassOpKind::iterator_factory_target)
+    }
+
+    pub fn iterator_next_item_type(&self) -> Option<&str> {
+        self.op_kind()
+            .and_then(ClassOpKind::iterator_next_item_type)
+    }
+
+    pub fn is_constructor(&self) -> bool {
+        matches!(self.render_group(), ClassMemberRenderGroup::Constructor)
+    }
+
+    pub fn class_sort_key(&self, rendered: &str) -> (u8, u8, String, String) {
+        let group_rank = match self.render_group() {
+            ClassMemberRenderGroup::Constructor => 0,
+            ClassMemberRenderGroup::Property => 1,
+            ClassMemberRenderGroup::Callable => 2,
+        };
+        (
+            group_rank,
+            self.metadata().scope.sort_rank(),
+            self.metadata().public_name.clone(),
+            rendered.to_string(),
+        )
+    }
+
+    pub fn register_descriptor(&self) -> ClassRegisterDescriptor {
+        self.metadata().register_descriptor()
     }
 
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
@@ -102,16 +175,27 @@ impl ClassDescriptorMember {
             ClassDescriptorMember::Property(descriptor) => {
                 descriptor.render_ets_binding(sig, skip_first)
             }
+            ClassDescriptorMember::Op(descriptor) => descriptor.render_ets_binding(sig, skip_first),
         }
     }
 }
 
 impl ClassCallableDescriptor {
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
-        match &self.special {
-            ClassCallableSpecial::IteratorNext { .. } => {
-                generate_iterator_next_ets_binding(sig, skip_first)
-            }
+        generate_fn_ets_binding(
+            EtsDeclKind::Class,
+            sig,
+            &self.metadata.public_name,
+            skip_first,
+            self.metadata.scope.is_static(),
+        )
+    }
+}
+
+impl ClassOpDescriptor {
+    pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
+        match &self.kind {
+            ClassOpKind::IteratorNext { .. } => generate_iterator_next_ets_binding(sig, skip_first),
             _ => generate_fn_ets_binding(
                 EtsDeclKind::Class,
                 sig,
@@ -123,7 +207,51 @@ impl ClassCallableDescriptor {
     }
 }
 
+impl ClassOpKind {
+    pub fn public_name(&self) -> &str {
+        match self {
+            ClassOpKind::IndexGetter => "$_get",
+            ClassOpKind::IndexSetter => "$_set",
+            ClassOpKind::IteratorFactory { .. } => "$_iterator",
+            ClassOpKind::IteratorNext { .. } => "next",
+        }
+    }
+
+    pub fn iterator_factory_target(&self) -> Option<&str> {
+        match self {
+            ClassOpKind::IteratorFactory { iterator_class } => Some(iterator_class.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn iterator_next_item_type(&self) -> Option<&str> {
+        match self {
+            ClassOpKind::IteratorNext { item_type } => Some(item_type.as_str()),
+            _ => None,
+        }
+    }
+}
+
 impl ClassPropertyDescriptor {
+    pub fn slot_key(&self) -> (ClassMemberScope, String) {
+        (self.metadata.scope, self.metadata.public_name.clone())
+    }
+
+    pub fn sort_key(&self) -> (u8, String) {
+        (
+            self.metadata.scope.sort_rank(),
+            self.metadata.public_name.clone(),
+        )
+    }
+
+    pub fn slot_seed(&self) -> ClassPropertyDescriptor {
+        ClassPropertyDescriptor {
+            metadata: self.metadata.clone(),
+            getter: None,
+            setter: None,
+        }
+    }
+
     pub fn merge(&mut self, other: &ClassPropertyDescriptor) -> Result<(), String> {
         if self.metadata != other.metadata {
             return Err("property descriptor targets do not match".to_string());
@@ -322,6 +450,45 @@ mod tests {
     }
 
     #[test]
+    fn property_descriptor_reports_slot_key_and_sort_key() {
+        let property = ClassPropertyDescriptor {
+            metadata: metadata("demo.Widget", "count", ClassMemberScope::Static),
+            getter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: "__ani_native_get_count".to_string(),
+            }),
+            setter: None,
+        };
+
+        assert_eq!(
+            property.slot_key(),
+            (ClassMemberScope::Static, "count".to_string())
+        );
+        assert_eq!(property.sort_key(), (0, "count".to_string()));
+    }
+
+    #[test]
+    fn property_descriptor_slot_seed_clears_accessors() {
+        let property = ClassPropertyDescriptor {
+            metadata: metadata("demo.Widget", "count", ClassMemberScope::Instance),
+            getter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: "__ani_native_get_count".to_string(),
+            }),
+            setter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: "__ani_native_set_count".to_string(),
+            }),
+        };
+
+        assert_eq!(
+            property.slot_seed(),
+            ClassPropertyDescriptor {
+                metadata: metadata("demo.Widget", "count", ClassMemberScope::Instance),
+                getter: None,
+                setter: None,
+            }
+        );
+    }
+
+    #[test]
     fn class_member_metadata_computes_register_descriptor() {
         let metadata = metadata("demo.Widget", "count", ClassMemberScope::Static);
 
@@ -345,6 +512,19 @@ mod tests {
         });
 
         assert_eq!(
+            member.metadata(),
+            &metadata("demo.Widget", "count", ClassMemberScope::Static)
+        );
+        assert_eq!(
+            member
+                .property()
+                .map(|property| property.metadata.public_name.as_str()),
+            Some("count")
+        );
+        assert_eq!(member.op_kind(), None);
+        assert!(!member.is_constructor());
+        assert_eq!(member.class_sort_key("static get count(): int").0, 1);
+        assert_eq!(
             member.register_descriptor(),
             ClassRegisterDescriptor {
                 owner: "demo.Widget".to_string(),
@@ -358,7 +538,6 @@ mod tests {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
             metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
             native_symbol_name: "__ani_native_rename".to_string(),
-            special: ClassCallableSpecial::Regular,
         });
 
         assert_eq!(
@@ -366,7 +545,6 @@ mod tests {
             ClassDescriptorMember::Method(ClassCallableDescriptor {
                 metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
                 native_symbol_name: "__ani_native_rename".to_string(),
-                special: ClassCallableSpecial::Regular,
             })
         );
     }
@@ -376,17 +554,75 @@ mod tests {
         let member = ClassDescriptorMember::Constructor(ClassCallableDescriptor {
             metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
             native_symbol_name: "<ctor>".to_string(),
-            special: ClassCallableSpecial::Regular,
         });
 
+        assert!(member.is_constructor());
+        assert_eq!(member.property(), None);
         assert_eq!(
             member,
             ClassDescriptorMember::Constructor(ClassCallableDescriptor {
                 metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
                 native_symbol_name: "<ctor>".to_string(),
-                special: ClassCallableSpecial::Regular,
             })
         );
+    }
+
+    #[test]
+    fn class_op_kind_helpers_report_public_names_and_iterator_metadata() {
+        let iterator = ClassOpKind::IteratorFactory {
+            iterator_class: "demo.WidgetIndexIterator".to_string(),
+        };
+        let next = ClassOpKind::IteratorNext {
+            item_type: "int".to_string(),
+        };
+
+        assert_eq!(ClassOpKind::IndexGetter.public_name(), "$_get");
+        assert_eq!(ClassOpKind::IndexSetter.public_name(), "$_set");
+        assert_eq!(iterator.public_name(), "$_iterator");
+        assert_eq!(
+            iterator.iterator_factory_target(),
+            Some("demo.WidgetIndexIterator")
+        );
+        assert_eq!(iterator.iterator_next_item_type(), None);
+        assert_eq!(next.public_name(), "next");
+        assert_eq!(next.iterator_factory_target(), None);
+        assert_eq!(next.iterator_next_item_type(), Some("int"));
+    }
+
+    #[test]
+    fn class_descriptor_member_reports_iterator_metadata() {
+        let factory = ClassDescriptorMember::Op(ClassOpDescriptor {
+            metadata: metadata("demo.Widget", "$_iterator", ClassMemberScope::Instance),
+            native_symbol_name: "$_iterator".to_string(),
+            kind: ClassOpKind::IteratorFactory {
+                iterator_class: "demo.WidgetIndexIterator".to_string(),
+            },
+        });
+        let next = ClassDescriptorMember::Op(ClassOpDescriptor {
+            metadata: metadata(
+                "demo.WidgetIndexIterator",
+                "next",
+                ClassMemberScope::Instance,
+            ),
+            native_symbol_name: "__ani_native_next".to_string(),
+            kind: ClassOpKind::IteratorNext {
+                item_type: "int".to_string(),
+            },
+        });
+        let method = ClassDescriptorMember::Method(ClassCallableDescriptor {
+            metadata: metadata("demo.Widget", "rename", ClassMemberScope::Instance),
+            native_symbol_name: "rename".to_string(),
+        });
+
+        assert_eq!(
+            factory.iterator_factory_target(),
+            Some("demo.WidgetIndexIterator")
+        );
+        assert_eq!(factory.iterator_next_item_type(), None);
+        assert_eq!(next.iterator_factory_target(), None);
+        assert_eq!(next.iterator_next_item_type(), Some("int"));
+        assert_eq!(method.iterator_factory_target(), None);
+        assert_eq!(method.iterator_next_item_type(), None);
     }
 
     #[test]
@@ -394,12 +630,18 @@ mod tests {
         let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
             metadata: metadata("Widget", "sum", ClassMemberScope::Static),
             native_symbol_name: "sum".to_string(),
-            special: ClassCallableSpecial::Regular,
         });
         let sig: Signature = syn::parse_quote! {
             fn sum(a: i32, b: i32) -> i32
         };
 
+        assert_eq!(member.render_group(), ClassMemberRenderGroup::Callable);
+        assert_eq!(
+            member
+                .class_sort_key("static native sum(a: int, b: int): int;")
+                .0,
+            2
+        );
         assert_eq!(
             member.render_ets_binding(&sig, false),
             "static native sum(a: int, b: int): int;"
@@ -407,11 +649,11 @@ mod tests {
     }
 
     #[test]
-    fn class_method_descriptor_renders_iterator_next_binding() {
-        let member = ClassDescriptorMember::Method(ClassCallableDescriptor {
+    fn class_op_descriptor_renders_iterator_next_binding() {
+        let member = ClassDescriptorMember::Op(ClassOpDescriptor {
             metadata: metadata("WidgetIndexIterator", "next", ClassMemberScope::Instance),
             native_symbol_name: "__ani_native_next".to_string(),
-            special: ClassCallableSpecial::IteratorNext {
+            kind: ClassOpKind::IteratorNext {
                 item_type: "int".to_string(),
             },
         });
@@ -419,9 +661,67 @@ mod tests {
             fn next() -> Option<i32>
         };
 
+        assert_eq!(member.render_group(), ClassMemberRenderGroup::Callable);
+        assert_eq!(
+            member
+                .op_kind()
+                .and_then(ClassOpKind::iterator_next_item_type),
+            Some("int")
+        );
+        assert!(!member.is_constructor());
         assert_eq!(
             member.render_ets_binding(&sig, false),
             "native __ani_native_next(): int | null;\nnext(): IteratorResult<int> {\n  let __ani_result = this.__ani_native_next();\n  return {\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  };\n}"
+        );
+    }
+
+    #[test]
+    fn class_descriptor_reports_class_sort_key() {
+        let ctor = ClassDescriptorMember::Constructor(ClassCallableDescriptor {
+            metadata: metadata("Widget", "constructor", ClassMemberScope::Instance),
+            native_symbol_name: "<ctor>".to_string(),
+        });
+        let property = ClassDescriptorMember::Property(ClassPropertyDescriptor {
+            metadata: metadata("Widget", "count", ClassMemberScope::Static),
+            getter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: "__ani_native_get_count".to_string(),
+            }),
+            setter: None,
+        });
+        let method = ClassDescriptorMember::Method(ClassCallableDescriptor {
+            metadata: metadata("Widget", "rename", ClassMemberScope::Instance),
+            native_symbol_name: "__ani_native_rename".to_string(),
+        });
+
+        assert_eq!(ctor.render_group(), ClassMemberRenderGroup::Constructor);
+        assert_eq!(property.render_group(), ClassMemberRenderGroup::Property);
+        assert_eq!(method.render_group(), ClassMemberRenderGroup::Callable);
+        assert_eq!(
+            ctor.class_sort_key("constructor(name: string)"),
+            (
+                0,
+                1,
+                "constructor".to_string(),
+                "constructor(name: string)".to_string()
+            )
+        );
+        assert_eq!(
+            property.class_sort_key("static get count(): int"),
+            (
+                1,
+                0,
+                "count".to_string(),
+                "static get count(): int".to_string()
+            )
+        );
+        assert_eq!(
+            method.class_sort_key("native rename(name: string): void;"),
+            (
+                2,
+                1,
+                "rename".to_string(),
+                "native rename(name: string): void;".to_string()
+            )
         );
     }
 

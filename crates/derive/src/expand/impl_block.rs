@@ -251,7 +251,8 @@ fn validate_property_slot_conflict(
     class_descriptor: Option<&ClassDescriptorMember>,
     method: &syn::ImplItemFn,
 ) -> syn::Result<()> {
-    let Some(ClassDescriptorMember::Property(property_descriptor)) = class_descriptor else {
+    let Some(property_descriptor) = class_descriptor.and_then(ClassDescriptorMember::property)
+    else {
         return Ok(());
     };
 

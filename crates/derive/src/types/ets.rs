@@ -11,9 +11,11 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassCallableDescriptor, ClassCallableSpecial, ClassDescriptorMember, ClassMemberMetadata,
-    ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
+    ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
 };
+
+#[cfg(test)]
+use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
     AniType, FunctionType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias,
@@ -132,6 +134,33 @@ struct RenderedClassMember {
     rendered: String,
 }
 
+impl RenderedClassMember {
+    fn sort_key(&self) -> (u8, u8, String, String) {
+        self.descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.class_sort_key(&self.rendered))
+            .unwrap_or_else(|| (3, 0, self.rendered.clone(), String::new()))
+    }
+
+    fn is_constructor(&self) -> bool {
+        self.descriptor
+            .as_ref()
+            .is_some_and(ClassDescriptorMember::is_constructor)
+    }
+
+    fn iterator_factory_target(&self) -> Option<&str> {
+        self.descriptor
+            .as_ref()
+            .and_then(ClassDescriptorMember::iterator_factory_target)
+    }
+
+    fn iterator_next_item_type(&self) -> Option<&str> {
+        self.descriptor
+            .as_ref()
+            .and_then(ClassDescriptorMember::iterator_next_item_type)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenderedPropertySlot {
     descriptor: ClassPropertyDescriptor,
@@ -180,7 +209,10 @@ impl NamespaceNode {
         }
 
         let class = node.classes.entry(class_name).or_default();
-        if let Some(ClassDescriptorMember::Property(property_descriptor)) = descriptor.as_ref() {
+        if let Some(property_descriptor) = descriptor
+            .as_ref()
+            .and_then(ClassDescriptorMember::property)
+        {
             insert_property_slot(class, property_descriptor.clone(), rendered);
             return;
         }
@@ -221,32 +253,17 @@ fn push_indented_block(out: &mut String, indent: usize, block: &str) {
     }
 }
 
-fn property_slot_key(descriptor: &ClassPropertyDescriptor) -> (ClassMemberScope, String) {
-    (
-        descriptor.metadata.scope,
-        descriptor.metadata.public_name.clone(),
-    )
-}
-
 fn insert_property_slot(
     class: &mut ClassNode,
     descriptor: ClassPropertyDescriptor,
     rendered: &str,
 ) {
-    let key = property_slot_key(&descriptor);
+    let key = descriptor.slot_key();
     let slot = class
         .property_slots
         .entry(key)
         .or_insert_with(|| RenderedPropertySlot {
-            descriptor: ClassPropertyDescriptor {
-                metadata: ClassMemberMetadata {
-                    owner: descriptor.metadata.owner.clone(),
-                    public_name: descriptor.metadata.public_name.clone(),
-                    scope: descriptor.metadata.scope,
-                },
-                getter: None,
-                setter: None,
-            },
+            descriptor: descriptor.slot_seed(),
             getter: None,
             setter: None,
         });
@@ -257,39 +274,6 @@ fn insert_property_slot(
     }
     if descriptor.setter.is_some() {
         slot.setter = Some(rendered.to_string());
-    }
-}
-
-fn callable_member_sort_key(
-    descriptor: &ClassCallableDescriptor,
-    kind_rank: u8,
-) -> (u8, u8, String, String) {
-    let scope_rank = match descriptor.metadata.scope {
-        ClassMemberScope::Static => 0,
-        ClassMemberScope::Instance => 1,
-    };
-    (
-        kind_rank,
-        scope_rank,
-        descriptor.metadata.public_name.clone(),
-        descriptor.native_symbol_name.clone(),
-    )
-}
-
-fn class_member_sort_key(member: &RenderedClassMember) -> (u8, u8, String, String) {
-    match &member.descriptor {
-        Some(ClassDescriptorMember::Constructor(descriptor)) => {
-            let mut key = callable_member_sort_key(descriptor, 0);
-            key.3 = member.rendered.clone();
-            key
-        }
-        Some(ClassDescriptorMember::Method(descriptor)) => {
-            let mut key = callable_member_sort_key(descriptor, 2);
-            key.3 = member.rendered.clone();
-            key
-        }
-        Some(ClassDescriptorMember::Property(_)) => (1, 0, member.rendered.clone(), String::new()),
-        None => (3, 0, member.rendered.clone(), String::new()),
     }
 }
 
@@ -308,35 +292,14 @@ fn object_member_sort_key(member: &EtsObjectMemberDecl) -> (u8, u8, String, Stri
 }
 
 fn property_slot_sort_key(slot: &RenderedPropertySlot) -> (u8, String) {
-    let scope_rank = match slot.descriptor.metadata.scope {
-        ClassMemberScope::Static => 0,
-        ClassMemberScope::Instance => 1,
-    };
-    (scope_rank, slot.descriptor.metadata.public_name.clone())
-}
-
-fn iterator_factory_target(member: &RenderedClassMember) -> Option<&str> {
-    let descriptor = member.descriptor.as_ref()?;
-    let ClassDescriptorMember::Method(callable) = descriptor else {
-        return None;
-    };
-    match &callable.special {
-        ClassCallableSpecial::IteratorFactory { iterator_class } => Some(iterator_class.as_str()),
-        _ => None,
-    }
+    slot.descriptor.sort_key()
 }
 
 fn iterator_next_item_type(class: &ClassNode) -> Option<&str> {
-    class.callable_members.iter().find_map(|member| {
-        let descriptor = member.descriptor.as_ref()?;
-        let ClassDescriptorMember::Method(callable) = descriptor else {
-            return None;
-        };
-        match &callable.special {
-            ClassCallableSpecial::IteratorNext { item_type } => Some(item_type.as_str()),
-            _ => None,
-        }
-    })
+    class
+        .callable_members
+        .iter()
+        .find_map(RenderedClassMember::iterator_next_item_type)
 }
 
 fn collect_iterator_factory_targets(
@@ -345,7 +308,7 @@ fn collect_iterator_factory_targets(
 ) {
     for class in node.classes.values() {
         for member in &class.callable_members {
-            if let Some(target) = iterator_factory_target(member) {
+            if let Some(target) = member.iterator_factory_target() {
                 iterator_targets.insert(target.to_string());
             }
         }
@@ -406,15 +369,10 @@ fn render_class_block(
     let mut constructors = class
         .callable_members
         .iter()
-        .filter(|member| {
-            matches!(
-                member.descriptor.as_ref(),
-                Some(ClassDescriptorMember::Constructor(_))
-            )
-        })
+        .filter(|member| member.is_constructor())
         .cloned()
         .collect::<Vec<_>>();
-    constructors.sort_by_key(class_member_sort_key);
+    constructors.sort_by_key(RenderedClassMember::sort_key);
     for member in constructors {
         push_indented_block(out, indent + 2, &member.rendered);
     }
@@ -433,15 +391,10 @@ fn render_class_block(
     let mut other_members = class
         .callable_members
         .iter()
-        .filter(|member| {
-            !matches!(
-                member.descriptor.as_ref(),
-                Some(ClassDescriptorMember::Constructor(_))
-            )
-        })
+        .filter(|member| !member.is_constructor())
         .cloned()
         .collect::<Vec<_>>();
-    other_members.sort_by_key(class_member_sort_key);
+    other_members.sort_by_key(RenderedClassMember::sort_key);
     for member in other_members {
         push_indented_block(out, indent + 2, &member.rendered);
     }
@@ -653,20 +606,26 @@ pub fn emit_compile_ets_object(target: &str, members: &[EtsObjectMemberDecl]) {
 }
 
 pub fn generate_object_field_ets_decl(name: &str, ty: &Type, is_private: bool) -> String {
-    let ani_type = AniType::from_syn_type(ty);
-    let ets_type = EtsTypeSurface::from_ani_type(&ani_type).public_ty;
-    let default_value = default_value_for_object_field(&ani_type, &ets_type);
+    let surface = EtsTypeSurface::from_syn_type(ty);
     let visibility = if is_private { "private " } else { "" };
-    format!("{visibility}{name}: {ets_type} = {default_value};")
+    format!(
+        "{visibility}{name}: {} = {};",
+        surface.public_ty, surface.object_default_value
+    )
 }
 
 pub fn generate_object_property_ets_decl(name: &str, ty: &Type) -> String {
-    let ani_type = AniType::from_syn_type(ty);
-    let ets_type = EtsTypeSurface::from_ani_type(&ani_type).public_ty;
-    let default_value = default_value_for_object_field(&ani_type, &ets_type);
+    let surface = EtsTypeSurface::from_syn_type(ty);
     let backing_name = format!("__ani_property_{}", sanitize_object_property_name(name));
     format!(
-        "private {backing_name}: {ets_type} = {default_value};\nget {name}(): {ets_type} {{\n  return this.{backing_name};\n}}\nset {name}(value: {ets_type}) {{\n  this.{backing_name} = value;\n}}"
+        "private {backing_name}: {} = {};
+get {name}(): {} {{
+  return this.{backing_name};
+}}
+set {name}(value: {}) {{
+  this.{backing_name} = value;
+}}",
+        surface.public_ty, surface.object_default_value, surface.public_ty, surface.public_ty,
     )
 }
 
@@ -686,7 +645,7 @@ fn sanitize_object_property_name(name: &str) -> String {
     }
 }
 
-fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
+fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
     match ty {
         AniType::Primitive(PrimitiveType::Bool) => "false".to_string(),
         AniType::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => "0.0".to_string(),
@@ -698,18 +657,18 @@ fn default_value_for_object_field(ty: &AniType, ets_type: &str) -> String {
         AniType::Wrapper(WrapperType::Vec(_)) => "[] as ".to_string() + ets_type,
         AniType::Wrapper(WrapperType::Result(inner))
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
-            default_value_for_object_field(inner, ets_type)
+            default_object_value_for_ani_type(inner, ets_type)
         }
+        AniType::Record(_) => format!("{{}} as {}", ets_type),
+        AniType::Set(_) => format!("new {}()", ets_type),
+        AniType::Map(_) => format!("new {}()", ets_type),
+        AniType::Tuple(_) => format!("[] as {}", ets_type),
         AniType::Either(_)
         | AniType::Promise(_)
-        | AniType::Record(_)
-        | AniType::Set(_)
-        | AniType::Map(_)
         | AniType::AniObject
         | AniType::ArrayBuffer
         | AniType::Function(_)
         | AniType::FnArgs(_)
-        | AniType::Tuple(_)
         | AniType::Unknown(_) => format!("null as {}", ets_type),
         AniType::Unit => "undefined".to_string(),
     }
@@ -761,15 +720,20 @@ pub fn ets_public_type_for_syn_type(ty: &Type) -> String {
 }
 
 fn ani_type_to_ets_in_context(ty: &AniType, context: EtsRenderContext) -> String {
+    if let Some(parts) = collect_surface_union_parts(ty, context) {
+        return parts.render();
+    }
+
+    render_non_union_ani_type_to_ets(ty, context)
+}
+
+fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> String {
     match ty {
         AniType::Primitive(p) => primitive_to_ets(p).to_string(),
         AniType::String(StringType::String | StringType::Str) => "string".to_string(),
         AniType::Unit => "void".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
-        AniType::Wrapper(WrapperType::Option(_)) | AniType::Either(_) => {
-            collect_union_parts(ty, context).render()
-        }
         AniType::Wrapper(WrapperType::Vec(inner)) => vec_inner_to_ets(inner),
         AniType::Wrapper(WrapperType::Result(inner)) => match context.result_style {
             ResultStyle::ThrowingValue => ani_type_to_ets_in_context(inner, context),
@@ -815,6 +779,9 @@ fn ani_type_to_ets_in_context(ty: &AniType, context: EtsRenderContext) -> String
                 .join(", ")
         ),
         AniType::Unknown(ty) => unknown_type_to_ets(ty).unwrap_or_else(|| "Object".to_string()),
+        AniType::Wrapper(WrapperType::Option(_)) | AniType::Either(_) => {
+            unreachable!("union-capable types must be handled by collect_surface_union_parts")
+        }
     }
 }
 
@@ -866,7 +833,15 @@ impl UnionParts {
     }
 }
 
-fn collect_union_parts(ty: &AniType, context: EtsRenderContext) -> UnionParts {
+fn push_surface_variant(parts: &mut UnionParts, ty: &AniType, context: EtsRenderContext) {
+    if let Some(inner_parts) = collect_surface_union_parts(ty, context) {
+        parts.extend(inner_parts);
+    } else {
+        parts.push_variant(render_non_union_ani_type_to_ets(ty, context));
+    }
+}
+
+fn collect_surface_union_parts(ty: &AniType, context: EtsRenderContext) -> Option<UnionParts> {
     let mut parts = UnionParts::default();
     match ty {
         AniType::Primitive(p) => parts.push_variant(primitive_to_ets(p).to_string()),
@@ -876,7 +851,7 @@ fn collect_union_parts(ty: &AniType, context: EtsRenderContext) -> UnionParts {
         AniType::Null => parts.has_null = true,
         AniType::Undefined => parts.has_undefined = true,
         AniType::Wrapper(WrapperType::Option(inner)) => {
-            parts.extend(collect_union_parts(inner, context));
+            push_surface_variant(&mut parts, inner, context);
             parts.has_null = true;
             if matches!(context.option_style, OptionStyle::Nullish) {
                 parts.has_undefined = true;
@@ -884,19 +859,17 @@ fn collect_union_parts(ty: &AniType, context: EtsRenderContext) -> UnionParts {
         }
         AniType::Wrapper(WrapperType::Result(inner))
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
-            parts.extend(collect_union_parts(inner, context));
+            return collect_surface_union_parts(inner, context);
         }
         AniType::Either(either) => {
             for variant in &either.types {
-                parts.extend(collect_union_parts(
-                    &AniType::from_syn_type(variant),
-                    context,
-                ));
+                let variant_ty = AniType::from_syn_type(variant);
+                push_surface_variant(&mut parts, &variant_ty, context);
             }
         }
-        _ => parts.push_variant(ani_type_to_ets_in_context(ty, context)),
+        _ => return None,
     }
-    parts
+    Some(parts)
 }
 
 fn vec_inner_to_ets(inner: &AniType) -> String {
@@ -1140,52 +1113,99 @@ impl EtsRenderContext {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EtsBridgeStrategy {
+    Direct,
+    Nullish,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct EtsTypeSurface {
     public_ty: String,
     native_ty: String,
-    requires_bridge: bool,
+    bridge_strategy: EtsBridgeStrategy,
+    object_default_value: String,
 }
 
 impl EtsTypeSurface {
+    fn from_syn_type(ty: &Type) -> Self {
+        Self::from_ani_type(&AniType::from_syn_type(ty))
+    }
+
     fn from_ani_type(ty: &AniType) -> Self {
         let public_ty = ani_type_to_ets_in_context(ty, EtsRenderContext::public());
         let native_ty = ani_type_to_ets_in_context(ty, EtsRenderContext::native());
         Self {
-            requires_bridge: type_requires_nullish_bridge(ty, &public_ty, &native_ty),
+            bridge_strategy: bridge_strategy_for_ani_type(ty, &public_ty, &native_ty),
+            object_default_value: default_object_value_for_ani_type(ty, &public_ty),
             public_ty,
             native_ty,
         }
+    }
+
+    fn requires_bridge(&self) -> bool {
+        matches!(self.bridge_strategy, EtsBridgeStrategy::Nullish)
+    }
+
+    fn ty_for_option_style(&self, option_style: OptionStyle) -> &str {
+        match option_style {
+            OptionStyle::NullOnly => &self.native_ty,
+            OptionStyle::Nullish => &self.public_ty,
+        }
+    }
+
+    fn render_input_expr(&self, value: &str) -> String {
+        match self.bridge_strategy {
+            EtsBridgeStrategy::Direct => value.to_string(),
+            EtsBridgeStrategy::Nullish => format!("{value} == undefined ? null : {value}"),
+        }
+    }
+
+    fn render_output_body(&self, call_expr: &str) -> String {
+        if self.public_ty == "void" {
+            return format!("  {call_expr};");
+        }
+
+        match self.bridge_strategy {
+            EtsBridgeStrategy::Direct => format!("  return {call_expr};"),
+            EtsBridgeStrategy::Nullish => format!(
+                "  let __ani_result = {call_expr};\n  return __ani_result == null ? undefined : __ani_result;"
+            ),
+        }
+    }
+
+    fn iterator_item_ty(&self) -> &str {
+        if matches!(self.bridge_strategy, EtsBridgeStrategy::Nullish) {
+            return self
+                .native_ty
+                .strip_suffix(" | null")
+                .unwrap_or(self.native_ty.as_str());
+        }
+
+        &self.native_ty
     }
 }
 
 #[derive(Clone, Debug)]
 struct ExposedParamSpec {
     name: String,
-    public_ty: String,
-    native_ty: String,
-    requires_bridge: bool,
+    surface: EtsTypeSurface,
 }
 
 #[derive(Clone, Debug)]
 struct ExposedReturnSpec {
-    public_ty: String,
-    native_ty: String,
-    requires_bridge: bool,
+    surface: EtsTypeSurface,
 }
 
-fn type_requires_nullish_bridge(ty: &AniType, public_ty: &str, native_ty: &str) -> bool {
-    if public_ty == native_ty {
-        return false;
-    }
-
-    match ty {
-        AniType::Wrapper(WrapperType::Option(_)) | AniType::Either(_) => true,
-        AniType::Wrapper(WrapperType::Result(inner))
-        | AniType::Wrapper(WrapperType::Ref(inner)) => {
-            type_requires_nullish_bridge(inner, public_ty, native_ty)
-        }
-        _ => false,
+fn bridge_strategy_for_ani_type(
+    ty: &AniType,
+    public_ty: &str,
+    native_ty: &str,
+) -> EtsBridgeStrategy {
+    if public_ty != native_ty && collect_surface_union_parts(ty, EtsRenderContext::public()).is_some() {
+        EtsBridgeStrategy::Nullish
+    } else {
+        EtsBridgeStrategy::Direct
     }
 }
 
@@ -1207,12 +1227,7 @@ fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<Exposed
             let name = sanitize_param_name(&name, idx);
             let ani_type = AniType::from_syn_type(&pat_type.ty);
             let surface = EtsTypeSurface::from_ani_type(&ani_type);
-            params.push(ExposedParamSpec {
-                name,
-                requires_bridge: surface.requires_bridge,
-                public_ty: surface.public_ty,
-                native_ty: surface.native_ty,
-            });
+            params.push(ExposedParamSpec { name, surface });
         }
     }
 
@@ -1222,25 +1237,24 @@ fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<Exposed
 fn collect_exposed_params(sig: &Signature, skip_first: bool) -> Vec<(String, String)> {
     collect_exposed_param_specs(sig, skip_first)
         .into_iter()
-        .map(|param| (param.name, param.public_ty))
+        .map(|param| (param.name, param.surface.public_ty))
         .collect()
 }
 
 fn exposed_return_spec(sig: &Signature) -> ExposedReturnSpec {
     match &sig.output {
         ReturnType::Default => ExposedReturnSpec {
-            public_ty: "void".to_string(),
-            native_ty: "void".to_string(),
-            requires_bridge: false,
+            surface: EtsTypeSurface {
+                public_ty: "void".to_string(),
+                native_ty: "void".to_string(),
+                bridge_strategy: EtsBridgeStrategy::Direct,
+                object_default_value: "undefined".to_string(),
+            },
         },
         ReturnType::Type(_, ty) => {
             let ani_type = AniType::from_syn_type(ty);
             let surface = EtsTypeSurface::from_ani_type(&ani_type);
-            ExposedReturnSpec {
-                requires_bridge: surface.requires_bridge,
-                public_ty: surface.public_ty,
-                native_ty: surface.native_ty,
-            }
+            ExposedReturnSpec { surface }
         }
     }
 }
@@ -1254,19 +1268,10 @@ fn generate_fn_ets_decl_with_style(
     let context = EtsRenderContext::with_option_style(option_style);
     let params = collect_exposed_param_specs(sig, skip_first)
         .into_iter()
-        .map(|param| {
-            let ty = match context.option_style {
-                OptionStyle::NullOnly => param.native_ty,
-                OptionStyle::Nullish => param.public_ty,
-            };
-            format!("{}: {}", param.name, ty)
-        })
+        .map(|param| format!("{}: {}", param.name, param.surface.ty_for_option_style(context.option_style)))
         .collect::<Vec<_>>();
     let ret_spec = exposed_return_spec(sig);
-    let ret = match context.option_style {
-        OptionStyle::NullOnly => ret_spec.native_ty,
-        OptionStyle::Nullish => ret_spec.public_ty,
-    };
+    let ret = ret_spec.surface.ty_for_option_style(context.option_style);
     format!("{ets_name}({}): {ret}", params.join(", "))
 }
 
@@ -1286,24 +1291,11 @@ fn render_native_function_decl(kind: EtsDeclKind, signature: &str, is_static: bo
 }
 
 fn render_bridge_input_expr(param: &ExposedParamSpec) -> String {
-    if param.requires_bridge {
-        format!("{} == undefined ? null : {}", param.name, param.name)
-    } else {
-        param.name.clone()
-    }
+    param.surface.render_input_expr(&param.name)
 }
 
 fn render_bridge_output_body(call_expr: &str, ret_spec: &ExposedReturnSpec) -> String {
-    if ret_spec.public_ty == "void" {
-        format!("  {call_expr};")
-    } else if ret_spec.requires_bridge {
-        format!(
-            "  let __ani_result = {call_expr};
-  return __ani_result == null ? undefined : __ani_result;"
-        )
-    } else {
-        format!("  return {call_expr};")
-    }
+    ret_spec.surface.render_output_body(call_expr)
 }
 
 fn render_nullish_bridge_binding(
@@ -1369,7 +1361,7 @@ fn render_nullish_bridge_binding(
 pub fn function_requires_nullish_bridge(sig: &Signature, skip_first: bool) -> bool {
     let params = collect_exposed_param_specs(sig, skip_first);
     let ret = exposed_return_spec(sig);
-    params.iter().any(|param| param.requires_bridge) || ret.requires_bridge
+    params.iter().any(|param| param.surface.requires_bridge()) || ret.surface.requires_bridge()
 }
 
 pub fn generate_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> String {
@@ -1379,14 +1371,12 @@ pub fn generate_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> 
         "iterator next should not expose parameters"
     );
     let ret_spec = exposed_return_spec(sig);
-    let item_ty = ret_spec
-        .native_ty
-        .strip_suffix(" | null")
-        .unwrap_or(ret_spec.native_ty.as_str());
+    let native_ty = ret_spec.surface.native_ty.clone();
+    let item_ty = ret_spec.surface.iterator_item_ty().to_string();
 
     format!(
         "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  return {{\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  }};\n}}",
-        ret_spec.native_ty, item_ty,
+        native_ty, item_ty,
     )
 }
 
@@ -1431,24 +1421,20 @@ pub fn generate_getter_ets_decl(
         format!("this.{backing_name}()")
     };
 
-    if ret_spec.requires_bridge {
-        format!(
-            "{static_prefix}native {backing_name}(): {};
-{static_prefix}get {property_name}(): {} {{
-  let __ani_result = {call_target};
-  return __ani_result == null ? undefined : __ani_result;
-}}",
-            ret_spec.native_ty, ret_spec.public_ty,
-        )
+    let native_ty = if ret_spec.surface.requires_bridge() {
+        ret_spec.surface.native_ty.as_str()
     } else {
-        format!(
-            "{static_prefix}native {backing_name}(): {};
+        ret_spec.surface.public_ty.as_str()
+    };
+    let body = ret_spec.surface.render_output_body(&call_target);
+
+    format!(
+        "{static_prefix}native {backing_name}(): {native_ty};
 {static_prefix}get {property_name}(): {} {{
-  return {call_target};
+{body}
 }}",
-            ret_spec.public_ty, ret_spec.public_ty,
-        )
-    }
+        ret_spec.surface.public_ty,
+    )
 }
 
 pub fn generate_setter_ets_decl(
@@ -1470,9 +1456,12 @@ pub fn generate_setter_ets_decl(
         .next()
         .unwrap_or_else(|| ExposedParamSpec {
             name: "value".to_string(),
-            public_ty: "Object".to_string(),
-            native_ty: "Object".to_string(),
-            requires_bridge: false,
+            surface: EtsTypeSurface {
+                public_ty: "Object".to_string(),
+                native_ty: "Object".to_string(),
+                bridge_strategy: EtsBridgeStrategy::Direct,
+                object_default_value: "null as Object".to_string(),
+            },
         });
 
     let static_prefix = if is_static { "static " } else { "" };
@@ -1482,23 +1471,20 @@ pub fn generate_setter_ets_decl(
         format!("this.{backing_name}")
     };
 
-    if param.requires_bridge {
-        format!(
-            "{static_prefix}native {backing_name}({}: {}): void;
-{static_prefix}set {property_name}({}: {}) {{
-  {call_target}({} == undefined ? null : {});
-}}",
-            param.name, param.native_ty, param.name, param.public_ty, param.name, param.name,
-        )
+    let native_ty = if param.surface.requires_bridge() {
+        param.surface.native_ty.as_str()
     } else {
-        format!(
-            "{static_prefix}native {backing_name}({}: {}): void;
+        param.surface.public_ty.as_str()
+    };
+    let call_arg = param.surface.render_input_expr(&param.name);
+
+    format!(
+        "{static_prefix}native {backing_name}({}: {native_ty}): void;
 {static_prefix}set {property_name}({}: {}) {{
-  {call_target}({});
+  {call_target}({call_arg});
 }}",
-            param.name, param.public_ty, param.name, param.public_ty, param.name,
-        )
-    }
+        param.name, param.name, param.surface.public_ty,
+    )
 }
 
 /// Generate ETS declaration signature string for a constructor.
@@ -1520,11 +1506,7 @@ fn generate_ctor_ets_decl_with_style(
     let params = collect_exposed_param_specs(sig, skip_first)
         .into_iter()
         .map(|param| {
-            let ty = match option_style {
-                OptionStyle::NullOnly => param.native_ty,
-                OptionStyle::Nullish => param.public_ty,
-            };
-            format!("{}: {}", param.name, ty)
+            format!("{}: {}", param.name, param.surface.ty_for_option_style(option_style))
         })
         .collect::<Vec<_>>();
     format!("constructor({})", params.join(", "))
@@ -1533,7 +1515,7 @@ fn generate_ctor_ets_decl_with_style(
 fn constructor_requires_nullish_bridge(sig: &Signature, skip_first: bool) -> bool {
     collect_exposed_param_specs(sig, skip_first)
         .iter()
-        .any(|param| param.requires_bridge)
+        .any(|param| param.surface.requires_bridge())
 }
 
 pub fn generate_ctor_ets_binding(sig: &Signature, skip_first: bool) -> String {
@@ -1551,6 +1533,7 @@ pub fn generate_ctor_ets_binding(sig: &Signature, skip_first: bool) -> String {
 mod tests {
     use super::super::ani_type::register_object_type_alias;
     use super::*;
+    use crate::codegen::ClassMemberMetadata;
 
     fn class_member_metadata(
         owner: &str,
@@ -1672,7 +1655,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "<ctor>".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native constructor(name: string, score: int);".to_string(),
             },
@@ -1719,7 +1701,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_label".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native label(): string;".to_string(),
             },
@@ -1732,7 +1713,6 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_species".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native species(): string;".to_string(),
             },
@@ -1767,7 +1747,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_mix_2".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native mix(left: int, right: int): int;".to_string(),
             },
@@ -1780,7 +1759,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_mix_3".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native mix(left: int, right: int, extra: int): int;".to_string(),
             },
@@ -1793,7 +1771,6 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_tag_1".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native tag(value: string): string;".to_string(),
             },
@@ -1806,7 +1783,6 @@ get age(): int {
                         ClassMemberScope::Static,
                     ),
                     native_symbol_name: "__ani_native_tag_2".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "static native tag(value: string, suffix: string): string;".to_string(),
             },
@@ -1847,7 +1823,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_rename".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
@@ -1897,7 +1872,6 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
-                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "native constructor(name: string, total: int);".to_string(),
@@ -1912,7 +1886,6 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
-                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "native constructor(left: int, right: int);".to_string(),
@@ -1926,7 +1899,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "describe".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native describe(): string;".to_string(),
             },
@@ -1959,7 +1931,6 @@ get age(): int {
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_rename".to_string(),
-                    special: ClassCallableSpecial::Regular,
                 })),
                 rendered: "native __ani_native_rename(name: string): void;".to_string(),
             },
@@ -1990,7 +1961,6 @@ get age(): int {
                             ClassMemberScope::Instance,
                         ),
                         native_symbol_name: "<ctor>".to_string(),
-                        special: ClassCallableSpecial::Regular,
                     },
                 )),
                 rendered: "constructor(name: string)".to_string(),
@@ -2037,14 +2007,14 @@ get age(): int {
         let class_members = vec![
             EtsClassMemberDecl {
                 target: "demo.Widget".to_string(),
-                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
                     metadata: class_member_metadata(
                         "demo.Widget",
                         "$_iterator",
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "$_iterator".to_string(),
-                    special: ClassCallableSpecial::IteratorFactory {
+                    kind: ClassOpKind::IteratorFactory {
                         iterator_class: "demo.WidgetIndexIterator".to_string(),
                     },
                 })),
@@ -2052,14 +2022,14 @@ get age(): int {
             },
             EtsClassMemberDecl {
                 target: "demo.WidgetIndexIterator".to_string(),
-                descriptor: Some(ClassDescriptorMember::Method(ClassCallableDescriptor {
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
                     metadata: class_member_metadata(
                         "demo.WidgetIndexIterator",
                         "next",
                         ClassMemberScope::Instance,
                     ),
                     native_symbol_name: "__ani_native_next".to_string(),
-                    special: ClassCallableSpecial::IteratorNext {
+                    kind: ClassOpKind::IteratorNext {
                         item_type: "int".to_string(),
                     },
                 })),
@@ -2357,10 +2327,48 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
     #[test]
     fn test_exposed_ets_type_result_strategy_is_explicit() {
         let ty: Type = syn::parse_quote!(Result<Option<i32>, ani::Error>);
-        let surface = EtsTypeSurface::from_ani_type(&AniType::from_syn_type(&ty));
+        let surface = EtsTypeSurface::from_syn_type(&ty);
         assert_eq!(surface.public_ty, "int | null | undefined");
         assert_eq!(surface.native_ty, "int | null");
-        assert!(surface.requires_bridge);
+        assert!(surface.requires_bridge());
+    }
+
+    #[test]
+    fn test_exposed_ets_type_surface_tracks_nested_result_either_object() {
+        let ty: Type =
+            syn::parse_quote!(Result<Either<Option<crate::models::UserInfo>, String>, ani::Error>);
+        let surface = EtsTypeSurface::from_syn_type(&ty);
+
+        assert_eq!(
+            surface.public_ty,
+            "models.UserInfo | string | null | undefined"
+        );
+        assert_eq!(surface.native_ty, "models.UserInfo | string | null");
+        assert!(surface.requires_bridge());
+    }
+
+    #[test]
+    fn test_exposed_ets_type_surface_centralizes_bridge_helpers() {
+        let ty: Type = syn::parse_quote!(Result<Option<crate::models::UserInfo>, ani::Error>);
+        let surface = EtsTypeSurface::from_syn_type(&ty);
+
+        assert_eq!(
+            surface.ty_for_option_style(OptionStyle::Nullish),
+            "models.UserInfo | null | undefined"
+        );
+        assert_eq!(
+            surface.ty_for_option_style(OptionStyle::NullOnly),
+            "models.UserInfo | null"
+        );
+        assert_eq!(
+            surface.render_input_expr("user"),
+            "user == undefined ? null : user"
+        );
+        assert_eq!(
+            surface.render_output_body("__ani_native_user()"),
+            "  let __ani_result = __ani_native_user();\n  return __ani_result == null ? undefined : __ani_result;"
+        );
+        assert_eq!(surface.iterator_item_ty(), "models.UserInfo");
     }
 
     #[test]
@@ -2399,6 +2407,56 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         assert_eq!(
             generate_object_field_ets_decl("name", &ty, false),
             "name: string = \"\";"
+        );
+    }
+
+    #[test]
+    fn test_object_field_surface_tracks_container_defaults() {
+        let record_ty: Type = syn::parse_quote!(HashMap<String, crate::models::UserInfo>);
+        let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
+        let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
+        let result_ty: Type = syn::parse_quote!(Result<crate::models::UserInfo, ani::Error>);
+        let either_ty: Type = syn::parse_quote!(Either<crate::models::UserInfo, String>);
+
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&record_ty).object_default_value,
+            "{} as Record<string, models.UserInfo>"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&set_ty).object_default_value,
+            "new Set<models.UserInfo>()"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&map_ty).object_default_value,
+            "new Map<string, models.UserInfo>()"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&result_ty).object_default_value,
+            "null as models.UserInfo"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&either_ty).object_default_value,
+            "null as models.UserInfo | string"
+        );
+    }
+
+    #[test]
+    fn test_generate_object_field_ets_decl_uses_surface_defaults_for_containers() {
+        let record_ty: Type = syn::parse_quote!(HashMap<String, crate::models::UserInfo>);
+        let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
+        let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
+
+        assert_eq!(
+            generate_object_field_ets_decl("record_", &record_ty, false),
+            "record_: Record<string, models.UserInfo> = {} as Record<string, models.UserInfo>;"
+        );
+        assert_eq!(
+            generate_object_field_ets_decl("set", &set_ty, false),
+            "set: Set<models.UserInfo> = new Set<models.UserInfo>();"
+        );
+        assert_eq!(
+            generate_object_field_ets_decl("map", &map_ty, false),
+            "map: Map<string, models.UserInfo> = new Map<string, models.UserInfo>();"
         );
     }
 
