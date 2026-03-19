@@ -8,6 +8,8 @@ export native function divide(a: double, b: double): double;
 export native function expect_string_type(value: string): string;
 export native function login(username: string, password: string): string;
 export native function read_config(path: string): string;
+export native function reject_with_error_handle(resolver: Object, error: Object): void;
+export native function throw_existing_error(error: Object): void;
 export native function validate_age(age: int): string;
 
 

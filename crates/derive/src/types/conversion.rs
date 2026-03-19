@@ -85,6 +85,7 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
     matches!(
         ani_type,
         AniType::AniObject
+            | AniType::RuntimeHandle(_)
             | AniType::Null
             | AniType::Undefined
             | AniType::Function(_)
@@ -96,6 +97,9 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::Map(_)
             | AniType::ArrayBuffer
             | AniType::Tuple(_)
+            | AniType::AnyValue
+            | AniType::TupleValue
+            | AniType::EnumItem
             | AniType::NativePointer(_)
             | AniType::Unknown(_)
             | AniType::Wrapper(WrapperType::Option(_))
@@ -406,6 +410,10 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
         ani_type,
         AniType::String(StringType::Str)
             | AniType::AniObject
+            | AniType::RuntimeHandle(_)
+            | AniType::AnyValue
+            | AniType::TupleValue
+            | AniType::EnumItem
             | AniType::ArrayBuffer
             | AniType::Either(_)
             | AniType::Null
@@ -665,6 +673,23 @@ mod tests {
         let code = generate_return_conversion(&output).to_string();
         assert!(code.contains("ToAni :: to_ani"));
         assert!(code.contains("Ok (v) => v"));
+    }
+
+    #[test]
+    fn return_conversion_any_value_uses_to_ani() {
+        let output: ReturnType = parse_quote!(-> ani::conversions::AnyValue);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("null_mut"));
+    }
+
+    #[test]
+    fn param_conversion_any_value_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: ani::conversions::AnyValue);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("AnyValue as ani :: conversions :: FromAni"));
+        assert!(code.contains(":: Input"));
     }
 
     #[test]

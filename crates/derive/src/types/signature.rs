@@ -366,6 +366,18 @@ mod tests {
             rust_type_to_signature(&syn::parse_quote!(ani::conversions::NativePointer<crate::NativeResource>)),
             "J"
         );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::AnyValue)),
+            "Lstd/core/Object;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::TupleValue)),
+            "Lstd/core/Object;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::EnumItem)),
+            "Lstd/core/Object;"
+        );
     }
 
     #[test]

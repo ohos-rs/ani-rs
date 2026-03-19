@@ -185,6 +185,16 @@ fn expect_string_type(value: String) -> Result<String> {
     Ok(value.to_uppercase())
 }
 
+#[ani]
+fn throw_existing_error(env: &Env<'_>, error: AniError<'_>) -> Result<()> {
+    env.throw_error(&error)
+}
+
+#[ani]
+fn reject_with_error_handle(env: &Env<'_>, resolver: AniResolver, error: AniError<'_>) -> Result<()> {
+    env.promise_reject(&resolver, &error)
+}
+
 // ===========================================================================
 // Example 5: Result type aliases for cleaner code
 // ===========================================================================
@@ -312,5 +322,11 @@ mod tests {
 
         let err = verify_token("expired_token").unwrap_err();
         assert_eq!(err.status.as_ref(), "TokenExpired");
+    }
+
+    #[test]
+    fn test_handle_surface_exports_compile() {
+        let _ = throw_existing_error;
+        let _ = reject_with_error_handle;
     }
 }

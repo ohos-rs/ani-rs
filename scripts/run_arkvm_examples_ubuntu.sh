@@ -41,6 +41,19 @@ if [[ ! -d "$ark_src_root/static_core/plugins/ets/sdk/arkts" ]]; then
   exit 1
 fi
 
+check_nonempty_tree() {
+  local path="$1"
+  if [[ -z "$(find "$path" -type f -print -quit 2>/dev/null)" ]]; then
+    echo "ARK_SRC_EMPTY: $path"
+    exit 1
+  fi
+}
+
+check_nonempty_tree "$ark_src_root/static_core/plugins/ets/stdlib/std"
+check_nonempty_tree "$ark_src_root/static_core/plugins/ets/stdlib/escompat"
+check_nonempty_tree "$ark_src_root/static_core/plugins/ets/sdk/api"
+check_nonempty_tree "$ark_src_root/static_core/plugins/ets/sdk/arkts"
+
 host_rustup_cache="${ARKVM_RUSTUP_CACHE:-/tmp/ani-rs-arkvm-rustup}"
 host_cargo_home_cache="${ARKVM_CARGO_HOME_CACHE:-/tmp/ani-rs-arkvm-cargo-home}"
 mkdir -p "$host_rustup_cache" "$host_cargo_home_cache"
@@ -76,11 +89,23 @@ apt-get install -y --no-install-recommends \
   ripgrep
 update-ca-certificates || true
 
-if [[ ! -x /root/.cargo/bin/rustc ]]; then
+export RUSTUP_DIST_SERVER=https://rsproxy.cn
+export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+
+if [[ ! -x /root/.cargo/bin/rustup ]]; then
   curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
 fi
 
 source /root/.cargo/env
+set -- $(rustc --version 2>/dev/null || true)
+installed_rustc_version="${2:-}"
+if [[ -z "$installed_rustc_version" ]] || [[ "$(printf '%s\n' "1.85.0" "$installed_rustc_version" | sort -V | head -n1)" != "1.85.0" ]]; then
+  rustup toolchain uninstall stable-x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
+  rustup toolchain install stable --profile minimal
+  rustup default stable
+  source /root/.cargo/env
+fi
+
 rustc --version
 cargo --version
 

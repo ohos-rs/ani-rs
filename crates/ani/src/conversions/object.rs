@@ -535,6 +535,14 @@ impl_ref_handle_conversion!(
 );
 
 impl_ref_handle_conversion!(
+    AniError,
+    sys::ani_error,
+    "Lstd/core/Object;",
+    "ani_error",
+    "error"
+);
+
+impl_ref_handle_conversion!(
     AniEnumItem,
     sys::ani_enum_item,
     "Lstd/core/Object;",
@@ -604,6 +612,14 @@ impl_opaque_handle_conversion!(
     "Lstd/core/Object;",
     "ani_variable",
     "variable"
+);
+
+impl_opaque_handle_conversion!(
+    AniResolver,
+    sys::ani_resolver,
+    "Lstd/core/Object;",
+    "ani_resolver",
+    "resolver"
 );
 
 // ============================================================================

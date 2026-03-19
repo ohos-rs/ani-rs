@@ -67,6 +67,8 @@ __ANI_GENERATED__.dynamic_set_property(new CounterAny());
 let counter = new CounterAny();
 __ANI_GENERATED__.dynamic_set_property(counter);
 __assert_true("dynamic_set_property_count", counter.count != null);
+let echoed = __ANI_GENERATED__.dynamic_identity("ani");
+__assert_true("dynamic_identity_string", echoed == "ani");
 ETS
       ;;
     ani-example-array-generic)
@@ -161,7 +163,7 @@ ETS
 class StaticBindToken {}
 let bindStaticOk = true;
 try {
-  __ANI_GENERATED__.bind_static_natives(new StaticBindToken());
+  __ANI_GENERATED__.bind_static_natives(Class.of(new StaticBindToken()));
 } catch (_e) {
   bindStaticOk = false;
 }

@@ -27,6 +27,11 @@ pub fn dynamic_set_property(env: &Env<'_>, obj: AniRef<'_>) -> Result<()> {
     any.set_property_arg(env, "count", 42_i32)
 }
 
+#[ani]
+pub fn dynamic_identity(value: AnyValue<'_>) -> AnyValue<'_> {
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +41,6 @@ mod tests {
         let _ = dynamic_call_with_fn_args;
         let _ = dynamic_method_call;
         let _ = dynamic_set_property;
+        let _ = dynamic_identity;
     }
 }

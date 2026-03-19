@@ -116,6 +116,27 @@ pub struct MapType {
     pub value: Box<AniType>,
 }
 
+/// Raw ANI runtime handles that should not fall back to `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHandleType {
+    Ref,
+    Class,
+    Type,
+    Module,
+    Namespace,
+    String,
+    Enum,
+    Error,
+    Method,
+    StaticMethod,
+    Field,
+    StaticField,
+    Function,
+    FunctionObject,
+    Variable,
+    Resolver,
+}
+
 /// The main ANI type enum
 
 #[derive(Debug, Clone)]
@@ -149,6 +170,14 @@ pub enum AniType {
     Map(MapType),
     /// AniObject - raw object type
     AniObject,
+    /// Explicit ANI runtime handle types (class/method/field/etc.)
+    RuntimeHandle(RuntimeHandleType),
+    /// Dynamic `Any_*` value wrapper backed by `ani_ref`
+    AnyValue,
+    /// Tuple value wrapper backed by `ani_tuple_value`
+    TupleValue,
+    /// Enum item wrapper backed by `ani_enum_item`
+    EnumItem,
     /// ArrayBuffer - binary data buffer type
     ArrayBuffer,
     /// Tuple type (for function arguments)
@@ -341,8 +370,24 @@ impl AniType {
             return AniType::AniObject;
         }
 
+        if let Some(handle) = RuntimeHandleType::from_ident(&ident) {
+            return AniType::RuntimeHandle(handle);
+        }
+
+        if ident == "AnyValue" {
+            return AniType::AnyValue;
+        }
+
+        if ident == "TupleValue" || ident == "AniTupleValue" {
+            return AniType::TupleValue;
+        }
+
+        if ident == "EnumItem" || ident == "AniEnumItem" {
+            return AniType::EnumItem;
+        }
+
         // Check for ArrayBuffer types
-        if ident == "ArrayBuffer" || ident == "ArrayBufferSlice" {
+        if ident == "ArrayBuffer" || ident == "ArrayBufferSlice" || ident == "AniArrayBuffer" {
             return AniType::ArrayBuffer;
         }
 
@@ -547,6 +592,10 @@ impl AniType {
             AniType::Set(_) => quote! { ani::sys::ani_object },
             AniType::Map(_) => quote! { ani::sys::ani_object },
             AniType::AniObject => quote! { ani::sys::ani_object },
+            AniType::RuntimeHandle(handle) => handle.to_ani_c_type(),
+            AniType::AnyValue => quote! { ani::sys::ani_ref },
+            AniType::TupleValue => quote! { ani::sys::ani_tuple_value },
+            AniType::EnumItem => quote! { ani::sys::ani_enum_item },
 
             AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
@@ -584,6 +633,75 @@ impl WrapperType {
             WrapperType::Result(inner) => inner.to_ani_c_type(),
             WrapperType::Ref(_) => quote! { ani::sys::ani_object },
         }
+    }
+}
+
+impl RuntimeHandleType {
+    fn from_ident(ident: &str) -> Option<Self> {
+        match ident {
+            "AniRef" => Some(Self::Ref),
+            "AniClass" => Some(Self::Class),
+            "AniType" => Some(Self::Type),
+            "AniModule" => Some(Self::Module),
+            "AniNamespace" => Some(Self::Namespace),
+            "AniString" => Some(Self::String),
+            "AniEnum" => Some(Self::Enum),
+            "AniError" => Some(Self::Error),
+            "AniMethod" => Some(Self::Method),
+            "AniStaticMethod" => Some(Self::StaticMethod),
+            "AniField" => Some(Self::Field),
+            "AniStaticField" => Some(Self::StaticField),
+            "AniFunction" => Some(Self::Function),
+            "AniFnObject" => Some(Self::FunctionObject),
+            "AniVariable" => Some(Self::Variable),
+            "AniResolver" => Some(Self::Resolver),
+            _ => None,
+        }
+    }
+
+    fn to_ani_c_type(self) -> TokenStream {
+        match self {
+            Self::Ref => quote! { ani::sys::ani_ref },
+            Self::Class => quote! { ani::sys::ani_class },
+            Self::Type => quote! { ani::sys::ani_type },
+            Self::Module => quote! { ani::sys::ani_module },
+            Self::Namespace => quote! { ani::sys::ani_namespace },
+            Self::String => quote! { ani::sys::ani_string },
+            Self::Enum => quote! { ani::sys::ani_enum },
+            Self::Error => quote! { ani::sys::ani_error },
+            Self::Method => quote! { ani::sys::ani_method },
+            Self::StaticMethod => quote! { ani::sys::ani_static_method },
+            Self::Field => quote! { ani::sys::ani_field },
+            Self::StaticField => quote! { ani::sys::ani_static_field },
+            Self::Function => quote! { ani::sys::ani_function },
+            Self::FunctionObject => quote! { ani::sys::ani_fn_object },
+            Self::Variable => quote! { ani::sys::ani_variable },
+            Self::Resolver => quote! { ani::sys::ani_resolver },
+        }
+    }
+
+    fn signature(self) -> &'static str {
+        match self {
+            Self::Class => "Lstd/core/Class;",
+            Self::String => "Lstd/core/String;",
+            Self::Function | Self::FunctionObject => "Lstd/core/Function;",
+            Self::Ref
+            | Self::Type
+            | Self::Module
+            | Self::Namespace
+            | Self::Enum
+            | Self::Error
+            | Self::Method
+            | Self::StaticMethod
+            | Self::Field
+            | Self::StaticField
+            | Self::Variable
+            | Self::Resolver => "Lstd/core/Object;",
+        }
+    }
+
+    fn union_variant_signature(self) -> String {
+        to_new_style_ref_signature(self.signature())
     }
 }
 
@@ -668,6 +786,8 @@ impl AniType {
             AniType::Set(_) => "Lstd/core/Set;".to_string(),
             AniType::Map(_) => "Lstd/core/Map;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
+            AniType::RuntimeHandle(handle) => handle.signature().to_string(),
+            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "Lstd/core/Object;".to_string(),
 
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
             AniType::NativePointer(_) => "J".to_string(),
@@ -691,6 +811,8 @@ impl AniType {
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
+            AniType::RuntimeHandle(handle) => handle.union_variant_signature(),
+            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "C{std.core.Object}".to_string(),
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
             AniType::NativePointer(_) => PrimitiveType::I64.to_boxed_new_signature().to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
@@ -1191,6 +1313,18 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "J");
 
+        let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+
+        let ty: Type = syn::parse_quote!(ani::conversions::TupleValue);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+
+        let ty: Type = syn::parse_quote!(ani::conversions::EnumItem);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+
         let ty: Type = syn::parse_quote!(Undefined);
 
         let ani_type = AniType::from_syn_type(&ty);
@@ -1307,6 +1441,22 @@ mod tests {
         } else {
             panic!("Expected NativePointer type");
         }
+    }
+
+    #[test]
+    fn test_parse_runtime_wrappers() {
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(ani::conversions::AnyValue)),
+            AniType::AnyValue
+        ));
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(ani::conversions::TupleValue)),
+            AniType::TupleValue
+        ));
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(ani::conversions::EnumItem)),
+            AniType::EnumItem
+        ));
     }
 
     #[test]
@@ -1459,9 +1609,111 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_runtime_handle_types() {
+        let ty: Type = syn::parse_quote!(AniRef<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Ref)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniClass<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Class)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniType<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Type)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniString<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::String)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniEnum<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Enum)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniError<'_>);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Error)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniMethod);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Method)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniResolver);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::Resolver)
+        ));
+
+        let ty: Type = syn::parse_quote!(AniStaticField);
+        assert!(matches!(
+            AniType::from_syn_type(&ty),
+            AniType::RuntimeHandle(RuntimeHandleType::StaticField)
+        ));
+    }
+
+    #[test]
+    fn test_runtime_handle_c_type_generation() {
+        let ty: Type = syn::parse_quote!(AniRef<'_>);
+        assert_eq!(
+            AniType::from_syn_type(&ty).to_ani_c_type().to_string(),
+            quote!(ani::sys::ani_ref).to_string()
+        );
+
+        let ty: Type = syn::parse_quote!(AniClass<'_>);
+        assert_eq!(
+            AniType::from_syn_type(&ty).to_ani_c_type().to_string(),
+            quote!(ani::sys::ani_class).to_string()
+        );
+
+        let ty: Type = syn::parse_quote!(AniMethod);
+        assert_eq!(
+            AniType::from_syn_type(&ty).to_ani_c_type().to_string(),
+            quote!(ani::sys::ani_method).to_string()
+        );
+
+        let ty: Type = syn::parse_quote!(AniError<'_>);
+        assert_eq!(
+            AniType::from_syn_type(&ty).to_ani_c_type().to_string(),
+            quote!(ani::sys::ani_error).to_string()
+        );
+
+        let ty: Type = syn::parse_quote!(AniVariable);
+        assert_eq!(
+            AniType::from_syn_type(&ty).to_ani_c_type().to_string(),
+            quote!(ani::sys::ani_variable).to_string()
+        );
+    }
+
+    #[test]
     fn test_unknown_known_ani_wrapper_signature() {
         let ty: Type = syn::parse_quote!(AniString<'_>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/String;");
+
+        let ty: Type = syn::parse_quote!(AniClass<'_>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Class;");
+
+        let ty: Type = syn::parse_quote!(AniMethod);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+
+        let ty: Type = syn::parse_quote!(AniError<'_>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
     }
 }

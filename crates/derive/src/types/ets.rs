@@ -18,7 +18,8 @@ use crate::codegen::{
 use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
-    AniType, FunctionType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias,
+    AniType, FunctionType, PrimitiveType, RuntimeHandleType, StringType, WrapperType,
+    resolve_object_type_alias,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -664,9 +665,13 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Map(_) => format!("new {}()", ets_type),
         AniType::Tuple(_) => format!("[] as {}", ets_type),
         AniType::NativePointer(_) => "0".to_string(),
+        AniType::RuntimeHandle(handle) => default_runtime_handle_value(*handle, ets_type),
         AniType::Either(_)
         | AniType::Promise(_)
         | AniType::AniObject
+        | AniType::AnyValue
+        | AniType::TupleValue
+        | AniType::EnumItem
         | AniType::ArrayBuffer
         | AniType::Function(_)
         | AniType::FnArgs(_)
@@ -770,6 +775,8 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
             )
         }
         AniType::AniObject => "Object".to_string(),
+        AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
+        AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "Object".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::NativePointer(_) => "long".to_string(),
         AniType::Tuple(items) => format!(
@@ -912,6 +919,33 @@ fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
     }
 
     None
+}
+
+fn runtime_handle_to_ets(handle: RuntimeHandleType) -> &'static str {
+    match handle {
+        RuntimeHandleType::Class => "Class",
+        RuntimeHandleType::String => "string",
+        RuntimeHandleType::Function | RuntimeHandleType::FunctionObject => "Function",
+        RuntimeHandleType::Ref
+        | RuntimeHandleType::Type
+        | RuntimeHandleType::Module
+        | RuntimeHandleType::Namespace
+        | RuntimeHandleType::Enum
+        | RuntimeHandleType::Error
+        | RuntimeHandleType::Method
+        | RuntimeHandleType::StaticMethod
+        | RuntimeHandleType::Field
+        | RuntimeHandleType::StaticField
+        | RuntimeHandleType::Variable
+        | RuntimeHandleType::Resolver => "Object",
+    }
+}
+
+fn default_runtime_handle_value(handle: RuntimeHandleType, ets_type: &str) -> String {
+    match handle {
+        RuntimeHandleType::String => "\"\"".to_string(),
+        _ => format!("null as {}", ets_type),
+    }
 }
 
 fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
@@ -2418,6 +2452,9 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
         let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
         let native_ptr_ty: Type = syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>);
+        let any_value_ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
+        let tuple_value_ty: Type = syn::parse_quote!(ani::conversions::TupleValue);
+        let enum_item_ty: Type = syn::parse_quote!(ani::conversions::EnumItem);
         let result_ty: Type = syn::parse_quote!(Result<crate::models::UserInfo, ani::Error>);
         let either_ty: Type = syn::parse_quote!(Either<crate::models::UserInfo, String>);
 
@@ -2441,6 +2478,9 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
             EtsTypeSurface::from_syn_type(&native_ptr_ty).object_default_value,
             "0"
         );
+        assert_eq!(EtsTypeSurface::from_syn_type(&any_value_ty).public_ty, "Object");
+        assert_eq!(EtsTypeSurface::from_syn_type(&tuple_value_ty).public_ty, "Object");
+        assert_eq!(EtsTypeSurface::from_syn_type(&enum_item_ty).public_ty, "Object");
         assert_eq!(
             EtsTypeSurface::from_syn_type(&result_ty).object_default_value,
             "null as models.UserInfo"
