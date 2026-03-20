@@ -308,14 +308,16 @@ impl AniType {
         match ty {
             Type::Path(type_path) => Self::parse_type_path(type_path),
             Type::Reference(type_ref) => {
-                // Handle &str
+                // Handle &str specially, otherwise preserve the referenced surface type.
                 if let Type::Path(inner_path) = type_ref.elem.as_ref() {
                     if is_path_ident(inner_path, "str") {
                         return AniType::String(StringType::Str);
                     }
                 }
-                AniType::Unknown(Box::new(ty.clone()))
+                AniType::from_syn_type(type_ref.elem.as_ref())
             }
+            Type::Paren(type_paren) => AniType::from_syn_type(type_paren.elem.as_ref()),
+            Type::Group(type_group) => AniType::from_syn_type(type_group.elem.as_ref()),
             Type::Tuple(tuple) => {
                 if tuple.elems.is_empty() {
                     AniType::Unit
@@ -400,6 +402,10 @@ impl AniType {
             let inner = extract_first_generic_type(&segment.arguments)
                 .unwrap_or_else(|| syn::parse_quote!(()));
             return AniType::NativePointer(Box::new(inner));
+        }
+
+        if let Some(inner) = extract_transparent_wrapper_inner_type(&ident, &segment.arguments) {
+            return AniType::from_syn_type(&inner);
         }
 
         // Check for Promise types
@@ -787,7 +793,9 @@ impl AniType {
             AniType::Map(_) => "Lstd/core/Map;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
             AniType::RuntimeHandle(handle) => handle.signature().to_string(),
-            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "Lstd/core/Object;".to_string(),
+            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => {
+                "Lstd/core/Object;".to_string()
+            }
 
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
             AniType::NativePointer(_) => "J".to_string(),
@@ -812,7 +820,9 @@ impl AniType {
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
             AniType::RuntimeHandle(handle) => handle.union_variant_signature(),
-            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "C{std.core.Object}".to_string(),
+            AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => {
+                "C{std.core.Object}".to_string()
+            }
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
             AniType::NativePointer(_) => PrimitiveType::I64.to_boxed_new_signature().to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
@@ -1028,7 +1038,23 @@ fn parse_map_type(args: &PathArguments) -> Option<MapType> {
     })
 }
 
+fn extract_transparent_wrapper_inner_type(ident: &str, args: &PathArguments) -> Option<Type> {
+    match ident {
+        "Box" | "Rc" | "Arc" | "Cow" | "Pin" => extract_first_generic_type(args),
+        _ => None,
+    }
+}
+
 fn unknown_type_to_signature(ty: &Type) -> Option<String> {
+    let reparsed = AniType::from_syn_type(ty);
+    match reparsed {
+        AniType::Unknown(inner) if inner.as_ref() != ty => {
+            return unknown_type_to_signature(inner.as_ref());
+        }
+        AniType::Unknown(_) => {}
+        other => return Some(other.to_signature()),
+    }
+
     match ty {
         Type::Path(type_path) => {
             let last = type_path.path.segments.last()?.ident.to_string();
@@ -1606,6 +1632,28 @@ mod tests {
             ani_type.to_signature(),
             "Lani_derive/models/AliasedProfile;"
         );
+    }
+
+    #[test]
+    fn test_transparent_wrapper_custom_type_signature() {
+        let ty: Type = syn::parse_quote!(Box<crate::models::UserInfo>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
+
+        let ty: Type = syn::parse_quote!(std::sync::Arc<crate::models::UserInfo>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
+    }
+
+    #[test]
+    fn test_reference_and_cow_surface_types_preserve_inner_signature() {
+        let ty: Type = syn::parse_quote!(&crate::models::UserInfo);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
+
+        let ty: Type = syn::parse_quote!(std::borrow::Cow<'static, str>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;");
     }
 
     #[test]

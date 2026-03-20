@@ -1073,7 +1073,8 @@ mod tests {
                 Ok(())
             }
         };
-        let parsed = validate_init_signature(&func).expect("should parse std result init signature");
+        let parsed =
+            validate_init_signature(&func).expect("should parse std result init signature");
         assert_eq!(
             parsed,
             InitSignature {

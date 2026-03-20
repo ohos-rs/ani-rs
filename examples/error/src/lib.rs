@@ -191,7 +191,11 @@ fn throw_existing_error(env: &Env<'_>, error: AniError<'_>) -> Result<()> {
 }
 
 #[ani]
-fn reject_with_error_handle(env: &Env<'_>, resolver: AniResolver, error: AniError<'_>) -> Result<()> {
+fn reject_with_error_handle(
+    env: &Env<'_>,
+    resolver: AniResolver,
+    error: AniError<'_>,
+) -> Result<()> {
     env.promise_reject(&resolver, &error)
 }
 

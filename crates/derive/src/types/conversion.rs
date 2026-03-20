@@ -5,7 +5,7 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{FnArg, Pat, ReturnType, Type, TypePath};
+use syn::{FnArg, GenericArgument, Pat, PathArguments, ReturnType, Type, TypePath};
 
 use super::ani_type::{AniType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias};
 
@@ -273,6 +273,10 @@ fn classify_type_path_return_strategy(type_path: &TypePath) -> UnknownTypeReturn
     };
     let ident = last.ident.to_string();
 
+    if let Some(inner) = extract_transparent_wrapper_inner_type(&ident, &last.arguments) {
+        return unknown_type_return_strategy(&inner);
+    }
+
     if is_known_runtime_wrapper_type(&ident) || is_custom_object_path(type_path) {
         UnknownTypeReturnStrategy::ToAniNullFallback
     } else {
@@ -288,6 +292,19 @@ fn is_raw_ani_type_path(type_path: &TypePath) -> bool {
         .map(|segment| segment.ident.to_string())
         .map(|ident| ident.starts_with("ani_"))
         .unwrap_or(false)
+}
+
+fn extract_transparent_wrapper_inner_type(ident: &str, args: &PathArguments) -> Option<Type> {
+    match ident {
+        "Box" | "Rc" | "Arc" | "Cow" | "Pin" => match args {
+            PathArguments::AngleBracketed(args) => args.args.iter().find_map(|arg| match arg {
+                GenericArgument::Type(inner) => Some(inner.clone()),
+                _ => None,
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn is_known_runtime_wrapper_type(ident: &str) -> bool {
@@ -402,7 +419,10 @@ fn generate_to_ani_conversion(
 }
 
 fn is_to_ani_object_raw_type(ani_type: &AniType) -> bool {
-    matches!(ani_type, AniType::Record(_) | AniType::Set(_) | AniType::Map(_))
+    matches!(
+        ani_type,
+        AniType::Record(_) | AniType::Set(_) | AniType::Map(_)
+    )
 }
 
 fn is_to_ani_value_type(ani_type: &AniType) -> bool {
@@ -431,8 +451,10 @@ fn is_to_ani_default_value_type(ani_type: &AniType) -> bool {
 }
 
 fn uses_null_pointer_error_fallback(ani_type: &AniType) -> bool {
-    matches!(ani_type, AniType::String(StringType::String) | AniType::Promise(_))
-        || is_to_ani_object_raw_type(ani_type)
+    matches!(
+        ani_type,
+        AniType::String(StringType::String) | AniType::Promise(_)
+    ) || is_to_ani_object_raw_type(ani_type)
         || is_to_ani_value_type(ani_type)
 }
 
@@ -596,7 +618,11 @@ mod tests {
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
-        assert!(code.contains("cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
+        assert!(
+            code.contains(
+                "cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"
+            )
+        );
         assert!(code.contains(":: Input"));
     }
 
@@ -608,6 +634,21 @@ mod tests {
         assert!(code.contains("ArrayBuffer as ani :: conversions :: FromAni"));
         assert!(code.contains("buffer as < ArrayBuffer as ani :: conversions :: FromAni"));
         assert!(code.contains(":: Input"));
+    }
+
+    #[test]
+    fn transparent_wrapper_object_return_strategy_uses_to_ani_fallback() {
+        let ty: Type = parse_quote!(Box<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
+
+        let ty: Type = parse_quote!(std::sync::Arc<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
     }
 
     #[test]
@@ -694,7 +735,8 @@ mod tests {
 
     #[test]
     fn return_conversion_native_pointer_uses_typed_to_ani_with_default_fallback() {
-        let output: ReturnType = parse_quote!(-> ani::conversions::NativePointer<crate::NativeResource>);
+        let output: ReturnType =
+            parse_quote!(-> ani::conversions::NativePointer<crate::NativeResource>);
         let code = generate_return_conversion(&output).to_string();
         assert!(code.contains("ToAni :: to_ani"));
         assert!(code.contains("Default :: default ()"));
@@ -715,7 +757,9 @@ mod tests {
         let arg: FnArg = parse_quote!(ptr: ani::conversions::NativePointer<crate::NativeResource>);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
-        assert!(code.contains("NativePointer < crate :: NativeResource > as ani :: conversions :: FromAni"));
+        assert!(code.contains(
+            "NativePointer < crate :: NativeResource > as ani :: conversions :: FromAni"
+        ));
         assert!(code.contains(":: Input"));
     }
 
@@ -734,7 +778,6 @@ mod tests {
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("Undefined as ani :: conversions :: FromAni"));
     }
-
 
     #[test]
     fn return_conversion_raw_ani_object_is_passthrough() {

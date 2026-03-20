@@ -462,6 +462,87 @@ fn section_break(out: &mut String, has_content: &mut bool) {
     *has_content = true;
 }
 
+const BUILTIN_OPAQUE_ETS_TYPE_ALIASES: &[(&str, &str)] = &[
+    ("AniRef", "Object"),
+    ("AniType", "Object"),
+    ("AniModule", "Object"),
+    ("AniNamespace", "Object"),
+    ("AniEnum", "Object"),
+    ("AniError", "Object"),
+    ("AniMethod", "Object"),
+    ("AniStaticMethod", "Object"),
+    ("AniField", "Object"),
+    ("AniStaticField", "Object"),
+    ("AniVariable", "Object"),
+    ("AniResolver", "Object"),
+    ("AnyValue", "Object"),
+    ("TupleValue", "Object"),
+    ("EnumItem", "Object"),
+];
+
+fn contains_type_token(haystack: &str, token: &str) -> bool {
+    let mut search_from = 0usize;
+    while let Some(offset) = haystack[search_from..].find(token) {
+        let start = search_from + offset;
+        let end = start + token.len();
+        let prev = haystack[..start].chars().next_back();
+        let next = haystack[end..].chars().next();
+        let prev_ok = prev.map_or(true, |ch| {
+            !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+        });
+        let next_ok = next.map_or(true, |ch| {
+            !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+        });
+        if prev_ok && next_ok {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+fn rendered_decl_uses_builtin_alias(
+    alias: &str,
+    decls: &[EtsDecl],
+    objects: &[EtsObjectDecl],
+    class_members: &[EtsClassMemberDecl],
+) -> bool {
+    decls
+        .iter()
+        .any(|decl| contains_type_token(&decl.rendered, alias))
+        || objects.iter().any(|object| {
+            object
+                .members
+                .iter()
+                .any(|member| contains_type_token(&member.rendered, alias))
+        })
+        || class_members
+            .iter()
+            .any(|member| contains_type_token(&member.rendered, alias))
+}
+
+fn append_builtin_opaque_ets_aliases(
+    out: &mut String,
+    decls: &[EtsDecl],
+    objects: &[EtsObjectDecl],
+    class_members: &[EtsClassMemberDecl],
+    has_content: &mut bool,
+) {
+    let aliases = BUILTIN_OPAQUE_ETS_TYPE_ALIASES
+        .iter()
+        .copied()
+        .filter(|(alias, _)| rendered_decl_uses_builtin_alias(alias, decls, objects, class_members))
+        .collect::<Vec<_>>();
+    if aliases.is_empty() {
+        return;
+    }
+
+    section_break(out, has_content);
+    for (alias, target) in aliases {
+        push_indented_block(out, 0, &format!("export type {alias} = {target};"));
+    }
+}
+
 fn render_decls(
     decls: &[EtsDecl],
     objects: &[EtsObjectDecl],
@@ -498,6 +579,8 @@ fn render_decls(
 
     globals.sort();
     let mut has_content = false;
+
+    append_builtin_opaque_ets_aliases(&mut out, decls, objects, class_members, &mut has_content);
 
     for (class_name, class) in &root.classes {
         section_break(&mut out, &mut has_content);
@@ -776,7 +859,9 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         }
         AniType::AniObject => "Object".to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
-        AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => "Object".to_string(),
+        AniType::AnyValue => "AnyValue".to_string(),
+        AniType::TupleValue => "TupleValue".to_string(),
+        AniType::EnumItem => "EnumItem".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::NativePointer(_) => "long".to_string(),
         AniType::Tuple(items) => format!(
@@ -787,19 +872,31 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        AniType::Unknown(ty) => unknown_type_to_ets(ty).unwrap_or_else(|| "Object".to_string()),
+        AniType::Unknown(ty) => {
+            unknown_type_to_ets(ty, context).unwrap_or_else(|| "Object".to_string())
+        }
+
         AniType::Wrapper(WrapperType::Option(_)) | AniType::Either(_) => {
             unreachable!("union-capable types must be handled by collect_surface_union_parts")
         }
     }
 }
 
-fn unknown_type_to_ets(ty: &Type) -> Option<String> {
+fn unknown_type_to_ets(ty: &Type, context: EtsRenderContext) -> Option<String> {
+    let reparsed = AniType::from_syn_type(ty);
+    match reparsed {
+        AniType::Unknown(inner) if inner.as_ref() != ty => {
+            return unknown_type_to_ets(inner.as_ref(), context);
+        }
+        AniType::Unknown(_) => {}
+        other => return Some(ani_type_to_ets_in_context(&other, context)),
+    }
+
     match ty {
         Type::Path(type_path) => path_type_to_ets(type_path),
-        Type::Reference(type_ref) => unknown_type_to_ets(type_ref.elem.as_ref()),
-        Type::Paren(type_paren) => unknown_type_to_ets(type_paren.elem.as_ref()),
-        Type::Group(type_group) => unknown_type_to_ets(type_group.elem.as_ref()),
+        Type::Reference(type_ref) => unknown_type_to_ets(type_ref.elem.as_ref(), context),
+        Type::Paren(type_paren) => unknown_type_to_ets(type_paren.elem.as_ref(), context),
+        Type::Group(type_group) => unknown_type_to_ets(type_group.elem.as_ref(), context),
         _ => None,
     }
 }
@@ -923,21 +1020,21 @@ fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
 
 fn runtime_handle_to_ets(handle: RuntimeHandleType) -> &'static str {
     match handle {
+        RuntimeHandleType::Ref => "AniRef",
         RuntimeHandleType::Class => "Class",
+        RuntimeHandleType::Type => "AniType",
+        RuntimeHandleType::Module => "AniModule",
+        RuntimeHandleType::Namespace => "AniNamespace",
         RuntimeHandleType::String => "string",
+        RuntimeHandleType::Enum => "AniEnum",
+        RuntimeHandleType::Error => "AniError",
+        RuntimeHandleType::Method => "AniMethod",
+        RuntimeHandleType::StaticMethod => "AniStaticMethod",
+        RuntimeHandleType::Field => "AniField",
+        RuntimeHandleType::StaticField => "AniStaticField",
         RuntimeHandleType::Function | RuntimeHandleType::FunctionObject => "Function",
-        RuntimeHandleType::Ref
-        | RuntimeHandleType::Type
-        | RuntimeHandleType::Module
-        | RuntimeHandleType::Namespace
-        | RuntimeHandleType::Enum
-        | RuntimeHandleType::Error
-        | RuntimeHandleType::Method
-        | RuntimeHandleType::StaticMethod
-        | RuntimeHandleType::Field
-        | RuntimeHandleType::StaticField
-        | RuntimeHandleType::Variable
-        | RuntimeHandleType::Resolver => "Object",
+        RuntimeHandleType::Variable => "AniVariable",
+        RuntimeHandleType::Resolver => "AniResolver",
     }
 }
 
@@ -950,7 +1047,24 @@ fn default_runtime_handle_value(handle: RuntimeHandleType, ets_type: &str) -> St
 
 fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
     match ident {
+        "AniRef" => Some("AniRef"),
+        "AniObject" => Some("Object"),
+        "AniClass" => Some("Class"),
+        "AniType" => Some("AniType"),
+        "AniModule" => Some("AniModule"),
+        "AniNamespace" => Some("AniNamespace"),
         "AniString" => Some("string"),
+        "AniEnum" => Some("AniEnum"),
+        "AniError" => Some("AniError"),
+        "AniEnumItem" | "EnumItem" => Some("EnumItem"),
+        "AniTupleValue" | "TupleValue" => Some("TupleValue"),
+        "AniMethod" => Some("AniMethod"),
+        "AniStaticMethod" => Some("AniStaticMethod"),
+        "AniField" => Some("AniField"),
+        "AniStaticField" => Some("AniStaticField"),
+        "AniVariable" => Some("AniVariable"),
+        "AniResolver" => Some("AniResolver"),
+        "AnyValue" => Some("AnyValue"),
         "Null" => Some("null"),
         "Undefined" => Some("undefined"),
         "AniArrayBuffer" => Some("ArrayBuffer"),
@@ -964,10 +1078,7 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("FixedArray<long>"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("FixedArray<float>"),
         "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("FixedArray<double>"),
-        "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
-        | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
-        | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
-        | "GlobalRef" | "WeakRef" => Some("Object"),
+        "GlobalRef" | "WeakRef" => Some("AniRef"),
         _ => None,
     }
 }
@@ -1238,7 +1349,9 @@ fn bridge_strategy_for_ani_type(
     public_ty: &str,
     native_ty: &str,
 ) -> EtsBridgeStrategy {
-    if public_ty != native_ty && collect_surface_union_parts(ty, EtsRenderContext::public()).is_some() {
+    if public_ty != native_ty
+        && collect_surface_union_parts(ty, EtsRenderContext::public()).is_some()
+    {
         EtsBridgeStrategy::Nullish
     } else {
         EtsBridgeStrategy::Direct
@@ -1304,7 +1417,13 @@ fn generate_fn_ets_decl_with_style(
     let context = EtsRenderContext::with_option_style(option_style);
     let params = collect_exposed_param_specs(sig, skip_first)
         .into_iter()
-        .map(|param| format!("{}: {}", param.name, param.surface.ty_for_option_style(context.option_style)))
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                param.surface.ty_for_option_style(context.option_style)
+            )
+        })
         .collect::<Vec<_>>();
     let ret_spec = exposed_return_spec(sig);
     let ret = ret_spec.surface.ty_for_option_style(context.option_style);
@@ -1542,7 +1661,11 @@ fn generate_ctor_ets_decl_with_style(
     let params = collect_exposed_param_specs(sig, skip_first)
         .into_iter()
         .map(|param| {
-            format!("{}: {}", param.name, param.surface.ty_for_option_style(option_style))
+            format!(
+                "{}: {}",
+                param.name,
+                param.surface.ty_for_option_style(option_style)
+            )
         })
         .collect::<Vec<_>>();
     format!("constructor({})", params.join(", "))
@@ -2279,8 +2402,25 @@ set name(name: string | null | undefined) {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "inspect", false),
-            "inspect(s: string, buffer: ArrayBuffer, field: Object, cb: Function): Function"
+            "inspect(s: string, buffer: ArrayBuffer, field: AniField, cb: Function): Function"
         );
+    }
+
+    #[test]
+    fn test_render_decls_emits_builtin_opaque_aliases_for_runtime_handles() {
+        let decls = vec![EtsDecl {
+            kind: EtsDeclKind::Global,
+            target: String::new(),
+            rendered: "native function inspect(field: AniField, error: AniError, value: AnyValue): AniResolver;".to_string(),
+        }];
+        let rendered = render_decls(&decls, &[], &[]);
+        assert!(rendered.contains("export type AniField = Object;"));
+        assert!(rendered.contains("export type AniError = Object;"));
+        assert!(rendered.contains("export type AnyValue = Object;"));
+        assert!(rendered.contains("export type AniResolver = Object;"));
+        assert!(rendered.contains(
+            "export native function inspect(field: AniField, error: AniError, value: AnyValue): AniResolver;"
+        ));
     }
 
     #[test]
@@ -2307,6 +2447,23 @@ set name(name: string | null | undefined) {
         assert_eq!(
             generate_fn_ets_decl(&sig, "collect", false),
             "collect(record_: Record<string, models.UserInfo>, set: Set<models.UserInfo>, map: Map<string, models.UserInfo>): Map<string, models.UserInfo>"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_preserves_transparent_wrappers_around_object_types() {
+        register_object_type_alias("crate::models::UserInfo", "models.UserInfo");
+        let sig: Signature = syn::parse_quote! {
+            fn normalize(
+                user: Box<crate::models::UserInfo>,
+                maybe: std::sync::Arc<Option<crate::models::UserInfo>>,
+                by_name: std::pin::Pin<HashMap<String, crate::models::UserInfo>>,
+                label: std::borrow::Cow<'static, str>
+            ) -> std::rc::Rc<crate::models::UserInfo>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "normalize", false),
+            "normalize(user: models.UserInfo, maybe: models.UserInfo | null | undefined, by_name: Record<string, models.UserInfo>, label: string): models.UserInfo"
         );
     }
 
@@ -2451,7 +2608,8 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
         let record_ty: Type = syn::parse_quote!(HashMap<String, crate::models::UserInfo>);
         let set_ty: Type = syn::parse_quote!(HashSet<crate::models::UserInfo>);
         let map_ty: Type = syn::parse_quote!(BTreeMap<String, crate::models::UserInfo>);
-        let native_ptr_ty: Type = syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>);
+        let native_ptr_ty: Type =
+            syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>);
         let any_value_ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let tuple_value_ty: Type = syn::parse_quote!(ani::conversions::TupleValue);
         let enum_item_ty: Type = syn::parse_quote!(ani::conversions::EnumItem);
@@ -2478,9 +2636,18 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
             EtsTypeSurface::from_syn_type(&native_ptr_ty).object_default_value,
             "0"
         );
-        assert_eq!(EtsTypeSurface::from_syn_type(&any_value_ty).public_ty, "Object");
-        assert_eq!(EtsTypeSurface::from_syn_type(&tuple_value_ty).public_ty, "Object");
-        assert_eq!(EtsTypeSurface::from_syn_type(&enum_item_ty).public_ty, "Object");
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&any_value_ty).public_ty,
+            "AnyValue"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&tuple_value_ty).public_ty,
+            "TupleValue"
+        );
+        assert_eq!(
+            EtsTypeSurface::from_syn_type(&enum_item_ty).public_ty,
+            "EnumItem"
+        );
         assert_eq!(
             EtsTypeSurface::from_syn_type(&result_ty).object_default_value,
             "null as models.UserInfo"

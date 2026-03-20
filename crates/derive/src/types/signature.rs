@@ -363,7 +363,9 @@ mod tests {
             "Lstd/core/Map;"
         );
         assert_eq!(
-            rust_type_to_signature(&syn::parse_quote!(ani::conversions::NativePointer<crate::NativeResource>)),
+            rust_type_to_signature(&syn::parse_quote!(
+                ani::conversions::NativePointer<crate::NativeResource>
+            )),
             "J"
         );
         assert_eq!(
@@ -399,7 +401,9 @@ mod tests {
             "Lstd/core/Map;"
         );
         assert_eq!(
-            rust_type_to_signature(&syn::parse_quote!(ani::conversions::NativePointer<crate::models::UserInfo>)),
+            rust_type_to_signature(&syn::parse_quote!(
+                ani::conversions::NativePointer<crate::models::UserInfo>
+            )),
             "J"
         );
     }
