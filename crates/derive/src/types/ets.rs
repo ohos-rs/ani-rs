@@ -3,23 +3,23 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{btree_map::Entry, BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use syn::{FnArg, Pat, ReturnType, Signature, Type};
+use syn::{FnArg, GenericParam, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
+    should_skip_in_signature, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
 };
 
 #[cfg(test)]
 use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
-    AniType, FunctionType, PrimitiveType, RuntimeHandleType, StringType, WrapperType,
-    resolve_object_type_alias,
+    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name, AniType,
+    FunctionType, PrimitiveType, RuntimeHandleType, StringType, WrapperType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -464,6 +464,8 @@ fn section_break(out: &mut String, has_content: &mut bool) {
 
 const BUILTIN_OPAQUE_ETS_TYPE_ALIASES: &[(&str, &str)] = &[
     ("AniRef", "Object"),
+    ("GlobalRef", "Object"),
+    ("WeakRef", "Object"),
     ("AniType", "Object"),
     ("AniModule", "Object"),
     ("AniNamespace", "Object"),
@@ -739,6 +741,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Vec(_)) => "[] as ".to_string() + ets_type,
+        AniType::FixedArray(_) => "[] as ".to_string() + ets_type,
         AniType::Wrapper(WrapperType::Result(inner))
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
             default_object_value_for_ani_type(inner, ets_type)
@@ -748,6 +751,9 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Map(_) => format!("new {}()", ets_type),
         AniType::Tuple(_) => format!("[] as {}", ets_type),
         AniType::NativePointer(_) => "0".to_string(),
+        AniType::GlobalRef | AniType::WeakRef => format!("null as {}", ets_type),
+        AniType::TypeParam(_) => format!("null as {}", ets_type),
+        AniType::CustomObject(_) => format!("null as {}", ets_type),
         AniType::RuntimeHandle(handle) => default_runtime_handle_value(*handle, ets_type),
         AniType::Either(_)
         | AniType::Promise(_)
@@ -763,8 +769,8 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
     }
 }
 
-fn function_arg_types_to_ets(args: &Type, context: EtsRenderContext) -> Vec<String> {
-    match AniType::from_syn_type(args) {
+fn function_arg_types_to_ets(args: &AniType, context: EtsRenderContext) -> Vec<String> {
+    match args {
         AniType::FnArgs(fn_args) => fn_args
             .elements
             .iter()
@@ -775,13 +781,13 @@ fn function_arg_types_to_ets(args: &Type, context: EtsRenderContext) -> Vec<Stri
             .map(|arg| ani_type_to_ets_in_context(arg, context))
             .collect(),
         AniType::Unit => Vec::new(),
-        other => vec![ani_type_to_ets_in_context(&other, context)],
+        other => vec![ani_type_to_ets_in_context(other, context)],
     }
 }
 
 fn function_type_to_ets(func_type: &FunctionType, context: EtsRenderContext) -> String {
     let (args, ret) = match func_type {
-        FunctionType::Function { args, ret } | FunctionType::FunctionRef { args, ret } => {
+        FunctionType::Function { args, ret, .. } | FunctionType::FunctionRef { args, ret, .. } => {
             (args.as_ref(), ret.as_ref())
         }
     };
@@ -792,7 +798,7 @@ fn function_type_to_ets(func_type: &FunctionType, context: EtsRenderContext) -> 
         .map(|(idx, ty)| format!("arg{idx}: {ty}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let ret = ani_type_to_ets_in_context(&AniType::from_syn_type(ret), context);
+    let ret = ani_type_to_ets_in_context(ret, context);
     format!("({params}) => {ret}")
 }
 
@@ -858,12 +864,18 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
             )
         }
         AniType::AniObject => "Object".to_string(),
+        AniType::GlobalRef => "GlobalRef".to_string(),
+        AniType::WeakRef => "WeakRef".to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
         AniType::AnyValue => "AnyValue".to_string(),
         AniType::TupleValue => "TupleValue".to_string(),
         AniType::EnumItem => "EnumItem".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::NativePointer(_) => "long".to_string(),
+        AniType::FixedArray(p) => fixed_array_type_name(p).to_string(),
+        AniType::TypeParam(name) => name.clone(),
+        AniType::CustomObject(type_path) => custom_object_path_to_ets(type_path.as_ref(), context)
+            .unwrap_or_else(|| "Object".to_string()),
         AniType::Tuple(items) => format!(
             "[{}]",
             items
@@ -985,6 +997,42 @@ fn vec_inner_to_ets(inner: &AniType) -> String {
     format!("Array<{}>", ani_type_to_ets(inner))
 }
 
+fn custom_object_path_to_ets(
+    type_path: &syn::TypePath,
+    context: EtsRenderContext,
+) -> Option<String> {
+    let base = path_type_to_ets(type_path)?;
+    let generics = type_path
+        .path
+        .segments
+        .last()
+        .and_then(|segment| match &segment.arguments {
+            syn::PathArguments::AngleBracketed(args) => {
+                let rendered = args
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        syn::GenericArgument::Type(inner) => Some(ani_type_to_ets_in_context(
+                            &AniType::from_syn_type(inner),
+                            context,
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if rendered.is_empty() {
+                    None
+                } else {
+                    Some(rendered)
+                }
+            }
+            _ => None,
+        });
+
+    generics
+        .map(|args| format!("{base}<{}>", args.join(", ")))
+        .or(Some(base))
+}
+
 fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
     let segment = type_path.path.segments.last()?;
     let ident = segment.ident.to_string();
@@ -993,14 +1041,7 @@ fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
         return Some(mapped.to_string());
     }
 
-    let qualified = type_path
-        .path
-        .segments
-        .iter()
-        .map(|seg| seg.ident.to_string())
-        .filter(|seg| !matches!(seg.as_str(), "crate" | "self" | "super"))
-        .collect::<Vec<_>>()
-        .join(".");
+    let qualified = type_path_qualified_name(type_path);
 
     if let Some(alias) =
         resolve_object_type_alias(&qualified).or_else(|| resolve_object_type_alias(&ident))
@@ -1078,7 +1119,8 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("FixedArray<long>"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("FixedArray<float>"),
         "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("FixedArray<double>"),
-        "GlobalRef" | "WeakRef" => Some("AniRef"),
+        "GlobalRef" => Some("GlobalRef"),
+        "WeakRef" => Some("WeakRef"),
         _ => None,
     }
 }
@@ -1090,42 +1132,10 @@ fn fixed_array_type_name(p: &PrimitiveType) -> &'static str {
         PrimitiveType::I16 => "FixedArray<short>",
         PrimitiveType::U16 | PrimitiveType::Char => "FixedArray<char>",
         PrimitiveType::I32 | PrimitiveType::U32 => "FixedArray<int>",
-        PrimitiveType::I64 | PrimitiveType::U64 => "FixedArray<long>",
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => "FixedArray<long>",
         PrimitiveType::F32 => "FixedArray<float>",
         PrimitiveType::F64 => "FixedArray<double>",
     }
-}
-
-fn is_custom_object_name(ident: &str) -> bool {
-    if ident.is_empty() {
-        return false;
-    }
-
-    let Some(first) = ident.chars().next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() {
-        return false;
-    }
-
-    !matches!(
-        ident,
-        "String"
-            | "Option"
-            | "Result"
-            | "Vec"
-            | "Box"
-            | "Rc"
-            | "Arc"
-            | "HashMap"
-            | "BTreeMap"
-            | "HashSet"
-            | "BTreeSet"
-            | "VecDeque"
-            | "LinkedList"
-            | "Cow"
-            | "PathBuf"
-    )
 }
 
 fn primitive_to_ets(p: &PrimitiveType) -> &'static str {
@@ -1135,7 +1145,7 @@ fn primitive_to_ets(p: &PrimitiveType) -> &'static str {
         PrimitiveType::I16 => "short",
         PrimitiveType::U16 | PrimitiveType::Char => "char",
         PrimitiveType::I32 | PrimitiveType::U32 => "int",
-        PrimitiveType::I64 | PrimitiveType::U64 => "long",
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => "long",
         PrimitiveType::F32 => "float",
         PrimitiveType::F64 => "double",
     }
@@ -1276,7 +1286,11 @@ struct EtsTypeSurface {
 
 impl EtsTypeSurface {
     fn from_syn_type(ty: &Type) -> Self {
-        Self::from_ani_type(&AniType::from_syn_type(ty))
+        Self::from_syn_type_with_type_params(ty, &HashSet::new())
+    }
+
+    fn from_syn_type_with_type_params(ty: &Type, type_params: &HashSet<String>) -> Self {
+        Self::from_ani_type(&AniType::from_syn_type_with_type_params(ty, type_params))
     }
 
     fn from_ani_type(ty: &AniType) -> Self {
@@ -1358,8 +1372,37 @@ fn bridge_strategy_for_ani_type(
     }
 }
 
+fn collect_sig_type_params(sig: &Signature) -> HashSet<String> {
+    sig.generics
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(ty) => Some(ty.ident.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn render_sig_type_params(sig: &Signature) -> String {
+    let params = sig
+        .generics
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(ty) => Some(ty.ident.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    }
+}
+
 fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<ExposedParamSpec> {
     let mut params = Vec::new();
+    let type_params = collect_sig_type_params(sig);
 
     for (idx, arg) in sig
         .inputs
@@ -1374,8 +1417,8 @@ fn collect_exposed_param_specs(sig: &Signature, skip_first: bool) -> Vec<Exposed
                 _ => format!("arg{}", idx),
             };
             let name = sanitize_param_name(&name, idx);
-            let ani_type = AniType::from_syn_type(&pat_type.ty);
-            let surface = EtsTypeSurface::from_ani_type(&ani_type);
+            let surface =
+                EtsTypeSurface::from_syn_type_with_type_params(&pat_type.ty, &type_params);
             params.push(ExposedParamSpec { name, surface });
         }
     }
@@ -1401,8 +1444,8 @@ fn exposed_return_spec(sig: &Signature) -> ExposedReturnSpec {
             },
         },
         ReturnType::Type(_, ty) => {
-            let ani_type = AniType::from_syn_type(ty);
-            let surface = EtsTypeSurface::from_ani_type(&ani_type);
+            let surface =
+                EtsTypeSurface::from_syn_type_with_type_params(ty, &collect_sig_type_params(sig));
             ExposedReturnSpec { surface }
         }
     }
@@ -1427,7 +1470,8 @@ fn generate_fn_ets_decl_with_style(
         .collect::<Vec<_>>();
     let ret_spec = exposed_return_spec(sig);
     let ret = ret_spec.surface.ty_for_option_style(context.option_style);
-    format!("{ets_name}({}): {ret}", params.join(", "))
+    let generics = render_sig_type_params(sig);
+    format!("{ets_name}{generics}({}): {ret}", params.join(", "))
 }
 
 fn render_native_function_decl(kind: EtsDeclKind, signature: &str, is_static: bool) -> String {
@@ -2407,19 +2451,54 @@ set name(name: string | null | undefined) {
     }
 
     #[test]
+    fn test_generate_fn_ets_decl_maps_supported_non_object_fallback_types() {
+        let sig: Signature = syn::parse_quote! {
+            fn normalize(path: std::ffi::CString, offset: isize, len: usize) -> usize
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "normalize", false),
+            "normalize(path: string, offset: long, len: long): long"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_maps_fixed_array_wrappers_without_unknown_fallback() {
+        let sig: Signature = syn::parse_quote! {
+            fn roundtrip(values: FixedIntArray, flags: AniFixedArrayBoolean<'_>) -> AniFixedArrayInt<'_>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "roundtrip", false),
+            "roundtrip(values: FixedArray<int>, flags: FixedArray<boolean>): FixedArray<int>"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_keeps_global_and_weak_ref_names() {
+        let sig: Signature = syn::parse_quote! {
+            fn inspect(global: GlobalRef, weak: WeakRef) -> WeakRef
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "inspect", false),
+            "inspect(global: GlobalRef, weak: WeakRef): WeakRef"
+        );
+    }
+
+    #[test]
     fn test_render_decls_emits_builtin_opaque_aliases_for_runtime_handles() {
         let decls = vec![EtsDecl {
             kind: EtsDeclKind::Global,
             target: String::new(),
-            rendered: "native function inspect(field: AniField, error: AniError, value: AnyValue): AniResolver;".to_string(),
+            rendered: "native function inspect(field: AniField, global: GlobalRef, weak: WeakRef, error: AniError, value: AnyValue): AniResolver;".to_string(),
         }];
         let rendered = render_decls(&decls, &[], &[]);
         assert!(rendered.contains("export type AniField = Object;"));
+        assert!(rendered.contains("export type GlobalRef = Object;"));
+        assert!(rendered.contains("export type WeakRef = Object;"));
         assert!(rendered.contains("export type AniError = Object;"));
         assert!(rendered.contains("export type AnyValue = Object;"));
         assert!(rendered.contains("export type AniResolver = Object;"));
         assert!(rendered.contains(
-            "export native function inspect(field: AniField, error: AniError, value: AnyValue): AniResolver;"
+            "export native function inspect(field: AniField, global: GlobalRef, weak: WeakRef, error: AniError, value: AnyValue): AniResolver;"
         ));
     }
 
@@ -2464,6 +2543,46 @@ set name(name: string | null | undefined) {
         assert_eq!(
             generate_fn_ets_decl(&sig, "normalize", false),
             "normalize(user: models.UserInfo, maybe: models.UserInfo | null | undefined, by_name: Record<string, models.UserInfo>, label: string): models.UserInfo"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_preserves_function_type_params() {
+        let sig: Signature = syn::parse_quote! {
+            fn identity<T>(value: T, maybe: Option<T>, values: Vec<T>) -> T
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "identity", false),
+            "identity<T>(value: T, maybe: T | null | undefined, values: Array<T>): T"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_preserves_callback_function_type_params() {
+        let sig: Signature = syn::parse_quote! {
+            fn apply<T>(value: T, cb: Function<(T,), T>) -> T
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "apply", false),
+            "apply<T>(value: T, cb: (arg0: T) => T): T"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_preserves_sync_and_cell_wrappers_around_object_types() {
+        register_object_type_alias("crate::models::UserInfo", "models.UserInfo");
+        let sig: Signature = syn::parse_quote! {
+            fn normalize(
+                user: std::sync::Mutex<crate::models::UserInfo>,
+                maybe: std::sync::RwLock<Option<crate::models::UserInfo>>,
+                by_name: std::cell::RefCell<HashMap<String, crate::models::UserInfo>>,
+                late: std::sync::OnceLock<crate::models::UserInfo>,
+                lazy: std::sync::LazyLock<crate::models::UserInfo>
+            ) -> std::mem::MaybeUninit<crate::models::UserInfo>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "normalize", false),
+            "normalize(user: models.UserInfo, maybe: models.UserInfo | null | undefined, by_name: Record<string, models.UserInfo>, late: models.UserInfo, lazy: models.UserInfo): models.UserInfo"
         );
     }
 

@@ -5,9 +5,12 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{FnArg, GenericArgument, Pat, PathArguments, ReturnType, Type, TypePath};
+use syn::{FnArg, Pat, ReturnType, Type, TypePath};
 
-use super::ani_type::{AniType, PrimitiveType, StringType, WrapperType, resolve_object_type_alias};
+use super::ani_type::{
+    extract_transparent_wrapper_inner_type, is_custom_object_type_path, AniType, PrimitiveType,
+    StringType, WrapperType,
+};
 
 // ============================================================================
 // ANI Type Mapping
@@ -85,6 +88,8 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
     matches!(
         ani_type,
         AniType::AniObject
+            | AniType::GlobalRef
+            | AniType::WeakRef
             | AniType::RuntimeHandle(_)
             | AniType::Null
             | AniType::Undefined
@@ -101,6 +106,8 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::TupleValue
             | AniType::EnumItem
             | AniType::NativePointer(_)
+            | AniType::FixedArray(_)
+            | AniType::CustomObject(_)
             | AniType::Unknown(_)
             | AniType::Wrapper(WrapperType::Option(_))
             | AniType::Wrapper(WrapperType::Vec(_))
@@ -122,6 +129,8 @@ fn generate_primitive_conversion(
         PrimitiveType::U16 => quote! { let #converted_name = #param_name as u16; },
         PrimitiveType::U32 => quote! { let #converted_name = #param_name as u32; },
         PrimitiveType::U64 => quote! { let #converted_name = #param_name as u64; },
+        PrimitiveType::Isize => quote! { let #converted_name = #param_name as isize; },
+        PrimitiveType::Usize => quote! { let #converted_name = #param_name as usize; },
         PrimitiveType::Char => quote! {
             let #converted_name = std::char::from_u32(#param_name as u32).unwrap_or('\0');
         },
@@ -277,7 +286,7 @@ fn classify_type_path_return_strategy(type_path: &TypePath) -> UnknownTypeReturn
         return unknown_type_return_strategy(&inner);
     }
 
-    if is_known_runtime_wrapper_type(&ident) || is_custom_object_path(type_path) {
+    if is_known_runtime_wrapper_type(&ident) || is_custom_object_type_path(type_path) {
         UnknownTypeReturnStrategy::ToAniNullFallback
     } else {
         UnknownTypeReturnStrategy::DirectPassthrough
@@ -292,19 +301,6 @@ fn is_raw_ani_type_path(type_path: &TypePath) -> bool {
         .map(|segment| segment.ident.to_string())
         .map(|ident| ident.starts_with("ani_"))
         .unwrap_or(false)
-}
-
-fn extract_transparent_wrapper_inner_type(ident: &str, args: &PathArguments) -> Option<Type> {
-    match ident {
-        "Box" | "Rc" | "Arc" | "Cow" | "Pin" => match args {
-            PathArguments::AngleBracketed(args) => args.args.iter().find_map(|arg| match arg {
-                GenericArgument::Type(inner) => Some(inner.clone()),
-                _ => None,
-            }),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 fn is_known_runtime_wrapper_type(ident: &str) -> bool {
@@ -324,6 +320,25 @@ fn is_known_runtime_wrapper_type(ident: &str) -> bool {
             | "AniArrayRef"
             | "AniFixedArray"
             | "AniFixedArrayRef"
+            | "FixedBooleanArray"
+            | "AniFixedArrayBoolean"
+            | "FixedByteArray"
+            | "AniFixedArrayByte"
+            | "FixedShortArray"
+            | "AniFixedArrayShort"
+            | "FixedCharArray"
+            | "AniFixedArrayChar"
+            | "FixedIntArray"
+            | "AniArrayInt"
+            | "AniFixedArrayInt"
+            | "FixedLongArray"
+            | "AniArrayLong"
+            | "AniFixedArrayLong"
+            | "FixedFloatArray"
+            | "AniFixedArrayFloat"
+            | "FixedDoubleArray"
+            | "AniArrayDouble"
+            | "AniFixedArrayDouble"
             | "AniMethod"
             | "AniStaticMethod"
             | "AniField"
@@ -335,58 +350,6 @@ fn is_known_runtime_wrapper_type(ident: &str) -> bool {
             | "EnumItem"
             | "GlobalRef"
             | "WeakRef"
-    )
-}
-
-fn is_custom_object_path(type_path: &TypePath) -> bool {
-    let Some(last) = type_path.path.segments.last() else {
-        return false;
-    };
-    let ident = last.ident.to_string();
-    let qualified = type_path
-        .path
-        .segments
-        .iter()
-        .map(|seg| seg.ident.to_string())
-        .filter(|seg| !matches!(seg.as_str(), "crate" | "self" | "super"))
-        .collect::<Vec<_>>()
-        .join(".");
-
-    resolve_object_type_alias(&qualified)
-        .or_else(|| resolve_object_type_alias(&ident))
-        .is_some()
-        || is_custom_object_name(&ident)
-}
-
-fn is_custom_object_name(ident: &str) -> bool {
-    if ident.is_empty() {
-        return false;
-    }
-
-    let Some(first) = ident.chars().next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() {
-        return false;
-    }
-
-    !matches!(
-        ident,
-        "String"
-            | "Option"
-            | "Result"
-            | "Vec"
-            | "Box"
-            | "Rc"
-            | "Arc"
-            | "HashMap"
-            | "BTreeMap"
-            | "HashSet"
-            | "BTreeSet"
-            | "VecDeque"
-            | "LinkedList"
-            | "Cow"
-            | "PathBuf"
     )
 }
 
@@ -440,6 +403,8 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
             | AniType::Undefined
             | AniType::Function(_)
             | AniType::Tuple(_)
+            | AniType::FixedArray(_)
+            | AniType::CustomObject(_)
             | AniType::Wrapper(WrapperType::Option(_))
             | AniType::Wrapper(WrapperType::Vec(_))
             | AniType::Wrapper(WrapperType::Ref(_))
@@ -472,6 +437,7 @@ fn generate_value_return_conversion(
             PrimitiveType::U8 => quote! { #value_expr as ani::sys::ani_byte },
             PrimitiveType::U32 => quote! { #value_expr as ani::sys::ani_int },
             PrimitiveType::U64 => quote! { #value_expr as ani::sys::ani_long },
+            PrimitiveType::Isize | PrimitiveType::Usize => quote! { #value_expr as ani::sys::ani_long },
             PrimitiveType::Char => quote! { (#value_expr as u32) as ani::sys::ani_char },
             _ => quote! { #value_expr },
         },
@@ -618,11 +584,8 @@ mod tests {
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
-        assert!(
-            code.contains(
-                "cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"
-            )
-        );
+        assert!(code
+            .contains("cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
         assert!(code.contains(":: Input"));
     }
 
@@ -637,6 +600,25 @@ mod tests {
     }
 
     #[test]
+    fn param_conversion_usize_and_isize_use_long_casts() {
+        let args: [FnArg; 2] = [parse_quote!(len: usize), parse_quote!(offset: isize)];
+        let refs = args.iter().collect::<Vec<_>>();
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&refs, &on_error_return).to_string();
+        assert!(code.contains("let len_converted = len as usize"));
+        assert!(code.contains("let offset_converted = offset as isize"));
+    }
+
+    #[test]
+    fn param_conversion_fixed_array_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(values: FixedIntArray);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("FixedIntArray as ani :: conversions :: FromAni"));
+        assert!(code.contains("values as < FixedIntArray as ani :: conversions :: FromAni"));
+    }
+
+    #[test]
     fn transparent_wrapper_object_return_strategy_uses_to_ani_fallback() {
         let ty: Type = parse_quote!(Box<crate::models::UserInfo>);
         assert_eq!(
@@ -645,6 +627,33 @@ mod tests {
         );
 
         let ty: Type = parse_quote!(std::sync::Arc<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
+    }
+
+    #[test]
+    fn sync_and_cell_wrapped_object_return_strategy_uses_to_ani_fallback() {
+        let ty: Type = parse_quote!(std::sync::Mutex<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
+
+        let ty: Type = parse_quote!(std::sync::RwLock<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
+
+        let ty: Type = parse_quote!(std::cell::RefCell<crate::models::UserInfo>);
+        assert_eq!(
+            unknown_type_return_strategy(&ty),
+            UnknownTypeReturnStrategy::ToAniNullFallback
+        );
+
+        let ty: Type = parse_quote!(std::sync::OnceLock<crate::models::UserInfo>);
         assert_eq!(
             unknown_type_return_strategy(&ty),
             UnknownTypeReturnStrategy::ToAniNullFallback
@@ -793,6 +802,14 @@ mod tests {
         let code = generate_return_conversion(&output).to_string();
         assert!(!code.contains("ToAni :: to_ani"));
         assert_eq!(code.trim(), "result");
+    }
+
+    #[test]
+    fn return_conversion_vecdeque_uses_to_ani() {
+        let output: ReturnType = parse_quote!(-> std::collections::VecDeque<String>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("Ok (v) => v"));
     }
 
     #[test]

@@ -544,7 +544,7 @@ fn resolve_class_op_kind(
             };
             let ani_type = AniType::from_syn_type(ty);
             match ani_type {
-                AniType::Unknown(_) => ClassOpKind::IteratorFactory {
+                AniType::Unknown(_) | AniType::CustomObject(_) => ClassOpKind::IteratorFactory {
                     iterator_class: qualify_class_target(owner, &ets_public_type_for_syn_type(ty)),
                 },
                 _ => {

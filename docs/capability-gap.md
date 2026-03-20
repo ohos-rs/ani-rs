@@ -80,8 +80,17 @@
 
 现状：
 
-- derive 类型系统仍然保留了大量 `Unknown` 回退路径
-- 一旦没有命中显式规则，ETS public type 往往退化为 `Object`
+- derive 类型系统仍然保留了部分 `Unknown` 回退路径
+- 但过去一轮已经先收掉了一批高频误判，ETS public type 精度明显高于最初状态
+
+当前已经收敛的类型面：
+
+- nominal 自定义对象不再默认退化为 `Unknown/Object`，会优先保留注册别名或 Rust 路径名
+- `Mutex` / `RwLock` / `RefCell` / `Cell` / `UnsafeCell` / `ManuallyDrop` / `MaybeUninit` / `OnceLock` / `LazyLock` 等透明包装会继续透传 inner type
+- `HashMap<String, V>` / `HashSet<T>` / `BTreeSet<T>` / `BTreeMap<K, V>` 会保留为 `Record` / `Set` / `Map`，而不是对象兜底
+- `FixedIntArray` / `FixedBooleanArray` / `AniFixedArrayInt` 等 fixed array wrapper 已提升为正式类型分支，不再依赖 `Unknown` 二次兜底
+- 函数级泛型参数 `T` / `U` 以及 `Function<(T,), T>` 这类回调泛型，ETS 已能保留类型参数而不是回落到 `Object`
+- 已支持但过去未识别的 `CString` / `isize` / `usize` 现在也会生成 `string` / `long`，不再走未知对象兜底
 
 代码位置：
 

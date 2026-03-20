@@ -2,7 +2,9 @@
 //!
 //! Generates ANI type signatures from Rust types using the structured AniType system.
 
-use syn::{FnArg, ReturnType, Signature, Type};
+use std::collections::HashSet;
+
+use syn::{FnArg, GenericParam, ReturnType, Signature, Type};
 
 use super::ani_type::AniType;
 use crate::codegen::should_skip_in_signature;
@@ -13,7 +15,11 @@ use crate::codegen::should_skip_in_signature;
 
 /// Generate ANI signature from Rust type
 pub fn rust_type_to_signature(ty: &Type) -> String {
-    let ani_type = AniType::from_syn_type(ty);
+    rust_type_to_signature_with_type_params(ty, &HashSet::new())
+}
+
+pub fn rust_type_to_signature_with_type_params(ty: &Type, type_params: &HashSet<String>) -> String {
+    let ani_type = AniType::from_syn_type_with_type_params(ty, type_params);
     ani_type.to_signature()
 }
 
@@ -26,7 +32,12 @@ pub fn rust_type_to_signature(ty: &Type) -> String {
 /// This function automatically skips injected parameters (Env, This, Class)
 /// since they are not part of the ArkTS function signature.
 pub fn generate_fn_signature(sig: &Signature, skip_first: bool) -> String {
-    generate_signature_from_inputs(&sig.inputs, &sig.output, skip_first)
+    generate_signature_from_inputs(
+        &sig.inputs,
+        &sig.output,
+        skip_first,
+        &collect_sig_type_params(sig),
+    )
 }
 
 /// Generate ANI signature for a constructor.
@@ -34,6 +45,7 @@ pub fn generate_fn_signature(sig: &Signature, skip_first: bool) -> String {
 /// Constructor signatures always return void (`:` with no return type suffix).
 pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
     let mut ctor_sig = String::new();
+    let type_params = collect_sig_type_params(sig);
 
     let params: Vec<_> = sig
         .inputs
@@ -44,7 +56,10 @@ pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
 
     for input in params {
         if let FnArg::Typed(pat_type) = input {
-            ctor_sig.push_str(&rust_type_to_signature(&pat_type.ty));
+            ctor_sig.push_str(&rust_type_to_signature_with_type_params(
+                &pat_type.ty,
+                &type_params,
+            ));
         }
     }
 
@@ -52,11 +67,23 @@ pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
     normalize_bind_signature(&ctor_sig)
 }
 
+fn collect_sig_type_params(sig: &Signature) -> HashSet<String> {
+    sig.generics
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(ty) => Some(ty.ident.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Generate signature from parameter list
 fn generate_signature_from_inputs(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
     output: &ReturnType,
     skip_first: bool,
+    type_params: &HashSet<String>,
 ) -> String {
     let mut sig = String::new();
 
@@ -71,7 +98,10 @@ fn generate_signature_from_inputs(
 
     for input in params {
         if let FnArg::Typed(pat_type) = input {
-            sig.push_str(&rust_type_to_signature(&pat_type.ty));
+            sig.push_str(&rust_type_to_signature_with_type_params(
+                &pat_type.ty,
+                type_params,
+            ));
         }
     }
 
@@ -80,7 +110,7 @@ fn generate_signature_from_inputs(
     match output {
         ReturnType::Default => sig.push('V'),
         ReturnType::Type(_, ty) => {
-            sig.push_str(&rust_type_to_signature(ty));
+            sig.push_str(&rust_type_to_signature_with_type_params(ty, type_params));
         }
     }
 
@@ -337,6 +367,17 @@ mod tests {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Vec<String>)),
             "A{C{std.core.String}}"
+        );
+    }
+
+    #[test]
+    fn test_generic_type_param_signature_uses_object_slot() {
+        let sig: Signature = syn::parse_quote! {
+            fn identity<T>(value: T, values: Vec<T>) -> T
+        };
+        assert_eq!(
+            generate_fn_signature(&sig, false),
+            "C{std.core.Object}A{C{std.core.Object}}:C{std.core.Object}"
         );
     }
 
