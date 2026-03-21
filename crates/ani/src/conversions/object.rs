@@ -561,9 +561,121 @@ impl_ref_handle_conversion!(
 impl_ref_handle_conversion!(
     AniArray,
     sys::ani_array,
-    "Lstd/core/Object;",
+    "A{C{std.core.Object}}",
     "ani_array",
     "array"
+);
+
+impl_ref_handle_conversion!(
+    AniArrayRef,
+    sys::ani_array,
+    "A{C{std.core.Object}}",
+    "ani_array",
+    "array_ref"
+);
+
+impl_ref_handle_conversion!(
+    AniArrayInt,
+    sys::ani_fixedarray_int,
+    "A{i}",
+    "ani_fixedarray_int",
+    "array_int"
+);
+
+impl_ref_handle_conversion!(
+    AniArrayLong,
+    sys::ani_fixedarray_long,
+    "A{l}",
+    "ani_fixedarray_long",
+    "array_long"
+);
+
+impl_ref_handle_conversion!(
+    AniArrayDouble,
+    sys::ani_fixedarray_double,
+    "A{d}",
+    "ani_fixedarray_double",
+    "array_double"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArray,
+    sys::ani_fixedarray,
+    "A{C{std.core.Object}}",
+    "ani_fixedarray",
+    "fixed_array"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayBoolean,
+    sys::ani_fixedarray_boolean,
+    "A{z}",
+    "ani_fixedarray_boolean",
+    "fixed_array_boolean"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayChar,
+    sys::ani_fixedarray_char,
+    "A{c}",
+    "ani_fixedarray_char",
+    "fixed_array_char"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayByte,
+    sys::ani_fixedarray_byte,
+    "A{b}",
+    "ani_fixedarray_byte",
+    "fixed_array_byte"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayShort,
+    sys::ani_fixedarray_short,
+    "A{s}",
+    "ani_fixedarray_short",
+    "fixed_array_short"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayInt,
+    sys::ani_fixedarray_int,
+    "A{i}",
+    "ani_fixedarray_int",
+    "fixed_array_int"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayLong,
+    sys::ani_fixedarray_long,
+    "A{l}",
+    "ani_fixedarray_long",
+    "fixed_array_long"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayFloat,
+    sys::ani_fixedarray_float,
+    "A{f}",
+    "ani_fixedarray_float",
+    "fixed_array_float"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayDouble,
+    sys::ani_fixedarray_double,
+    "A{d}",
+    "ani_fixedarray_double",
+    "fixed_array_double"
+);
+
+impl_ref_handle_conversion!(
+    AniFixedArrayRef,
+    sys::ani_fixedarray_ref,
+    "A{C{std.core.Object}}",
+    "ani_fixedarray_ref",
+    "fixed_array_ref"
 );
 
 impl_opaque_handle_conversion!(
@@ -747,5 +859,28 @@ mod tests {
     fn test_object_type_signature() {
         assert_eq!(<AniObject>::type_signature(), "Lstd/core/Object;");
         assert_eq!(<AniClass>::type_signature(), "Lstd/core/Class;");
+    }
+
+    #[test]
+    fn test_array_handle_type_signatures() {
+        assert_eq!(<AniArray>::type_signature(), "A{C{std.core.Object}}");
+        assert_eq!(<AniArrayRef>::type_signature(), "A{C{std.core.Object}}");
+        assert_eq!(<AniFixedArray>::type_signature(), "A{C{std.core.Object}}");
+        assert_eq!(
+            <AniFixedArrayRef>::type_signature(),
+            "A{C{std.core.Object}}"
+        );
+        assert_eq!(<AniFixedArrayInt>::type_signature(), "A{i}");
+        assert_eq!(<AniFixedArrayBoolean>::type_signature(), "A{z}");
+    }
+
+    #[test]
+    fn test_array_handle_ani_c_types() {
+        assert_eq!(<AniArray>::ani_c_type(), "ani_array");
+        assert_eq!(<AniArrayRef>::ani_c_type(), "ani_array");
+        assert_eq!(<AniFixedArray>::ani_c_type(), "ani_fixedarray");
+        assert_eq!(<AniFixedArrayRef>::ani_c_type(), "ani_fixedarray_ref");
+        assert_eq!(<AniArrayInt>::ani_c_type(), "ani_fixedarray_int");
+        assert_eq!(<AniFixedArrayDouble>::ani_c_type(), "ani_fixedarray_double");
     }
 }

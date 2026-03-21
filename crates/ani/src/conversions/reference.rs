@@ -74,7 +74,7 @@ use std::marker::PhantomData;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniObject, AniRef, GlobalRef};
+use crate::types::{AniObject, AniRef, GlobalRef, WeakRef};
 
 use super::traits::{FromAni, ToAni, TypeInfo};
 
@@ -211,6 +211,26 @@ where
     }
 }
 
+impl TypeInfo for GlobalRef {
+    fn type_signature() -> &'static str {
+        "Lstd/core/Object;"
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_ref"
+    }
+}
+
+impl TypeInfo for WeakRef {
+    fn type_signature() -> &'static str {
+        "Lstd/core/WeakRef;"
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_wref"
+    }
+}
+
 // ============================================================================
 // FromAni Implementation
 // ============================================================================
@@ -234,6 +254,28 @@ impl<'env> FromAni<'env> for Ref<AniObject<'static>> {
     }
 }
 
+impl<'env> FromAni<'env> for GlobalRef {
+    type Input = sys::ani_ref;
+
+    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(Status::InvalidArgs, "GlobalRef value is null"));
+        }
+        Ok(unsafe { GlobalRef::from_raw(value) })
+    }
+}
+
+impl<'env> FromAni<'env> for WeakRef {
+    type Input = sys::ani_wref;
+
+    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(Status::InvalidArgs, "WeakRef value is null"));
+        }
+        Ok(unsafe { WeakRef::from_raw(value) })
+    }
+}
+
 // ============================================================================
 // ToAni Implementation
 // ============================================================================
@@ -251,6 +293,38 @@ impl<'env> ToAni<'env> for &Ref<AniObject<'static>> {
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
         Ok(self.inner.as_raw() as sys::ani_object)
+    }
+}
+
+impl<'env> ToAni<'env> for GlobalRef {
+    type Output = sys::ani_ref;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.as_raw())
+    }
+}
+
+impl<'env> ToAni<'env> for &GlobalRef {
+    type Output = sys::ani_ref;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.as_raw())
+    }
+}
+
+impl<'env> ToAni<'env> for WeakRef {
+    type Output = sys::ani_wref;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.as_raw())
+    }
+}
+
+impl<'env> ToAni<'env> for &WeakRef {
+    type Output = sys::ani_wref;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.as_raw())
     }
 }
 
@@ -306,5 +380,15 @@ mod tests {
     fn test_ref_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Ref<AniObject<'static>>>();
+        assert_send_sync::<GlobalRef>();
+        assert_send_sync::<WeakRef>();
+    }
+
+    #[test]
+    fn test_global_and_weak_ref_type_info() {
+        assert_eq!(GlobalRef::type_signature(), "Lstd/core/Object;");
+        assert_eq!(GlobalRef::ani_c_type(), "ani_ref");
+        assert_eq!(WeakRef::type_signature(), "Lstd/core/WeakRef;");
+        assert_eq!(WeakRef::ani_c_type(), "ani_wref");
     }
 }

@@ -390,6 +390,37 @@ mod tests {
     }
 
     #[test]
+    fn test_reference_handle_type_signatures() {
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(GlobalRef)),
+            "Lstd/core/Object;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(WeakRef)),
+            "Lstd/core/WeakRef;"
+        );
+
+        let sig: Signature = syn::parse_quote! {
+            fn inspect(global: GlobalRef, weak: WeakRef) -> WeakRef
+        };
+        assert_eq!(
+            generate_fn_signature(&sig, false),
+            "C{std.core.Object}C{std.core.WeakRef}:C{std.core.WeakRef}"
+        );
+    }
+
+    #[test]
+    fn test_raw_array_handle_bind_signatures() {
+        let sig: Signature = syn::parse_quote! {
+            fn inspect(values: AniArray<'_>, refs: AniArrayRef<'_>, fixed: AniFixedArray<'_>, fixed_refs: AniFixedArrayRef<'_>) -> AniFixedArrayRef<'_>
+        };
+        assert_eq!(
+            generate_fn_signature(&sig, false),
+            "A{C{std.core.Object}}A{C{std.core.Object}}A{C{std.core.Object}}A{C{std.core.Object}}:A{C{std.core.Object}}"
+        );
+    }
+
+    #[test]
     fn test_set_and_map_type_signatures() {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(HashSet<String>)),

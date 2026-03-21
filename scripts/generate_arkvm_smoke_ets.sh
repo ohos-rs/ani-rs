@@ -966,6 +966,20 @@ __assert_true("use_stored_object", __ANI_GENERATED__.use_stored_object());
 __ANI_GENERATED__.set_compare_object(refObj);
 __assert_bool("compare_stored_references_bool", __ANI_GENERATED__.compare_stored_references());
 __assert_bool("clone_stored_object_bool", __ANI_GENERATED__.clone_stored_object());
+let globalRoundtripOk = false;
+try {
+  globalRoundtripOk = __ANI_GENERATED__.validate_global_handle_roundtrip(refObj);
+} catch (e) {
+  console.log("[reference] global handle roundtrip threw: " + e);
+}
+__assert_true("validate_global_handle_roundtrip", globalRoundtripOk);
+let weakRoundtripOk = false;
+try {
+  weakRoundtripOk = __ANI_GENERATED__.validate_weak_handle_roundtrip(refObj);
+} catch (e) {
+  console.log("[reference] weak handle roundtrip threw: " + e);
+}
+__assert_true("validate_weak_handle_roundtrip", weakRoundtripOk);
 __ANI_GENERATED__.clear_stored_object();
 __ANI_GENERATED__.clear_compare_object();
 ETS

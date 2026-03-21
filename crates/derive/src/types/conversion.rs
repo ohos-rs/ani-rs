@@ -8,8 +8,8 @@ use quote::{format_ident, quote};
 use syn::{FnArg, Pat, ReturnType, Type, TypePath};
 
 use super::ani_type::{
-    extract_transparent_wrapper_inner_type, is_custom_object_type_path, AniType, PrimitiveType,
-    StringType, WrapperType,
+    AniType, PrimitiveType, StringType, WrapperType, extract_transparent_wrapper_inner_type,
+    is_custom_object_type_path,
 };
 
 // ============================================================================
@@ -91,6 +91,7 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::GlobalRef
             | AniType::WeakRef
             | AniType::RuntimeHandle(_)
+            | AniType::ArrayHandle(_)
             | AniType::Null
             | AniType::Undefined
             | AniType::Function(_)
@@ -437,7 +438,9 @@ fn generate_value_return_conversion(
             PrimitiveType::U8 => quote! { #value_expr as ani::sys::ani_byte },
             PrimitiveType::U32 => quote! { #value_expr as ani::sys::ani_int },
             PrimitiveType::U64 => quote! { #value_expr as ani::sys::ani_long },
-            PrimitiveType::Isize | PrimitiveType::Usize => quote! { #value_expr as ani::sys::ani_long },
+            PrimitiveType::Isize | PrimitiveType::Usize => {
+                quote! { #value_expr as ani::sys::ani_long }
+            }
             PrimitiveType::Char => quote! { (#value_expr as u32) as ani::sys::ani_char },
             _ => quote! { #value_expr },
         },
@@ -584,8 +587,11 @@ mod tests {
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
-        assert!(code
-            .contains("cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
+        assert!(
+            code.contains(
+                "cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"
+            )
+        );
         assert!(code.contains(":: Input"));
     }
 

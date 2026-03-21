@@ -312,6 +312,26 @@ pub fn clear_compare_object() -> Result<()> {
 }
 
 // ============================================================================
+// Low-level GlobalRef / WeakRef Roundtrip
+// ============================================================================
+
+#[ani]
+pub fn validate_global_handle_roundtrip(env: &Env, obj: AniRef<'_>) -> Result<bool> {
+    let handle = env.create_global_ref(&obj)?;
+    let ok = !handle.as_raw().is_null();
+    env.delete_global_ref(handle)?;
+    Ok(ok)
+}
+
+#[ani]
+pub fn validate_weak_handle_roundtrip(env: &Env, obj: AniRef<'_>) -> Result<bool> {
+    let handle = env.create_weak_ref(&obj)?;
+    let upgraded = env.upgrade_weak_ref(&handle)?.is_some();
+    env.delete_weak_ref(handle)?;
+    Ok(upgraded)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

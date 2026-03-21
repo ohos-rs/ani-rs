@@ -89,7 +89,7 @@ pub struct EitherType {
     /// Number of variants (2 for Either, 3 for Either3, etc.)
     pub variant_count: usize,
     /// The inner types
-    pub types: Vec<Box<Type>>,
+    pub types: Vec<AniType>,
 }
 
 /// Promise type
@@ -147,6 +147,15 @@ pub enum RuntimeHandleType {
     Resolver,
 }
 
+/// Raw ANI array handle families that should keep their surface container shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayHandleType {
+    Array,
+    ArrayRef,
+    FixedArray,
+    FixedArrayRef,
+}
+
 /// The main ANI type enum
 
 #[derive(Debug, Clone)]
@@ -186,6 +195,8 @@ pub enum AniType {
     WeakRef,
     /// Explicit ANI runtime handle types (class/method/field/etc.)
     RuntimeHandle(RuntimeHandleType),
+    /// Low-level ANI array / fixed-array handle types.
+    ArrayHandle(ArrayHandleType),
     /// Dynamic `Any_*` value wrapper backed by `ani_ref`
     AnyValue,
     /// Tuple value wrapper backed by `ani_tuple_value`
@@ -439,8 +450,12 @@ impl AniType {
             return AniType::ArrayBuffer;
         }
 
+        if let Some(array_handle) = parse_array_handle_type(&ident) {
+            return AniType::ArrayHandle(array_handle);
+        }
+
         // Check for Either types
-        if let Some(either) = parse_either_type(&ident, &segment.arguments) {
+        if let Some(either) = parse_either_type(&ident, &segment.arguments, type_params) {
             return AniType::Either(either);
         }
 
@@ -468,21 +483,21 @@ impl AniType {
 
         // HashMap<String, V> maps to ArkTS Record<string, V>
         if ident == "HashMap" {
-            if let Some(record) = parse_record_type(&segment.arguments) {
+            if let Some(record) = parse_record_type(&segment.arguments, type_params) {
                 return AniType::Record(record);
             }
         }
 
         // HashSet<T> and BTreeSet<T> map to ArkTS Set<T>
         if ident == "HashSet" || ident == "BTreeSet" {
-            if let Some(set) = parse_set_type(&segment.arguments) {
+            if let Some(set) = parse_set_type(&segment.arguments, type_params) {
                 return AniType::Set(set);
             }
         }
 
         // BTreeMap<K, V> maps to ArkTS Map<K, V>
         if ident == "BTreeMap" {
-            if let Some(map) = parse_map_type(&segment.arguments) {
+            if let Some(map) = parse_map_type(&segment.arguments, type_params) {
                 return AniType::Map(map);
             }
         }
@@ -654,6 +669,7 @@ impl AniType {
             AniType::GlobalRef => quote! { ani::sys::ani_ref },
             AniType::WeakRef => quote! { ani::sys::ani_wref },
             AniType::RuntimeHandle(handle) => handle.to_ani_c_type(),
+            AniType::ArrayHandle(handle) => handle.to_ani_c_type(),
             AniType::AnyValue => quote! { ani::sys::ani_ref },
             AniType::TupleValue => quote! { ani::sys::ani_tuple_value },
             AniType::EnumItem => quote! { ani::sys::ani_enum_item },
@@ -669,6 +685,24 @@ impl AniType {
     }
 }
 
+impl ArrayHandleType {
+    fn to_ani_c_type(&self) -> TokenStream {
+        match self {
+            Self::Array | Self::ArrayRef => quote! { ani::sys::ani_array },
+            Self::FixedArray => quote! { ani::sys::ani_fixedarray },
+            Self::FixedArrayRef => quote! { ani::sys::ani_fixedarray_ref },
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "A{C{std.core.Object}}"
+    }
+
+    fn union_variant_signature(&self) -> String {
+        self.signature().to_string()
+    }
+}
+
 impl PrimitiveType {
     /// Generate the ANI C type for this primitive
     pub fn to_ani_c_type(&self) -> TokenStream {
@@ -678,7 +712,10 @@ impl PrimitiveType {
             PrimitiveType::I16 => quote! { ani::sys::ani_short },
             PrimitiveType::U16 | PrimitiveType::Char => quote! { ani::sys::ani_char },
             PrimitiveType::I32 | PrimitiveType::U32 => quote! { ani::sys::ani_int },
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => quote! { ani::sys::ani_long },
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => quote! { ani::sys::ani_long },
             PrimitiveType::F32 => quote! { ani::sys::ani_float },
             PrimitiveType::F64 => quote! { ani::sys::ani_double },
         }
@@ -818,7 +855,7 @@ impl AniType {
             AniType::Either(either) => {
                 let mut variants = String::new();
                 for ty in &either.types {
-                    let variant = AniType::from_syn_type(ty.as_ref()).to_union_variant_signature();
+                    let variant = ty.to_union_variant_signature();
                     variants.push_str(&variant);
                 }
                 if variants.is_empty() {
@@ -832,8 +869,10 @@ impl AniType {
             AniType::Set(_) => "Lstd/core/Set;".to_string(),
             AniType::Map(_) => "Lstd/core/Map;".to_string(),
             AniType::AniObject => "Lstd/core/Object;".to_string(),
-            AniType::GlobalRef | AniType::WeakRef => "Lstd/core/Object;".to_string(),
+            AniType::GlobalRef => "Lstd/core/Object;".to_string(),
+            AniType::WeakRef => "Lstd/core/WeakRef;".to_string(),
             AniType::RuntimeHandle(handle) => handle.signature().to_string(),
+            AniType::ArrayHandle(handle) => handle.signature().to_string(),
             AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => {
                 "Lstd/core/Object;".to_string()
             }
@@ -864,8 +903,10 @@ impl AniType {
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
-            AniType::GlobalRef | AniType::WeakRef => "C{std.core.Object}".to_string(),
+            AniType::GlobalRef => "C{std.core.Object}".to_string(),
+            AniType::WeakRef => "C{std.core.WeakRef}".to_string(),
             AniType::RuntimeHandle(handle) => handle.union_variant_signature(),
+            AniType::ArrayHandle(handle) => handle.union_variant_signature(),
             AniType::AnyValue | AniType::TupleValue | AniType::EnumItem => {
                 "C{std.core.Object}".to_string()
             }
@@ -890,9 +931,7 @@ impl AniType {
             AniType::Either(either) => {
                 let mut variants = String::new();
                 for ty in &either.types {
-                    variants.push_str(
-                        &AniType::from_syn_type(ty.as_ref()).to_union_variant_signature(),
-                    );
+                    variants.push_str(&ty.to_union_variant_signature());
                 }
                 if variants.is_empty() {
                     "C{std.core.Object}".to_string()
@@ -927,7 +966,10 @@ impl PrimitiveType {
             PrimitiveType::I16 => "S".to_string(),
             PrimitiveType::U16 | PrimitiveType::Char => "C".to_string(),
             PrimitiveType::I32 | PrimitiveType::U32 => "I".to_string(),
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => "J".to_string(),
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => "J".to_string(),
             PrimitiveType::F32 => "F".to_string(),
             PrimitiveType::F64 => "D".to_string(),
         }
@@ -939,7 +981,10 @@ impl PrimitiveType {
             PrimitiveType::I16 => "s",
             PrimitiveType::U16 | PrimitiveType::Char => "c",
             PrimitiveType::I32 | PrimitiveType::U32 => "i",
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => "l",
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => "l",
             PrimitiveType::F32 => "f",
             PrimitiveType::F64 => "d",
         }
@@ -952,7 +997,10 @@ impl PrimitiveType {
             PrimitiveType::I16 => "C{std.core.Short}",
             PrimitiveType::U16 | PrimitiveType::Char => "C{std.core.Char}",
             PrimitiveType::I32 | PrimitiveType::U32 => "C{std.core.Int}",
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => "C{std.core.Long}",
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => "C{std.core.Long}",
             PrimitiveType::F32 => "C{std.core.Float}",
             PrimitiveType::F64 => "C{std.core.Double}",
         }
@@ -965,7 +1013,10 @@ impl PrimitiveType {
             PrimitiveType::I16 => quote! { ani::sys::ani_fixedarray_short },
             PrimitiveType::U16 | PrimitiveType::Char => quote! { ani::sys::ani_fixedarray_char },
             PrimitiveType::I32 | PrimitiveType::U32 => quote! { ani::sys::ani_fixedarray_int },
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => quote! { ani::sys::ani_fixedarray_long },
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => quote! { ani::sys::ani_fixedarray_long },
             PrimitiveType::F32 => quote! { ani::sys::ani_fixedarray_float },
             PrimitiveType::F64 => quote! { ani::sys::ani_fixedarray_double },
         }
@@ -1022,6 +1073,15 @@ fn parse_primitive(ident: &str) -> Option<PrimitiveType> {
     }
 }
 
+fn parse_array_handle_type(ident: &str) -> Option<ArrayHandleType> {
+    match ident {
+        "AniArray" => Some(ArrayHandleType::Array),
+        "AniArrayRef" => Some(ArrayHandleType::ArrayRef),
+        "AniFixedArray" => Some(ArrayHandleType::FixedArray),
+        "AniFixedArrayRef" => Some(ArrayHandleType::FixedArrayRef),
+        _ => None,
+    }
+}
 
 fn parse_fixed_array_type(ident: &str) -> Option<PrimitiveType> {
     match ident {
@@ -1067,7 +1127,11 @@ const EITHER_TYPES: &[(&str, usize)] = &[
 ];
 
 /// Parse Either type from identifier and arguments
-fn parse_either_type(ident: &str, args: &PathArguments) -> Option<EitherType> {
+fn parse_either_type(
+    ident: &str,
+    args: &PathArguments,
+    type_params: &HashSet<String>,
+) -> Option<EitherType> {
     let variant_count = EITHER_TYPES
         .iter()
         .find(|(name, _)| *name == ident)
@@ -1075,7 +1139,7 @@ fn parse_either_type(ident: &str, args: &PathArguments) -> Option<EitherType> {
 
     let types = extract_all_generic_types(args)
         .into_iter()
-        .map(Box::new)
+        .map(|ty| AniType::from_syn_type_with_type_params(&ty, type_params))
         .collect();
 
     Some(EitherType {
@@ -1085,25 +1149,31 @@ fn parse_either_type(ident: &str, args: &PathArguments) -> Option<EitherType> {
 }
 
 /// Parse `HashMap<String, V>` as `Record<string, V>`.
-fn parse_record_type(args: &PathArguments) -> Option<RecordType> {
+fn parse_record_type(args: &PathArguments, type_params: &HashSet<String>) -> Option<RecordType> {
     let types = extract_all_generic_types(args);
     if types.len() != 2 {
         return None;
     }
 
-    let key_ty = AniType::from_syn_type(&types[0]);
+    let key_ty = AniType::from_syn_type_with_type_params(&types[0], type_params);
     if !matches!(key_ty, AniType::String(_)) {
         return None;
     }
 
     Some(RecordType {
-        value: Box::new(AniType::from_syn_type(&types[1])),
+        value: Box::new(AniType::from_syn_type_with_type_params(
+            &types[1],
+            type_params,
+        )),
     })
 }
 
-fn parse_set_type(args: &PathArguments) -> Option<SetType> {
+fn parse_set_type(args: &PathArguments, type_params: &HashSet<String>) -> Option<SetType> {
     extract_first_generic_type(args).map(|element| SetType {
-        element: Box::new(AniType::from_syn_type(&element)),
+        element: Box::new(AniType::from_syn_type_with_type_params(
+            &element,
+            type_params,
+        )),
     })
 }
 
@@ -1196,15 +1266,21 @@ fn custom_object_path_signature(type_path: &TypePath) -> Option<String> {
     Some(format!("L{};", qualified.replace('.', "/")))
 }
 
-fn parse_map_type(args: &PathArguments) -> Option<MapType> {
+fn parse_map_type(args: &PathArguments, type_params: &HashSet<String>) -> Option<MapType> {
     let types = extract_all_generic_types(args);
     if types.len() != 2 {
         return None;
     }
 
     Some(MapType {
-        key: Box::new(AniType::from_syn_type(&types[0])),
-        value: Box::new(AniType::from_syn_type(&types[1])),
+        key: Box::new(AniType::from_syn_type_with_type_params(
+            &types[0],
+            type_params,
+        )),
+        value: Box::new(AniType::from_syn_type_with_type_params(
+            &types[1],
+            type_params,
+        )),
     })
 }
 
@@ -1296,6 +1372,9 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
     match ident {
         "AniString" => Some("Lstd/core/String;"),
         "AniArrayBuffer" => Some("Lstd/core/ArrayBuffer;"),
+        "AniArray" | "AniArrayRef" | "AniFixedArray" | "AniFixedArrayRef" => {
+            Some("A{C{std.core.Object}}")
+        }
         "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("A{z}"),
         "FixedByteArray" | "AniFixedArrayByte" => Some("A{b}"),
         "FixedShortArray" | "AniFixedArrayShort" => Some("A{s}"),
@@ -1310,7 +1389,8 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
         "AniRef" | "AniObject" | "AniClass" | "AniType" | "AniModule" | "AniNamespace"
         | "AniEnum" | "AniError" | "AniEnumItem" | "AniTupleValue" | "AniMethod"
         | "AniStaticMethod" | "AniField" | "AniStaticField" | "AniVariable" | "AniResolver"
-        | "GlobalRef" | "WeakRef" => Some("Lstd/core/Object;"),
+        | "GlobalRef" => Some("Lstd/core/Object;"),
+        "WeakRef" => Some("Lstd/core/WeakRef;"),
         _ => None,
     }
 }
@@ -1515,6 +1595,52 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_nested_container_type_params_with_context() {
+        let mut type_params = HashSet::new();
+        type_params.insert("T".to_string());
+        type_params.insert("U".to_string());
+
+        let ty: Type = syn::parse_quote!(Either<T, HashMap<String, U>>);
+        let ani_type = AniType::from_syn_type_with_type_params(&ty, &type_params);
+        if let AniType::Either(either) = ani_type {
+            assert!(
+                matches!(either.types.as_slice(), [AniType::TypeParam(name), AniType::Record(_)] if name == "T")
+            );
+            match &either.types[1] {
+                AniType::Record(record) => {
+                    assert!(
+                        matches!(record.value.as_ref(), AniType::TypeParam(name) if name == "U")
+                    );
+                }
+                other => panic!("Expected Record<U> variant, got {:?}", other),
+            }
+        } else {
+            panic!("Expected Either<T, HashMap<String, U>> to preserve nested type params");
+        }
+    }
+
+    #[test]
+    fn test_nested_container_type_param_signature_uses_type_param_erasure() {
+        let mut type_params = HashSet::new();
+        type_params.insert("T".to_string());
+
+        let ty: Type = syn::parse_quote!(Either<T, String>);
+        let ani_type = AniType::from_syn_type_with_type_params(&ty, &type_params);
+        assert_eq!(
+            ani_type.to_signature(),
+            "X{C{std.core.Object}C{std.core.String}}"
+        );
+
+        let ty: Type = syn::parse_quote!(BTreeMap<String, T>);
+        let ani_type = AniType::from_syn_type_with_type_params(&ty, &type_params);
+        if let AniType::Map(map) = ani_type {
+            assert!(matches!(map.value.as_ref(), AniType::TypeParam(name) if name == "T"));
+        } else {
+            panic!("Expected BTreeMap<String, T> to preserve T as type param");
+        }
+    }
+
+    #[test]
     fn test_parse_result() {
         let ty: Type = syn::parse_quote!(Result<String, Error>);
         let ani_type = AniType::from_syn_type(&ty);
@@ -1607,7 +1733,7 @@ mod tests {
 
         let ty: Type = syn::parse_quote!(WeakRef);
         let ani_type = AniType::from_syn_type(&ty);
-        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+        assert_eq!(ani_type.to_signature(), "Lstd/core/WeakRef;");
 
         let ty: Type = syn::parse_quote!(Undefined);
 
@@ -1964,6 +2090,38 @@ mod tests {
         let ty: Type = syn::parse_quote!(std::sync::LazyLock<crate::models::UserInfo>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
+    }
+
+    #[test]
+    fn test_parse_raw_array_handle_types() {
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(AniArray<'_>)),
+            AniType::ArrayHandle(ArrayHandleType::Array)
+        ));
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(AniArrayRef<'_>)),
+            AniType::ArrayHandle(ArrayHandleType::ArrayRef)
+        ));
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(AniFixedArray<'_>)),
+            AniType::ArrayHandle(ArrayHandleType::FixedArray)
+        ));
+        assert!(matches!(
+            AniType::from_syn_type(&syn::parse_quote!(AniFixedArrayRef<'_>)),
+            AniType::ArrayHandle(ArrayHandleType::FixedArrayRef)
+        ));
+    }
+
+    #[test]
+    fn test_raw_array_handle_signatures() {
+        let array = AniType::from_syn_type(&syn::parse_quote!(AniArray<'_>));
+        assert_eq!(array.to_signature(), "A{C{std.core.Object}}");
+
+        let fixed = AniType::from_syn_type(&syn::parse_quote!(AniFixedArray<'_>));
+        assert_eq!(fixed.to_signature(), "A{C{std.core.Object}}");
+
+        let fixed_ref = AniType::from_syn_type(&syn::parse_quote!(AniFixedArrayRef<'_>));
+        assert_eq!(fixed_ref.to_signature(), "A{C{std.core.Object}}");
     }
 
     #[test]

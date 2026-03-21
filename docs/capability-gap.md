@@ -89,7 +89,9 @@
 - `Mutex` / `RwLock` / `RefCell` / `Cell` / `UnsafeCell` / `ManuallyDrop` / `MaybeUninit` / `OnceLock` / `LazyLock` 等透明包装会继续透传 inner type
 - `HashMap<String, V>` / `HashSet<T>` / `BTreeSet<T>` / `BTreeMap<K, V>` 会保留为 `Record` / `Set` / `Map`，而不是对象兜底
 - `FixedIntArray` / `FixedBooleanArray` / `AniFixedArrayInt` 等 fixed array wrapper 已提升为正式类型分支，不再依赖 `Unknown` 二次兜底
+- `AniArray` / `AniArrayRef` / `AniFixedArray` / `AniFixedArrayRef` 也已提升为正式类型分支，ETS public type 会保持 `Array<Object>` / `FixedArray<Object>`，不再靠 runtime-name fallback
 - 函数级泛型参数 `T` / `U` 以及 `Function<(T,), T>` 这类回调泛型，ETS 已能保留类型参数而不是回落到 `Object`
+- `Either<T, U>` / `HashMap<String, T>` / `HashSet<T>` / `BTreeMap<String, Either<T, U>>` 这类嵌套容器现在也会继续保留函数级类型参数，不再在容器内部把 `T/U` 误判成 nominal object
 - 已支持但过去未识别的 `CString` / `isize` / `usize` 现在也会生成 `string` / `long`，不再走未知对象兜底
 
 代码位置：
@@ -135,7 +137,8 @@
 
 - runtime API 已有
 - `examples/reference` 主要覆盖的是 `Ref<T>` 使用模式
-- `GlobalRef` / `WeakRef` 作为独立能力，没有像其他 example 那样形成清晰的行为回归
+- `GlobalRef` / `WeakRef` 现在已经接入 `examples/reference` 的 smoke，用于验证 native 内部 create/use/delete 基础链路；但仍缺少更完整的 weak invalidation 场景
+- 真实 ArkVM 验证表明 raw `GlobalRef` / `WeakRef` 不适合作为 ETS public value 直接 roundtrip；当前 example 已改为 ETS 传 `Object`，native 内部完成 low-level handle 操作并返回断言结果
 
 代码位置：
 
@@ -145,8 +148,8 @@
 
 建议目标：
 
-- 为 `GlobalRef` 增加显式 example
-- 为 `WeakRef` 增加 upgrade / 失效判断 example
+- 继续补 `WeakRef` 的失效/GC 语义 example，而不只是 upgrade 成功路径
+- 视需要补单独 example，或继续扩展 `examples/reference` 覆盖更多生命周期行为
 - 明确 public ETS type 与 Rust 句柄的预期使用边界
 
 ### 二、底层已具备，但宏层和类型层还没完全压平的能力
