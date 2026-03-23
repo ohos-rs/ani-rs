@@ -403,6 +403,10 @@ impl AniType {
             return AniType::String(StringType::Str);
         }
 
+        if ident == "PathBuf" {
+            return AniType::String(StringType::String);
+        }
+
         // Check for unit type represented as path
         if ident == "()" {
             return AniType::Unit;
@@ -1532,6 +1536,10 @@ mod tests {
         let ty: Type = syn::parse_quote!(std::ffi::CString);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::String(StringType::Str)));
+
+        let ty: Type = syn::parse_quote!(std::path::PathBuf);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::String)));
     }
 
     #[test]

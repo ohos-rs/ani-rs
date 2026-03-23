@@ -10,7 +10,8 @@ use crate::codegen::{
     ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
     ClassOpDescriptor, ClassOpKind, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
     ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
-    WrapperBindingKind, emit_export_plan_ets, generate_register_fn, generate_wrapper,
+    WrapperBindingKind, emit_export_plan_ets, generate_async_wrapper, generate_register_fn,
+    generate_wrapper,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
@@ -234,8 +235,17 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let func_name_str = func_name.to_string();
     let binding_input = resolve_function_binding_input(&attrs, &func);
 
-    let binding =
-        match resolve_binding_plan(&attrs, &func_name.to_string(), &func.sig, binding_input) {
+    let signature_for_binding = match signature_for_export(&attrs, &func.sig) {
+        Ok(sig) => sig,
+        Err(err) => return err.to_compile_error(),
+    };
+
+    let binding = match resolve_binding_plan(
+        &attrs,
+        &func_name.to_string(),
+        &signature_for_binding,
+        binding_input,
+    ) {
             Ok(binding) => binding,
             Err(err) => return err.to_compile_error(),
         };
@@ -247,7 +257,11 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     let ctor_register_name = format_ident!("__ani_ctor_register_{}", func_name);
 
     // Generate wrapper function
-    let wrapper = generate_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind());
+    let wrapper = if attrs.is_async {
+        generate_async_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind())
+    } else {
+        generate_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind())
+    };
 
     // Generate registration function based on target
     let register_fn = generate_register_fn(
@@ -329,13 +343,114 @@ pub(crate) fn validate_unsupported_bind_attrs(
     func: &ItemFn,
 ) -> syn::Result<()> {
     if attrs.is_async {
+        validate_async_bind_attrs(attrs, func)?;
+    }
+    Ok(())
+}
+
+fn validate_async_bind_attrs(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
+    if func.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
             &func.sig.ident,
-            "#[ani(async)] is not implemented yet; expose async behavior explicitly via Promise APIs",
+            "#[ani(async)] requires an `async fn`",
+        ));
+    }
+
+    if attrs.signature.is_some() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.ident,
+            "#[ani(async)] does not support custom #[ani(signature = ...)]",
+        ));
+    }
+
+    if attrs.constructor {
+        return Err(syn::Error::new_spanned(
+            &func.sig.ident,
+            "#[ani(async)] cannot be combined with #[ani(constructor)]",
+        ));
+    }
+
+    if attrs.getter.is_some() || attrs.setter.is_some() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.ident,
+            "#[ani(async)] cannot be combined with #[ani(getter)] / #[ani(setter)]",
+        ));
+    }
+
+    for arg in &func.sig.inputs {
+        if crate::codegen::should_skip_in_signature(arg) {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "#[ani(async)] does not support injected parameters (`env`/`this`/`class`) or a Rust `self` receiver; capture only owned values and use the Promise runtime",
+            ));
+        }
+    }
+
+    let ok_ty = extract_result_ok_type(&func.sig.output)?;
+    if matches!(AniType::from_syn_type(&ok_ty), AniType::Promise(_)) {
+        return Err(syn::Error::new_spanned(
+            ok_ty,
+            "#[ani(async)] expects `Result<T>` where `T` is the eventual value, not `PromiseRaw<T>`",
         ));
     }
 
     Ok(())
+}
+
+pub(crate) fn signature_for_export(attrs: &BindgenAttrs, sig: &Signature) -> syn::Result<Signature> {
+    if !attrs.is_async {
+        return Ok(sig.clone());
+    }
+
+    let ok_ty = extract_result_ok_type(&sig.output)?;
+    let mut out = sig.clone();
+    out.output = syn::parse_quote!(-> ::ani::conversions::PromiseRaw<#ok_ty>);
+    Ok(out)
+}
+
+fn extract_result_ok_type(output: &ReturnType) -> syn::Result<Type> {
+    let ReturnType::Type(_, ty) = output else {
+        return Err(syn::Error::new_spanned(
+            output,
+            "#[ani(async)] return type must be `Result<T, E>`",
+        ));
+    };
+
+    let Type::Path(type_path) = ty.as_ref() else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "#[ani(async)] return type must be `Result<T, E>`",
+        ));
+    };
+
+    let Some(segment) = type_path.path.segments.last() else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "#[ani(async)] return type must be `Result<T, E>`",
+        ));
+    };
+
+    if segment.ident != "Result" {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "#[ani(async)] return type must be `Result<T, E>`",
+        ));
+    }
+
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "#[ani(async)] return type must be `Result<T, E>`",
+        ));
+    };
+
+    let ok_ty = args.args.iter().find_map(|arg| match arg {
+        syn::GenericArgument::Type(inner) => Some(inner.clone()),
+        _ => None,
+    });
+    ok_ty.ok_or_else(|| {
+        syn::Error::new_spanned(ty, "#[ani(async)] return type must be `Result<T, E>`")
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -740,17 +855,11 @@ fn resolve_ets_binding_target(attrs: &BindgenAttrs) -> EtsBindingTarget {
             kind: EtsDeclKind::Namespace,
             target: namespace.to_string(),
         }
-    } else if let Some(module) = attrs.module.as_deref() {
-        if module.is_empty() {
-            EtsBindingTarget {
-                kind: EtsDeclKind::Global,
-                target: String::new(),
-            }
-        } else {
-            EtsBindingTarget {
-                kind: EtsDeclKind::Namespace,
-                target: module.to_string(),
-            }
+    } else if attrs.module.is_some() {
+        // `module = ...` controls runtime binding descriptor, not ETS namespace nesting.
+        EtsBindingTarget {
+            kind: EtsDeclKind::Global,
+            target: String::new(),
         }
     } else {
         EtsBindingTarget {
@@ -1766,12 +1875,49 @@ mod tests {
     }
 
     #[test]
-    fn rejects_async_attr_for_now() {
+    fn async_attr_requires_async_fn() {
         let attrs = BindgenAttrs {
             is_async: true,
             ..Default::default()
         };
         let func: ItemFn = parse_quote! { fn compute() -> i32 { 1 } };
         assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
+    }
+
+    #[test]
+    fn async_attr_accepts_async_result_fn_and_exports_promise_signature() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! { async fn compute() -> Result<i32> { Ok(1) } };
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
+        let sig = signature_for_export(&attrs, &func.sig).expect("signature_for_export should work");
+        assert_eq!(generate_fn_signature(&sig, false), ":C{std.core.Promise}");
+    }
+
+    #[test]
+    fn async_attr_rejects_injected_env_param() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! { async fn compute(env: &Env<'_>) -> Result<i32> { let _ = env; Ok(1) } };
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
+    }
+
+    #[test]
+    fn module_attr_emits_global_ets_target() {
+        let attrs = BindgenAttrs {
+            module: Some("custom.module".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_ets_binding_target(&attrs),
+            EtsBindingTarget {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+            }
+        );
     }
 }

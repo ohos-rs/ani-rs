@@ -51,7 +51,6 @@ pub mod conversions;
 pub mod env;
 pub mod error;
 pub mod module_register;
-#[cfg(feature = "tokio_rt")]
 pub mod tokio;
 pub mod types;
 pub mod vm;

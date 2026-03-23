@@ -334,6 +334,14 @@ impl<'env> PromiseValue<'env> for AniRef<'env> {
     }
 }
 
+impl<'env> PromiseValue<'env> for () {
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        // `Promise<void>` resolves to `undefined` in ArkTS.
+        let raw = env.get_undefined_object()?;
+        Ok(unsafe { AniRef::from_raw(raw as sys::ani_ref) })
+    }
+}
+
 impl<'env, T> PromiseValue<'env> for T
 where
     T: ToAni<'env, Output = sys::ani_object>,

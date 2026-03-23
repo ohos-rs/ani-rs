@@ -133,3 +133,35 @@ pub fn tokio_fail(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, 
     })
     .map(PromiseRaw::into_static)
 }
+
+// ============================================================================
+// #[ani(async)] macro-based async bindings.
+// ============================================================================
+
+#[ani(async)]
+pub async fn tokio_delayed_square_async(input: i32, delay_ms: i32) -> Result<i32> {
+    if delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+    }
+    Ok(input * input)
+}
+
+#[ani(async)]
+pub async fn tokio_fetch_text_async(url: String) -> Result<String> {
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    Ok(fetch_data(&url))
+}
+
+#[ani(async)]
+pub async fn tokio_fail_async(message: String) -> Result<String> {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    Err(Error::new(Status::InvalidArgs, message))
+}
+
+#[ani(async)]
+pub async fn tokio_void_async(delay_ms: i32) -> Result<()> {
+    if delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+    }
+    Ok(())
+}

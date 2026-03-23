@@ -37,6 +37,24 @@ pub fn generate_param_conversions(params: &[&FnArg], on_error_return: &TokenStre
     quote! { #(#conversions)* }
 }
 
+/// Generate parameter conversion code for function arguments, using a custom error handler.
+///
+/// The `on_error` tokens are injected into each `Err(e) => { ... }` arm and
+/// may reference `env` and `e`. This is useful for async bindings that must
+/// return a rejected Promise instead of throwing synchronously.
+pub fn generate_param_conversions_with_custom_error(
+    params: &[&FnArg],
+    on_error: &TokenStream,
+) -> TokenStream {
+    let conversions: Vec<TokenStream> = params
+        .iter()
+        .enumerate()
+        .map(|(i, param)| generate_single_param_conversion_with_custom_error(i, param, on_error))
+        .collect();
+
+    quote! { #(#conversions)* }
+}
+
 /// Generate conversion code for a single parameter
 fn generate_single_param_conversion(
     index: usize,
@@ -53,6 +71,23 @@ fn generate_single_param_conversion(
     let ani_type = AniType::from_syn_type(ty);
 
     generate_type_conversion(&param_name, &converted_name, ty, &ani_type, on_error_return)
+}
+
+fn generate_single_param_conversion_with_custom_error(
+    index: usize,
+    param: &FnArg,
+    on_error: &TokenStream,
+) -> TokenStream {
+    let FnArg::Typed(pat_type) = param else {
+        return quote! {};
+    };
+
+    let param_name = extract_param_name(&pat_type.pat, index);
+    let converted_name = format_ident!("{}_converted", param_name);
+    let ty = &pat_type.ty;
+    let ani_type = AniType::from_syn_type(ty);
+
+    generate_type_conversion_with_custom_error(&param_name, &converted_name, ty, &ani_type, on_error)
 }
 
 /// Extract parameter name from pattern
@@ -79,6 +114,25 @@ fn generate_type_conversion(
         }
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
+        }
+        _ => quote! { let #converted_name = #param_name; },
+    }
+}
+
+fn generate_type_conversion_with_custom_error(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+    ani_type: &AniType,
+    on_error: &TokenStream,
+) -> TokenStream {
+    match ani_type {
+        AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
+        AniType::String(s) => {
+            generate_string_type_conversion_with_custom_error(param_name, converted_name, s, on_error)
+        }
+        _ if uses_typed_from_ani_param_conversion(ani_type) => {
+            generate_generic_from_ani_conversion_with_custom_error(param_name, converted_name, ty, on_error)
         }
         _ => quote! { let #converted_name = #param_name; },
     }
@@ -173,6 +227,37 @@ fn generate_string_type_conversion(
     }
 }
 
+fn generate_string_type_conversion_with_custom_error(
+    param_name: &Ident,
+    converted_name: &Ident,
+    string_type: &StringType,
+    on_error: &TokenStream,
+) -> TokenStream {
+    match string_type {
+        StringType::String => quote! {
+            let #converted_name = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                let ani_str = ani::types::AniString::from_raw(#param_name);
+                match env_wrapper.get_string(&ani_str) {
+                    Ok(value) => value,
+                    Err(e) => { #on_error }
+                }
+            };
+        },
+        StringType::Str => quote! {
+            let #converted_name = {
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                let ani_str = ani::types::AniString::from_raw(#param_name);
+                match env_wrapper.get_string(&ani_str) {
+                    Ok(value) => value,
+                    Err(e) => { #on_error }
+                }
+            };
+            let #converted_name = #converted_name.as_str();
+        },
+    }
+}
+
 /// Generate generic parameter conversion using FromAni::from_ani.
 fn generate_generic_from_ani_conversion(
     param_name: &Ident,
@@ -181,6 +266,26 @@ fn generate_generic_from_ani_conversion(
     on_error_return: &TokenStream,
 ) -> TokenStream {
     let on_error = generate_param_conversion_error(on_error_return);
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::FromAni::from_ani(
+                &env_wrapper,
+                #param_name as <#ty as ani::conversions::FromAni<'_>>::Input,
+            ) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
+        };
+    }
+}
+
+fn generate_generic_from_ani_conversion_with_custom_error(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+    on_error: &TokenStream,
+) -> TokenStream {
     quote! {
         let #converted_name: #ty = {
             let env_wrapper = ani::env::Env::from_raw_unchecked(env);

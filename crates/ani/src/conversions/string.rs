@@ -4,9 +4,11 @@
 //! - String <-> ani_string
 //! - &str -> ani_string
 //! - Cow<str> <-> ani_string
+//! - PathBuf <-> ani_string (lossy conversion)
 
 use std::borrow::Cow;
 use std::ffi::CString;
+use std::path::PathBuf;
 
 use crate::ani_call_ret;
 use crate::env::Env;
@@ -159,6 +161,36 @@ impl<'env> FromAni<'env> for CString {
                 "Invalid string for CString",
             )
         })
+    }
+}
+
+// ============================================================================
+// PathBuf - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for PathBuf {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env> ToAni<'env> for PathBuf {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+impl<'env> FromAni<'env> for PathBuf {
+    type Input = AniString<'env>;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let s = env.get_string(&value)?;
+        Ok(PathBuf::from(s))
     }
 }
 

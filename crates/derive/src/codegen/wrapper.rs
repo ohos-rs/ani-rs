@@ -16,7 +16,10 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, ReturnType, Type};
 
-use crate::types::{generate_param_conversions, generate_return_conversion, rust_type_to_ani_type};
+use crate::types::{
+    generate_param_conversions, generate_param_conversions_with_custom_error,
+    generate_return_conversion, rust_type_to_ani_type,
+};
 
 /// Type of injected parameter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,11 +186,30 @@ pub fn generate_wrapper_with_target(
         .collect::<Vec<_>>();
 
     let param_error_return = build_param_error_return(return_type);
+    let panic_error_return = param_error_return.clone();
     let conversions = generate_param_conversions(&regular_params, &param_error_return);
     let injected_vars = generate_injected_vars(&params, binding_kind);
     let call_args = build_call_args(&params);
     let func_call = quote! {
-        let result = #call_target(#(#call_args),*);
+        let result = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+            #call_target(#(#call_args),*)
+        })) {
+            Ok(result) => result,
+            Err(panic) => {
+                let message = {
+                    if let Some(string) = panic.downcast_ref::<String>() {
+                        string.clone()
+                    } else if let Some(string) = panic.downcast_ref::<&str>() {
+                        (*string).to_string()
+                    } else {
+                        format!("panic from Rust code: {:?}", panic)
+                    }
+                };
+                let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                let _ = ani::conversions::throw_error(&env_wrapper, &message);
+                #panic_error_return
+            }
+        };
     };
     let return_conversion = generate_return_conversion(return_type);
     let wrapper_return = build_wrapper_return(return_type);
@@ -200,6 +222,62 @@ pub fn generate_wrapper_with_target(
             #conversions
             #func_call
             #return_conversion
+        }
+    }
+}
+
+pub fn generate_async_wrapper(
+    func: &ItemFn,
+    wrapper_name: &Ident,
+    binding_kind: WrapperBindingKind,
+) -> TokenStream {
+    let func_name = &func.sig.ident;
+    generate_async_wrapper_with_target(func, wrapper_name, binding_kind, quote! { #func_name })
+}
+
+pub fn generate_async_wrapper_with_target(
+    func: &ItemFn,
+    wrapper_name: &Ident,
+    binding_kind: WrapperBindingKind,
+    call_target: TokenStream,
+) -> TokenStream {
+    let params = analyze_wrapper_params(func);
+    let wrapper_params = build_wrapper_params(&params, binding_kind);
+    let regular_params = params
+        .iter()
+        .filter(|param| param.kind == ParamKind::Regular)
+        .map(|param| param.arg)
+        .collect::<Vec<_>>();
+
+    let conversion_error = quote! {
+        return {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            match ani::conversions::PromiseRaw::<()>::reject(&env_wrapper, e.to_string()) {
+                Ok(promise) => promise.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        };
+    };
+    let conversions = generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
+    let call_args = build_call_args(&params);
+
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
+        unsafe extern "C" fn #wrapper_name(#(#wrapper_params),*) -> ani::sys::ani_object {
+            let __ani_env = ani::env::Env::from_raw_unchecked(env);
+            #conversions
+
+            let __ani_future = #call_target(#(#call_args),*);
+            match ani::tokio::spawn_future_result(&__ani_env, __ani_future) {
+                Ok(promise) => promise.into_raw(),
+                Err(e) => {
+                    match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+                        Ok(promise) => promise.into_raw(),
+                        Err(_) => std::ptr::null_mut(),
+                    }
+                }
+            }
         }
     }
 }

@@ -250,6 +250,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-module-binding"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-module-member"
 version = "0.1.0"
 dependencies = [

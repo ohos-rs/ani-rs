@@ -14,6 +14,7 @@ ANI-RS provides Rust bindings for the ArkTS 1.2 Native Interface (ANI), similar 
 - 🔒 **Type safe** - Automatic conversion between Rust and ArkTS types
 - ⚡ **Zero-cost abstractions** - Minimal runtime overhead
 - 📦 **Module support** - Bind to modules, namespaces, and classes
+- 🧵 **Async bindings** - Export `async fn` as `Promise<T>` with `#[ani(async)]` (via `tokio`)
 - 🎯 **Auto-registration** - No need to manually list functions or use `ani_module!`, just like napi-rs!
 
 ## Quick Start
@@ -107,6 +108,36 @@ pub fn add(this: i64, a: i32, b: i32) -> i32 {
 pub fn person_new(name: String, age: i32) -> i64 {
     let person = Box::new(Person { name, age });
     Box::into_raw(person) as i64
+}
+```
+
+### Async Functions (Promise)
+
+Enable `tokio` support on the `ani` dependency:
+
+```toml
+[dependencies]
+ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["tokio_rt"] }
+ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
+tokio = { version = "1", features = ["time"] }
+```
+
+Note: if you forget to enable `ani` feature `tokio_rt`, `#[ani(async)]` bindings can still compile,
+but the returned `Promise` will reject immediately with an error message telling you to enable the feature.
+
+Then export an `async fn` as `Promise<T>`:
+
+```rust
+use ani::prelude::*;
+use ani_derive::ani;
+use std::time::Duration;
+
+#[ani(async)]
+pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
+    if delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+    }
+    Ok(input * input)
 }
 ```
 

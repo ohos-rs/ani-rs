@@ -106,8 +106,12 @@ function main(): void {
   __assert_true("batch_compute_non_negative", __ANI_GENERATED__.batch_compute(3) >= 0);
   let promisedSquare: int = waitForCompletion(() => __ANI_GENERATED__.tokio_delayed_square(7, 10));
   __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  let promisedSquareAsync: int = waitForCompletion(() => __ANI_GENERATED__.tokio_delayed_square_async(7, 10));
+  __assert_eq_int("tokio_delayed_square_async", promisedSquareAsync, 49);
   let promisedText: string = waitForCompletion(() => __ANI_GENERATED__.tokio_fetch_text("ani://tokio"));
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
+  let promisedTextAsync: string = waitForCompletion(() => __ANI_GENERATED__.tokio_fetch_text_async("ani://tokio"));
+  __assert_eq_string("tokio_fetch_text_async", promisedTextAsync, "Response from: ani://tokio");
   let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await __ANI_GENERATED__.tokio_fail("boom");
@@ -117,6 +121,20 @@ function main(): void {
     }
   });
   __assert_true("tokio_fail", tokioRejected);
+  let tokioRejectedAsync: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.tokio_fail_async("boom2");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("tokio_fail_async", tokioRejectedAsync);
+  let tokioVoidAsync: boolean = waitForCompletion(async (): Promise<boolean> => {
+    await __ANI_GENERATED__.tokio_void_async(1);
+    return true;
+  });
+  __assert_true("tokio_void_async", tokioVoidAsync);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);
@@ -466,6 +484,12 @@ __assert_eq_int("call_current_namespace_mul", __ANI_GENERATED__.call_current_nam
 __assert_eq_string("call_current_namespace_tag", __ANI_GENERATED__.call_current_namespace_tag("sample", "arkts"), "[arkts]");
 __assert_eq_int("roundtrip_current_namespace_state", __ANI_GENERATED__.roundtrip_current_namespace_state("sample", 23), 23);
 __assert_eq_string("roundtrip_current_namespace_note", __ANI_GENERATED__.roundtrip_current_namespace_note("sample", "note1"), "note1");
+ETS
+      ;;
+    ani-example-module-binding)
+      cat <<'ETS'
+__assert_eq_int("module_add", __ANI_GENERATED__.module_add(9, 4), 13);
+__assert_eq_string("module_greet", __ANI_GENERATED__.module_greet("ark"), "hello ark");
 ETS
       ;;
     ani-example-nullish-union)

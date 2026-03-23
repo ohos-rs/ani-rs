@@ -19,7 +19,9 @@
 - 不生成 `declare` 风格代码
 - example 的 ETS smoke 测试不再只是导入模块，而是会真实调用 native 导出并根据返回值做断言
 - 本地 Docker + Linux x64 ArkVM 链路已经打通
-- 全部 example 已完成 Rust 构建、ETS 生成、ABC 编译、ArkVM 运行验证
+- Rust `cargo test --workspace` 已可在 Ubuntu Docker 中通过
+- `scripts/run_arkvm_examples_ubuntu.sh` 现已支持直接使用 `ARKVM_TARBALL=/path/to/arkvm_static_linux_x64.tar.gz`
+- 当前 ArkVM example 回归仍停留在 “Rust 构建 + ETS 生成通过，ABC 编译失败” 状态；失败点来自 `es2panda` 与外部 `runtime_core` stdlib 源码不兼容，而不是仓库内 Rust 宏/运行时改动本身
 
 最终回归结果见：
 
@@ -54,27 +56,29 @@
 
 现状：
 
-- 当前 `#[ani(async)]` 明确未实现
-- 使用者只能显式返回 `PromiseRaw`，手动管理 `Deferred` 或 tokio 包装
+- 已实现 `#[ani(async)] async fn foo(...) -> Result<T>`：宏会自动导出为 ArkTS `Promise<T>` 形式的 native binding
+- 当前实现基于 `ani::tokio`（建议为 `ani` 依赖开启 `tokio_rt` feature；未开启时 Promise 会直接 reject 并提示开启）
+- 当前约束：
+  - 不支持注入 `env` / `this` / `class`，也不支持 Rust `self` receiver（避免跨线程捕获线程关联的 VM 句柄）
+  - 参数和返回值需满足 `Send + 'static`（由 Rust 编译器在 `tokio` spawn 处强约束）
+  - 仍不建议在 async 任务中直接持有 `AniObject/AniRef` 等 VM handle；后续可以参考 napi-rs 的 “ref container” 思路，用 `GlobalRef` 做显式生命周期托管再放开
 
 代码位置：
 
 - `crates/derive/src/expand/function.rs`
+- `crates/derive/src/codegen/wrapper.rs`
 - `crates/ani/src/conversions/promise.rs`
 - `crates/ani/src/tokio.rs`
 
 问题：
 
-- 异步函数的人体工学明显不够
-- 宏层没有把 Rust `async fn` 直接折叠成 ArkTS Promise 导出
-- 当前能力可用，但不够像 napi-rs
+- 仍有进一步对齐 napi-rs 的空间（例如 async 参数引用保活、允许更多 handle/引用类参数等）
 
 建议目标：
 
-- 支持 `#[ani(async)] async fn foo(...) -> Result<T>`
-- 自动展开为同步 native wrapper
-- wrapper 内部创建 Promise / Deferred
-- future 成功时 resolve，失败时 reject
+- 在当前基础上继续增强 async 能力面：
+  - 为引用/handle 参数引入显式托管策略（类似 napi-rs 的 ref container），避免 GC 或线程语义问题
+  - 结合 `GlobalRef/WeakRef` 补齐可用模式与 example 回归覆盖
 
 #### 2. `Unknown -> Object` fallback 仍然偏多
 
@@ -117,7 +121,7 @@
 现状：
 
 - 文档中提到 `#[ani(module = ...)]`
-- 仓库中没有对应 example 覆盖
+- 已补齐 `examples/module_binding`，并接入 ArkVM smoke（`scripts/generate_arkvm_smoke_ets.sh`）
 - 当前更多覆盖的是 `namespace` 和运行时 `find_module`
 
 问题：
@@ -127,9 +131,8 @@
 
 建议目标：
 
-- 新增一个 `module_binding` 或类似 example
-- 覆盖 module 级函数/变量访问
-- 加入 ArkVM smoke 回归
+- 已落地：新增 `examples/module_binding` + ArkVM smoke 回归
+- 后续可增强：补一个“descriptor 与 crate 名不一致”的真实场景用例（避免只覆盖等价路径）
 
 #### 4. `GlobalRef / WeakRef` 需要更明确的高层能力面
 
@@ -354,7 +357,7 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 ### 仍未形成完整上层封装或缺少明确回归覆盖的
 
 - `gref_ops`
-- 显式 `module` 绑定
+- 显式 `module` 绑定（已补 example + smoke，仍可补更复杂的 descriptor 场景）
 - `AniVariable` 为核心的变量型 API 对外建模
 - `fn_object_ops` 的系统化 example
 - `promise_ops` 的 derive 级封装
@@ -374,9 +377,9 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 
 ### P0
 
-- 实现 `#[ani(async)]`
+- 已实现 `#[ani(async)]`（后续补齐 ref/handle 友好模式与回归覆盖）
 - 继续收缩 `Unknown -> Object`
-- 为显式 `module = ...` 绑定补 example 和 ArkVM 回归
+- 已补齐显式 `module = ...` 绑定 example 与 ArkVM smoke（后续补复杂 descriptor 场景）
 - 为 `GlobalRef / WeakRef` 增加更明确的 example 和行为验证
 
 ### P1

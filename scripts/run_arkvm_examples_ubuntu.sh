@@ -7,10 +7,28 @@ cd "$repo_root"
 image="${ARKVM_DOCKER_IMAGE:-docker.m.daocloud.io/library/ubuntu:latest}"
 arkvm_dir_default="$repo_root/.cache/arkvm/arkvm_static_linux_x64/x64_linux_static"
 arkvm_dir="${ARKVM_DIR:-$arkvm_dir_default}"
+arkvm_tarball="${ARKVM_TARBALL:-}"
 ark_src_root="${ARK_SRC_ROOT:-/tmp/arkcompiler_runtime_core}"
 arkvm_test_module_name="${ARKVM_TEST_MODULE_NAME:-arkvm_test}"
 report_file="$repo_root/examples/arkvm_report.txt"
 result_tsv="$repo_root/examples/arkvm_report.tsv"
+
+cleanup_arkvm_dir=""
+
+if [[ -n "$arkvm_tarball" ]]; then
+  cleanup_arkvm_dir="$(mktemp -d /tmp/ani-rs-arkvm.XXXXXX)"
+  trap '[[ -n "$cleanup_arkvm_dir" ]] && rm -rf "$cleanup_arkvm_dir"' EXIT
+  tar -xzf "$arkvm_tarball" -C "$cleanup_arkvm_dir"
+
+  if [[ -d "$cleanup_arkvm_dir/x64_linux_static" ]]; then
+    arkvm_dir="$cleanup_arkvm_dir/x64_linux_static"
+  else
+    first_subdir="$(find "$cleanup_arkvm_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    if [[ -n "$first_subdir" ]]; then
+      arkvm_dir="$first_subdir"
+    fi
+  fi
+fi
 
 if [[ ! -x "$arkvm_dir/es2panda" ]]; then
   echo "ARKVM_NOT_FOUND: $arkvm_dir/es2panda"
@@ -60,17 +78,22 @@ mkdir -p "$host_rustup_cache" "$host_cargo_home_cache"
 
 echo "Running in docker image: $image"
 echo "Using ARKVM_DIR: $arkvm_dir"
+if [[ -n "$arkvm_tarball" ]]; then
+  echo "Using ARKVM_TARBALL: $arkvm_tarball"
+fi
 echo "Using ARK_SRC_ROOT: $ark_src_root"
 echo "Using ARKVM_RUSTUP_CACHE: $host_rustup_cache"
 echo "Using ARKVM_CARGO_HOME_CACHE: $host_cargo_home_cache"
 
 docker run --rm --platform linux/amd64 \
   -v "$repo_root":/work \
+  -v "$arkvm_dir":/arkvm:ro \
   -v "$ark_src_root":/arkcompiler_runtime_core:ro \
   -v "$host_rustup_cache":/root/.rustup \
   -v "$host_cargo_home_cache":/root/.cargo \
   -e ANI_TEST_MODULE_NAME="$arkvm_test_module_name" \
   -e ANI_DEBUG_REGISTER="${ANI_DEBUG_REGISTER:-0}" \
+  -e ARKVM_DIR_IN_CONTAINER=/arkvm \
   -w /work \
   "$image" \
   /bin/bash -lc '
@@ -111,7 +134,7 @@ cargo --version
 
 report_file=/work/examples/arkvm_report.txt
 result_tsv=/work/examples/arkvm_report.tsv
-arkvm_dir=/work/.cache/arkvm/arkvm_static_linux_x64/x64_linux_static
+arkvm_dir="${ARKVM_DIR_IN_CONTAINER:-/work/.cache/arkvm/arkvm_static_linux_x64/x64_linux_static}"
 arkts_cfg=/tmp/arktsconfig.ani-rs.json
 mkdir -p /work/examples
 
@@ -146,7 +169,6 @@ for pkg in $pkgs; do
   else
     echo "BUILD_FAIL: $pkg" >> "$report_file"
     tail -n 120 /tmp/"${pkg}".build.log >> "$report_file"
-    echo -e "${pkg}\tFAIL\tSKIP\tSKIP" >> "$result_tsv"
   fi
 done
 

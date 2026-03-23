@@ -10,7 +10,7 @@ use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Type};
 
 use crate::codegen::{
     ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, emit_export_plan_ets,
-    generate_register_call, generate_wrapper_with_target,
+    generate_async_wrapper_with_target, generate_register_call, generate_wrapper_with_target,
 };
 use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
 use crate::types::{
@@ -20,8 +20,8 @@ use crate::types::{
 
 use super::function::{
     BindingOwner, BindingResolveInput, CallableKind, SignatureBindingStyle,
-    resolve_binding_plan_with_class_plan, resolve_class_member_plan, validate_constructor_usage,
-    validate_unsupported_bind_attrs,
+    resolve_binding_plan_with_class_plan, resolve_class_member_plan, signature_for_export,
+    validate_constructor_usage, validate_unsupported_bind_attrs,
 };
 
 /// Expand `#[ani]` for impl blocks
@@ -192,10 +192,11 @@ fn process_method(
         }
     }
 
+    let signature_for_binding = signature_for_export(&merged_attrs, &method.sig)?;
     let binding = resolve_binding_plan_with_class_plan(
         &merged_attrs,
         &ets_name,
-        &method.sig,
+        &signature_for_binding,
         binding_input,
         class_member_plan.as_ref(),
     )?;
@@ -215,12 +216,21 @@ fn process_method(
             let self_ty = &impl_block.self_ty;
             quote! { <#self_ty>::#method_name }
         };
-        generate_wrapper_with_target(
-            &to_item_fn(&sanitized_method),
-            &wrapper_name,
-            binding_input.wrapper_binding_kind(),
-            call_target,
-        )
+        if merged_attrs.is_async {
+            generate_async_wrapper_with_target(
+                &to_item_fn(&sanitized_method),
+                &wrapper_name,
+                binding_input.wrapper_binding_kind(),
+                call_target,
+            )
+        } else {
+            generate_wrapper_with_target(
+                &to_item_fn(&sanitized_method),
+                &wrapper_name,
+                binding_input.wrapper_binding_kind(),
+                call_target,
+            )
+        }
     };
 
     let register_call = generate_register_call(
@@ -331,7 +341,25 @@ fn generate_receiver_wrapper(
             };
             #injected_env_bindings
             #conversions
-            let result = __ani_self.#method_name(#(#call_args),*);
+            let result = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                __ani_self.#method_name(#(#call_args),*)
+            })) {
+                Ok(result) => result,
+                Err(panic) => {
+                    let message = {
+                        if let Some(string) = panic.downcast_ref::<String>() {
+                            string.clone()
+                        } else if let Some(string) = panic.downcast_ref::<&str>() {
+                            (*string).to_string()
+                        } else {
+                            format!("panic from Rust code: {:?}", panic)
+                        }
+                    };
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let _ = ani::conversions::throw_error(&env_wrapper, &message);
+                    #param_error_return
+                }
+            };
             #writeback
             #return_conversion
         }

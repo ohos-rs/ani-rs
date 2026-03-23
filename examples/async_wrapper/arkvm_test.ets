@@ -22,8 +22,12 @@ export native function promise_reject(message: string): long;
 export native function promise_resolve_int(value: int): long;
 export native function promise_resolve_string(value: string): long;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
+export native function tokio_delayed_square_async(input: int, delay_ms: int): Promise<int>;
 export native function tokio_fail(message: string): Promise<string>;
+export native function tokio_fail_async(message: string): Promise<string>;
 export native function tokio_fetch_text(url: string): Promise<string>;
+export native function tokio_fetch_text_async(url: string): Promise<string>;
+export native function tokio_void_async(delay_ms: int): Promise<void>;
 
 
 
@@ -108,8 +112,12 @@ function main(): void {
   __assert_true("batch_compute_non_negative", batch_compute(3) >= 0);
   let promisedSquare: int = waitForCompletion(() => tokio_delayed_square(7, 10));
   __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  let promisedSquareAsync: int = waitForCompletion(() => tokio_delayed_square_async(7, 10));
+  __assert_eq_int("tokio_delayed_square_async", promisedSquareAsync, 49);
   let promisedText: string = waitForCompletion(() => tokio_fetch_text("ani://tokio"));
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
+  let promisedTextAsync: string = waitForCompletion(() => tokio_fetch_text_async("ani://tokio"));
+  __assert_eq_string("tokio_fetch_text_async", promisedTextAsync, "Response from: ani://tokio");
   let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await tokio_fail("boom");
@@ -119,6 +127,20 @@ function main(): void {
     }
   });
   __assert_true("tokio_fail", tokioRejected);
+  let tokioRejectedAsync: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await tokio_fail_async("boom2");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("tokio_fail_async", tokioRejectedAsync);
+  let tokioVoidAsync: boolean = waitForCompletion(async (): Promise<boolean> => {
+    await tokio_void_async(1);
+    return true;
+  });
+  __assert_true("tokio_void_async", tokioVoidAsync);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);
