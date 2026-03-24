@@ -260,16 +260,20 @@ pub fn generate_async_wrapper_with_target(
     };
     let conversions = generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
     let call_args = build_call_args(&params);
+    let async_setup = generate_async_promise_setup(&params, binding_kind);
+    let async_injected = generate_async_promise_injected_vars(&params, binding_kind);
 
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
         unsafe extern "C" fn #wrapper_name(#(#wrapper_params),*) -> ani::sys::ani_object {
-            let __ani_env = ani::env::Env::from_raw_unchecked(env);
+            #async_setup
             #conversions
 
-            let __ani_future = #call_target(#(#call_args),*);
-            match ani::tokio::spawn_future_result(&__ani_env, __ani_future) {
+            match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
+                #async_injected
+                #call_target(#(#call_args),*).await.map_err(|e| e.to_string())
+            }) {
                 Ok(promise) => promise.into_raw(),
                 Err(e) => {
                     match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
@@ -279,6 +283,321 @@ pub fn generate_async_wrapper_with_target(
                 }
             }
         }
+    }
+}
+
+pub fn generate_async_blocking_wrapper(
+    func: &ItemFn,
+    wrapper_name: &Ident,
+    binding_kind: WrapperBindingKind,
+) -> TokenStream {
+    let func_name = &func.sig.ident;
+    generate_async_blocking_wrapper_with_target(
+        func,
+        wrapper_name,
+        binding_kind,
+        quote! { #func_name },
+    )
+}
+
+pub fn generate_async_blocking_wrapper_with_target(
+    func: &ItemFn,
+    wrapper_name: &Ident,
+    binding_kind: WrapperBindingKind,
+    call_target: TokenStream,
+) -> TokenStream {
+    let return_type = &func.sig.output;
+    let params = analyze_wrapper_params(func);
+    let wrapper_params = build_wrapper_params(&params, binding_kind);
+    let regular_params = params
+        .iter()
+        .filter(|param| param.kind == ParamKind::Regular)
+        .map(|param| param.arg)
+        .collect::<Vec<_>>();
+
+    let param_error_return = build_param_error_return(return_type);
+    let conversions = generate_param_conversions(&regular_params, &param_error_return);
+    let call_args = build_call_args(&params);
+    let async_setup =
+        generate_async_blocking_setup(&params, binding_kind, &param_error_return);
+    let async_injected = generate_async_blocking_injected_vars(&params, binding_kind);
+    let return_conversion = generate_return_conversion(return_type);
+    let wrapper_return = build_wrapper_return(return_type);
+
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
+        unsafe extern "C" fn #wrapper_name(#(#wrapper_params),*) #wrapper_return {
+            #async_setup
+            #conversions
+            let __ani_future = async move {
+                #async_injected
+                #call_target(#(#call_args),*).await.map_err(|e| e.to_string())
+            };
+            let result = match ani::tokio::block_on_future_result(__ani_future) {
+                Ok(result) => result,
+                Err(e) => {
+                    let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+                    #param_error_return
+                }
+            };
+            #return_conversion
+        }
+    }
+}
+
+fn generate_async_promise_setup(
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
+) -> TokenStream {
+    let reject_return = promise_reject_return();
+    let mut setup = vec![quote! {
+        let __ani_env = ani::env::Env::from_raw_unchecked(env);
+    }];
+    setup.push(quote! {
+        let __ani_vm = match __ani_env.get_vm() {
+            Ok(vm) => vm,
+            Err(e) => {
+                #reject_return
+            }
+        };
+    });
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
+        setup.push(quote! {
+            let __ani_this_global = {
+                let __ani_this_ref = unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
+                match __ani_env.create_global_ref(&__ani_this_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        #reject_return
+                    }
+                }
+            };
+        });
+    }
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
+        setup.push(quote! {
+            let __ani_class_global = {
+                let __ani_class_ref: ani::types::AniRef<'_> =
+                    unsafe { ani::types::AniClass::from_raw(_class) }.into();
+                match __ani_env.create_global_ref(&__ani_class_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        #reject_return
+                    }
+                }
+            };
+        });
+    }
+
+    quote! { #(#setup)* }
+}
+
+fn generate_async_blocking_setup(
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
+    on_error_return: &TokenStream,
+) -> TokenStream {
+    let mut setup = vec![quote! {
+        let __ani_env_outer = ani::env::Env::from_raw_unchecked(env);
+    }];
+    let on_error_return = quote! {
+        let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+        #on_error_return
+    };
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
+        setup.push(quote! {
+            let __ani_this_global = {
+                let __ani_this_ref =
+                    unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
+                match __ani_env_outer.create_global_ref(&__ani_this_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        #on_error_return
+                    }
+                }
+            };
+        });
+    }
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
+        setup.push(quote! {
+            let __ani_class_global = {
+                let __ani_class_ref: ani::types::AniRef<'_> =
+                    unsafe { ani::types::AniClass::from_raw(_class) }.into();
+                match __ani_env_outer.create_global_ref(&__ani_class_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        #on_error_return
+                    }
+                }
+            };
+        });
+    }
+
+    quote! { #(#setup)* }
+}
+
+fn generate_async_promise_injected_vars(
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
+) -> TokenStream {
+    let mut vars = vec![quote! {
+        let __ani_attach = __ani_vm.attach_current_thread_scoped().map_err(|e| e.to_string())?;
+        let __ani_env = __ani_attach.env();
+        let env = __ani_env.as_raw();
+    }];
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
+        vars.push(quote! {
+            let __ani_this = unsafe {
+                ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
+            };
+        });
+    }
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
+        vars.push(quote! {
+            let __ani_class = unsafe {
+                ani::types::AniClass::from_raw(__ani_class_global.as_raw() as ani::sys::ani_class)
+            };
+        });
+    }
+
+    for param in params {
+        let FnArg::Typed(pat_type) = param.arg else {
+            continue;
+        };
+        let Some(ident) = param.ident else {
+            continue;
+        };
+        let binding_ident = injected_binding_ident(ident);
+
+        match param.kind {
+            ParamKind::Injected(InjectedParamKind::Env) => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_env;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = ani::env::Env::from_raw_unchecked(env);
+                    });
+                }
+            }
+            ParamKind::Injected(InjectedParamKind::This) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_this;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_this;
+                    });
+                }
+            }
+            ParamKind::Injected(InjectedParamKind::Class) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_class;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_class;
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    quote! { #(#vars)* }
+}
+
+fn generate_async_blocking_injected_vars(
+    params: &[WrapperParam<'_>],
+    binding_kind: WrapperBindingKind,
+) -> TokenStream {
+    let mut vars = vec![quote! {
+        let __ani_env = ani::env::Env::from_raw_unchecked(env);
+        let env = __ani_env.as_raw();
+    }];
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
+        vars.push(quote! {
+            let __ani_this = unsafe {
+                ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
+            };
+        });
+    }
+
+    if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
+        vars.push(quote! {
+            let __ani_class = unsafe {
+                ani::types::AniClass::from_raw(__ani_class_global.as_raw() as ani::sys::ani_class)
+            };
+        });
+    }
+
+    for param in params {
+        let FnArg::Typed(pat_type) = param.arg else {
+            continue;
+        };
+        let Some(ident) = param.ident else {
+            continue;
+        };
+        let binding_ident = injected_binding_ident(ident);
+
+        match param.kind {
+            ParamKind::Injected(InjectedParamKind::Env) => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_env;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = ani::env::Env::from_raw_unchecked(env);
+                    });
+                }
+            }
+            ParamKind::Injected(InjectedParamKind::This) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_this;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_this;
+                    });
+                }
+            }
+            ParamKind::Injected(InjectedParamKind::Class) if binding_kind.is_class() => {
+                if ty_is_ref(&pat_type.ty) {
+                    vars.push(quote! {
+                        let #binding_ident = &__ani_class;
+                    });
+                } else {
+                    vars.push(quote! {
+                        let #binding_ident = __ani_class;
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    quote! { #(#vars)* }
+}
+
+fn promise_reject_return() -> TokenStream {
+    quote! {
+        return match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+            Ok(promise) => promise.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        };
     }
 }
 

@@ -10,8 +10,8 @@ use crate::codegen::{
     ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
     ClassOpDescriptor, ClassOpKind, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
     ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
-    WrapperBindingKind, emit_export_plan_ets, generate_async_wrapper, generate_register_fn,
-    generate_wrapper,
+    WrapperBindingKind, emit_export_plan_ets, generate_async_blocking_wrapper,
+    generate_async_wrapper, generate_register_fn, generate_wrapper,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
@@ -26,6 +26,12 @@ use crate::types::{
 pub(crate) enum CallableKind {
     Function,
     Constructor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AsyncExportMode {
+    Promise,
+    Blocking,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,7 +264,17 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
 
     // Generate wrapper function
     let wrapper = if attrs.is_async {
-        generate_async_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind())
+        match async_export_mode(&attrs) {
+            Some(AsyncExportMode::Promise) => {
+                generate_async_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind())
+            }
+            Some(AsyncExportMode::Blocking) => generate_async_blocking_wrapper(
+                &func,
+                &wrapper_name,
+                binding_input.wrapper_binding_kind(),
+            ),
+            None => unreachable!("async wrapper requested without async attrs"),
+        }
     } else {
         generate_wrapper(&func, &wrapper_name, binding_input.wrapper_binding_kind())
     };
@@ -348,42 +364,12 @@ pub(crate) fn validate_unsupported_bind_attrs(
     Ok(())
 }
 
-fn validate_async_bind_attrs(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
+fn validate_async_bind_attrs(_attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
     if func.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
             &func.sig.ident,
             "#[ani(async)] requires an `async fn`",
         ));
-    }
-
-    if attrs.signature.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "#[ani(async)] does not support custom #[ani(signature = ...)]",
-        ));
-    }
-
-    if attrs.constructor {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "#[ani(async)] cannot be combined with #[ani(constructor)]",
-        ));
-    }
-
-    if attrs.getter.is_some() || attrs.setter.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "#[ani(async)] cannot be combined with #[ani(getter)] / #[ani(setter)]",
-        ));
-    }
-
-    for arg in &func.sig.inputs {
-        if crate::codegen::should_skip_in_signature(arg) {
-            return Err(syn::Error::new_spanned(
-                arg,
-                "#[ani(async)] does not support injected parameters (`env`/`this`/`class`) or a Rust `self` receiver; capture only owned values and use the Promise runtime",
-            ));
-        }
     }
 
     let ok_ty = extract_result_ok_type(&func.sig.output)?;
@@ -397,8 +383,20 @@ fn validate_async_bind_attrs(attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result
     Ok(())
 }
 
-pub(crate) fn signature_for_export(attrs: &BindgenAttrs, sig: &Signature) -> syn::Result<Signature> {
+pub(crate) fn async_export_mode(attrs: &BindgenAttrs) -> Option<AsyncExportMode> {
     if !attrs.is_async {
+        return None;
+    }
+
+    if attrs.constructor || attrs.getter.is_some() || attrs.setter.is_some() {
+        Some(AsyncExportMode::Blocking)
+    } else {
+        Some(AsyncExportMode::Promise)
+    }
+}
+
+pub(crate) fn signature_for_export(attrs: &BindgenAttrs, sig: &Signature) -> syn::Result<Signature> {
+    if !matches!(async_export_mode(attrs), Some(AsyncExportMode::Promise)) {
         return Ok(sig.clone());
     }
 
@@ -1897,13 +1895,47 @@ mod tests {
     }
 
     #[test]
-    fn async_attr_rejects_injected_env_param() {
+    fn async_attr_accepts_injected_env_param() {
         let attrs = BindgenAttrs {
             is_async: true,
             ..Default::default()
         };
         let func: ItemFn = parse_quote! { async fn compute(env: &Env<'_>) -> Result<i32> { let _ = env; Ok(1) } };
-        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_err());
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
+    }
+
+    #[test]
+    fn async_export_mode_blocks_constructor_like_bindings() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            constructor: true,
+            ..Default::default()
+        };
+        assert_eq!(async_export_mode(&attrs), Some(AsyncExportMode::Blocking));
+    }
+
+    #[test]
+    fn async_signature_keeps_constructor_shape() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            constructor: true,
+            class: Some("Widget".to_string()),
+            ..Default::default()
+        };
+        let sig: Signature = parse_quote!(async fn new(env: &Env<'_>, this: &AniObject<'_>, value: i32) -> Result<()>);
+        let exported = signature_for_export(&attrs, &sig).expect("constructor async signature");
+        assert_eq!(generate_ctor_signature(&exported, false), "i:");
+    }
+
+    #[test]
+    fn async_attr_allows_custom_signature_override() {
+        let attrs = BindgenAttrs {
+            is_async: true,
+            signature: Some("custom".to_string()),
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! { async fn compute() -> Result<i32> { Ok(1) } };
+        assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
     }
 
     #[test]

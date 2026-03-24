@@ -135,6 +135,23 @@ function main(): void {
     return true;
   });
   __assert_true("tokio_void_async", tokioVoidAsync);
+  let envText: string = waitForCompletion(() => __ANI_GENERATED__.env_roundtrip("hello"));
+  __assert_eq_string("env_roundtrip", envText, "env:hello");
+  let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));
+  __assert_eq_string("signature_override_echo", signatureText, "sig:value");
+
+  let ctorBox = new AsyncCtorBox("demo", 4);
+  __assert_eq_int("async_constructor_total", ctorBox.total, 4);
+  __assert_eq_string("async_constructor_note", ctorBox.note, "ctor:demo");
+
+  let accessorBox = new AsyncAccessorBox("start");
+  __assert_eq_string("accessor_constructor_note", accessorBox.note, "start");
+  __assert_eq_string("async_getter_summary", accessorBox.summary, "note:start");
+  accessorBox.note = "changed";
+  __assert_eq_string("async_setter_note", accessorBox.note, "changed");
+
+  let classReady: boolean = waitForCompletion(() => AsyncWidget.class_handle_ready());
+  __assert_true("async_class_injection", classReady);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);

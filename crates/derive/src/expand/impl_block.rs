@@ -10,18 +10,20 @@ use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Type};
 
 use crate::codegen::{
     ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, emit_export_plan_ets,
-    generate_async_wrapper_with_target, generate_register_call, generate_wrapper_with_target,
+    generate_async_blocking_wrapper_with_target, generate_async_wrapper_with_target,
+    generate_register_call, generate_wrapper_with_target,
 };
 use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
 use crate::types::{
-    ani_type::resolve_object_type_fields, generate_param_conversions, generate_return_conversion,
+    ani_type::resolve_object_type_fields, generate_param_conversions,
+    generate_param_conversions_with_custom_error, generate_return_conversion,
     rust_type_to_ani_type,
 };
 
 use super::function::{
-    BindingOwner, BindingResolveInput, CallableKind, SignatureBindingStyle,
-    resolve_binding_plan_with_class_plan, resolve_class_member_plan, signature_for_export,
-    validate_constructor_usage, validate_unsupported_bind_attrs,
+    AsyncExportMode, BindingOwner, BindingResolveInput, CallableKind, SignatureBindingStyle,
+    async_export_mode, resolve_binding_plan_with_class_plan, resolve_class_member_plan,
+    signature_for_export, validate_constructor_usage, validate_unsupported_bind_attrs,
 };
 
 /// Expand `#[ani]` for impl blocks
@@ -205,24 +207,47 @@ fn process_method(
     let wrapper_name = format_ident!("__ani_{}_{}", struct_name, method_name);
     let sanitized_method = sanitize_method(method);
     let wrapper = if receiver.has_receiver() {
-        generate_receiver_wrapper(
-            &to_item_fn(&sanitized_method),
-            &wrapper_name,
-            &impl_block.self_ty,
-            receiver,
-        )
+        match async_export_mode(&merged_attrs) {
+            Some(AsyncExportMode::Promise) => generate_async_receiver_wrapper(
+                &to_item_fn(&sanitized_method),
+                &wrapper_name,
+                &impl_block.self_ty,
+                receiver,
+            ),
+            Some(AsyncExportMode::Blocking) => generate_async_blocking_receiver_wrapper(
+                &to_item_fn(&sanitized_method),
+                &wrapper_name,
+                &impl_block.self_ty,
+                receiver,
+            ),
+            None => generate_receiver_wrapper(
+                &to_item_fn(&sanitized_method),
+                &wrapper_name,
+                &impl_block.self_ty,
+                receiver,
+            ),
+        }
     } else {
         let call_target = {
             let self_ty = &impl_block.self_ty;
             quote! { <#self_ty>::#method_name }
         };
         if merged_attrs.is_async {
-            generate_async_wrapper_with_target(
-                &to_item_fn(&sanitized_method),
-                &wrapper_name,
-                binding_input.wrapper_binding_kind(),
-                call_target,
-            )
+            match async_export_mode(&merged_attrs) {
+                Some(AsyncExportMode::Promise) => generate_async_wrapper_with_target(
+                    &to_item_fn(&sanitized_method),
+                    &wrapper_name,
+                    binding_input.wrapper_binding_kind(),
+                    call_target,
+                ),
+                Some(AsyncExportMode::Blocking) => generate_async_blocking_wrapper_with_target(
+                    &to_item_fn(&sanitized_method),
+                    &wrapper_name,
+                    binding_input.wrapper_binding_kind(),
+                    call_target,
+                ),
+                None => unreachable!("async wrapper requested without async attrs"),
+            }
         } else {
             generate_wrapper_with_target(
                 &to_item_fn(&sanitized_method),
@@ -366,6 +391,176 @@ fn generate_receiver_wrapper(
     }
 }
 
+fn generate_async_blocking_receiver_wrapper(
+    func: &ItemFn,
+    wrapper_name: &syn::Ident,
+    self_ty: &Type,
+    receiver: MethodReceiver,
+) -> TokenStream {
+    let return_type = &func.sig.output;
+    let wrapper_return = build_wrapper_return(return_type);
+    let param_error_return = build_param_error_return(return_type);
+    let regular_params: Vec<_> = func
+        .sig
+        .inputs
+        .iter()
+        .filter(|arg| matches!(classify_receiver_arg(arg), ReceiverArgKind::Regular))
+        .collect();
+    let conversions = generate_param_conversions(&regular_params, &param_error_return);
+    let wrapper_params = regular_wrapper_params(func);
+    let injected_env_bindings = generate_receiver_env_bindings(func);
+    let call_args = build_receiver_call_args(func);
+    let method_name = &func.sig.ident;
+    let writeback = if receiver.is_mut() {
+        quote! {
+            ani::conversions::WriteBackToAniObject::write_back_to_ani_object(
+                __ani_self,
+                &__ani_env,
+                &__ani_this,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    } else {
+        quote! {}
+    };
+    let return_conversion = generate_return_conversion(return_type);
+
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
+        unsafe extern "C" fn #wrapper_name(
+            env: *mut ani::sys::ani_env,
+            this: ani::sys::ani_object
+            #(, #wrapper_params)*
+        ) #wrapper_return {
+            let __ani_env_outer = ani::env::Env::from_raw_unchecked(env);
+            let __ani_this_global = {
+                let __ani_this_ref =
+                    unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
+                match __ani_env_outer.create_global_ref(&__ani_this_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+                        #param_error_return
+                    }
+                }
+            };
+            #conversions
+            let __ani_future = async move {
+                let __ani_env = ani::env::Env::from_raw_unchecked(env);
+                let env = __ani_env.as_raw();
+                let __ani_this = unsafe {
+                    ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
+                };
+                let mut __ani_self: #self_ty = ani::conversions::FromAni::from_ani(
+                    &__ani_env,
+                    __ani_this_global.as_raw() as <#self_ty as ani::conversions::FromAni<'_>>::Input,
+                )
+                .map_err(|e| e.to_string())?;
+                #injected_env_bindings
+                let result = __ani_self.#method_name(#(#call_args),*).await;
+                #writeback
+                result.map_err(|e| e.to_string())
+            };
+            let result = match ani::tokio::block_on_future_result(__ani_future) {
+                Ok(result) => result,
+                Err(e) => {
+                    let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+                    #param_error_return
+                }
+            };
+            #return_conversion
+        }
+    }
+}
+
+fn generate_async_receiver_wrapper(
+    func: &ItemFn,
+    wrapper_name: &syn::Ident,
+    self_ty: &Type,
+    receiver: MethodReceiver,
+) -> TokenStream {
+    let regular_params: Vec<_> = func
+        .sig
+        .inputs
+        .iter()
+        .filter(|arg| matches!(classify_receiver_arg(arg), ReceiverArgKind::Regular))
+        .collect();
+    let conversion_error = generate_promise_reject_and_return();
+    let conversions =
+        generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
+    let wrapper_params = regular_wrapper_params(func);
+    let injected_env_bindings = generate_receiver_env_bindings(func);
+    let call_args = build_receiver_call_args(func);
+    let method_name = &func.sig.ident;
+    let writeback = if receiver.is_mut() {
+        quote! {
+            ani::conversions::WriteBackToAniObject::write_back_to_ani_object(
+                __ani_self,
+                __ani_env,
+                &__ani_this,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables, clippy::needless_lifetimes)]
+        unsafe extern "C" fn #wrapper_name(
+            env: *mut ani::sys::ani_env,
+            this: ani::sys::ani_object
+            #(, #wrapper_params)*
+        ) -> ani::sys::ani_object {
+            let __ani_env = ani::env::Env::from_raw_unchecked(env);
+            let __ani_vm = match __ani_env.get_vm() {
+                Ok(vm) => vm,
+                Err(e) => {
+                    #conversion_error
+                }
+            };
+            let __ani_this_global = {
+                let __ani_this_ref = unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
+                match __ani_env.create_global_ref(&__ani_this_ref) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        #conversion_error
+                    }
+                }
+            };
+            #conversions
+
+            match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
+                let __ani_attach = __ani_vm.attach_current_thread_scoped().map_err(|e| e.to_string())?;
+                let __ani_env = __ani_attach.env();
+                let env = __ani_env.as_raw();
+                let __ani_this = unsafe {
+                    ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
+                };
+                let mut __ani_self: #self_ty = ani::conversions::FromAni::from_ani(
+                    __ani_env,
+                    __ani_this_global.as_raw() as <#self_ty as ani::conversions::FromAni<'_>>::Input,
+                )
+                .map_err(|e| e.to_string())?;
+                #injected_env_bindings
+                let result = __ani_self.#method_name(#(#call_args),*).await;
+                #writeback
+                result.map_err(|e| e.to_string())
+            }) {
+                Ok(promise) => promise.into_raw(),
+                Err(e) => {
+                    match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+                        Ok(promise) => promise.into_raw(),
+                        Err(_) => std::ptr::null_mut(),
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn regular_wrapper_params(func: &ItemFn) -> Vec<TokenStream> {
     let mut params = Vec::new();
 
@@ -472,6 +667,15 @@ fn generate_throw_error_and_return(on_error_return: &TokenStream) -> TokenStream
         let env_wrapper = ani::env::Env::from_raw_unchecked(env);
         let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
         #on_error_return
+    }
+}
+
+fn generate_promise_reject_and_return() -> TokenStream {
+    quote! {
+        return match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+            Ok(promise) => promise.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        };
     }
 }
 

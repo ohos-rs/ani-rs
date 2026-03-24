@@ -20,13 +20,14 @@
 - example 的 ETS smoke 测试不再只是导入模块，而是会真实调用 native 导出并根据返回值做断言
 - 本地 Docker + Linux x64 ArkVM 链路已经打通
 - Rust `cargo test --workspace` 已可在 Ubuntu Docker 中通过
-- `scripts/run_arkvm_examples_ubuntu.sh` 现已支持直接使用 `ARKVM_TARBALL=/path/to/arkvm_static_linux_x64.tar.gz`
-- 当前 ArkVM example 回归仍停留在 “Rust 构建 + ETS 生成通过，ABC 编译失败” 状态；失败点来自 `es2panda` 与外部 `runtime_core` stdlib 源码不兼容，而不是仓库内 Rust 宏/运行时改动本身
+- 已验证 clean Ubuntu 容器内复制并解压用户提供的 `x64_linux_static_fixed.zip` 后，可直接使用其中的 `es2panda` / `es2abc` / `resources/ets/{stdlib,sdk}` / `etsstdlib.abc` 进行 example 回归
+- 当前 ArkVM example 回归已在 Docker 中跑通；`examples/arkvm_report_fixed3.tsv` 中 50 个 example 均为 `build=OK / abc_compile=OK / runtime=OK`
+- 当前 ArkVM example 运行时需要显式设置 `ANI_TEST_MODULE_NAME=arkvm_test`，否则会出现 descriptor 不匹配导致的 runtime 失败
 
 最终回归结果见：
 
-- `examples/arkvm_report.txt`
-- `examples/arkvm_report.tsv`
+- `examples/arkvm_report_fixed3.txt`
+- `examples/arkvm_report_fixed3.tsv`
 
 ## 已验证能力
 
@@ -34,14 +35,16 @@
 
 - 模块级函数导出
 - namespace 绑定
+- 显式 `#[ani(module = ...)]` 绑定
 - class instance/static/constructor 绑定
 - getter/setter
 - overload 绑定
 - object/class nominal 类型生成
 - record/set/map/fixed array/tuple/enum item/any value 等类型的基础生成
-- PromiseRaw/Deferred 驱动的异步包装 example
-- module/member、function variable、class static by name 等运行时查找型能力
-- reference/ref scope/weak ref 基础使用
+- `PromiseRaw` / `Deferred` 以及 `#[ani(async)]` 驱动的异步包装 example
+- module/member、function variable、namespace variable、class static by name 等运行时查找型能力
+- reference/ref scope/`GlobalRef`/`WeakRef` 基础使用
+- VM version / `VmOptions` 基础能力
 - error / resolver 句柄基础使用
 
 对应 example 位于 `examples/` 目录下。
@@ -59,9 +62,12 @@
 - 已实现 `#[ani(async)] async fn foo(...) -> Result<T>`：宏会自动导出为 ArkTS `Promise<T>` 形式的 native binding
 - 当前实现基于 `ani::tokio`（建议为 `ani` 依赖开启 `tokio_rt` feature；未开启时 Promise 会直接 reject 并提示开启）
 - 当前约束：
-  - 不支持注入 `env` / `this` / `class`，也不支持 Rust `self` receiver（避免跨线程捕获线程关联的 VM 句柄）
-  - 参数和返回值需满足 `Send + 'static`（由 Rust 编译器在 `tokio` spawn 处强约束）
-  - 仍不建议在 async 任务中直接持有 `AniObject/AniRef` 等 VM handle；后续可以参考 napi-rs 的 “ref container” 思路，用 `GlobalRef` 做显式生命周期托管再放开
+  - 宏层不再拒绝注入 `env` / `this` / `class`，也不再拒绝 Rust `self` receiver；Rust 单测已经覆盖这部分展开与基础逻辑
+  - 已支持 `constructor/getter/setter/signature` 与 `#[ani(async)]` 组合；其中 constructor/getter/setter 会保留同步 ArkTS 形态，并在 wrapper 内阻塞等待 future 完成
+  - Promise 形态下，常规参数仍会在调用线程先完成转换，再跨线程移交到 dedicated local runtime worker；因此这部分捕获值当前仍需满足 `Send + 'static`
+  - future 的输出值和错误值本身不再因为 runtime bridge 被统一强制要求 `Send + 'static`
+  - 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、以及 static class 注入；class-instance 的 `this/self` async 路径仍需继续收口
+  - 仍不建议在 async 任务中直接持有 `AniObject/AniRef` 等 VM handle；后续可以参考 napi-rs 的 “ref container” 思路，用 `GlobalRef` 做显式生命周期托管再进一步放开
 
 代码位置：
 
@@ -72,12 +78,13 @@
 
 问题：
 
-- 仍有进一步对齐 napi-rs 的空间（例如 async 参数引用保活、允许更多 handle/引用类参数等）
+- 仍有进一步对齐 napi-rs 的空间（例如 async 常规参数的跨线程托管、更多 handle/引用类参数保活策略、runtime backend 抽象等）
+- class-instance 的 `this/self` async 路径在 ArkVM example 级回归上仍未完全闭环，当前更多依赖 Rust 单测与宏展开测试
 
 建议目标：
 
 - 在当前基础上继续增强 async 能力面：
-  - 为引用/handle 参数引入显式托管策略（类似 napi-rs 的 ref container），避免 GC 或线程语义问题
+  - 为跨线程常规参数与引用/handle 参数引入显式托管策略（类似 napi-rs 的 ref container），避免 GC 或线程语义问题
   - 结合 `GlobalRef/WeakRef` 补齐可用模式与 example 回归覆盖
 
 #### 2. `Unknown -> Object` fallback 仍然偏多
@@ -116,23 +123,23 @@
 - 对可以识别的对象类型、handle 类型、record/union/either/result 进一步细化 public ETS type
 - 将 fallback 变成真正少数兜底，而不是常规路径
 
-#### 3. 显式 `module = ...` 绑定缺少 example 和回归覆盖
+#### 3. 显式 `module = ...` 绑定已落地，剩余是复杂 descriptor 场景覆盖
 
 现状：
 
-- 文档中提到 `#[ani(module = ...)]`
-- 已补齐 `examples/module_binding`，并接入 ArkVM smoke（`scripts/generate_arkvm_smoke_ets.sh`）
-- 当前更多覆盖的是 `namespace` 和运行时 `find_module`
+- `examples/module_binding` 已落地，并接入 ArkVM smoke（`scripts/generate_arkvm_smoke_ets.sh`）
+- 基础等价 descriptor 场景已经通过 Docker ArkVM 回归验证
+- 当前更多覆盖的是等价 module descriptor，复杂映射场景仍较少
 
 问题：
 
-- 能力面对用户并不完整
-- 文档存在但没有实际可验证用例
+- “有无该能力” 已经不是问题
+- 仍缺一个 “descriptor 与 crate 名不一致” 的真实场景回归，避免只覆盖最简单路径
 
 建议目标：
 
-- 已落地：新增 `examples/module_binding` + ArkVM smoke 回归
-- 后续可增强：补一个“descriptor 与 crate 名不一致”的真实场景用例（避免只覆盖等价路径）
+- 维持现有 `examples/module_binding` + ArkVM smoke 回归
+- 后续补一个 “descriptor 与 crate 名不一致” 的真实场景用例
 
 #### 4. `GlobalRef / WeakRef` 需要更明确的高层能力面
 
@@ -140,7 +147,8 @@
 
 - runtime API 已有
 - `examples/reference` 主要覆盖的是 `Ref<T>` 使用模式
-- `GlobalRef` / `WeakRef` 现在已经接入 `examples/reference` 的 smoke，用于验证 native 内部 create/use/delete 基础链路；但仍缺少更完整的 weak invalidation 场景
+- `examples/reference` / `examples/weak_ref` 已覆盖 `GlobalRef` / `WeakRef` 的 create/use/delete/upgrade 基础链路
+- 但仍缺少更完整的 weak invalidation / GC 语义场景
 - 真实 ArkVM 验证表明 raw `GlobalRef` / `WeakRef` 不适合作为 ETS public value 直接 roundtrip；当前 example 已改为 ETS 传 `Object`，native 内部完成 low-level handle 操作并返回断言结果
 
 代码位置：
@@ -342,7 +350,9 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 - `class_ops` 的常用子集
 - `enum_ops`
 - `error_ops`
+- `function_ops` 的查找/调用子集
 - `fixedarray_ops`
+- `gref_ops` 的 create/use/delete 基础子集
 - `module_ops` 的运行时查找子集
 - `namespace_ops` 的运行时查找子集
 - `object_ops`
@@ -351,20 +361,20 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 - `string_ops`
 - `tuple_ops`
 - `type_ops`
+- `var_ops` 的 get/set 基础子集
+- `version_ops` 的基础查询子集
 - `vm_ops`
+- `options/*` 的基础构建子集
 - `wref_ops` 的基础使用子集
 
 ### 仍未形成完整上层封装或缺少明确回归覆盖的
 
-- `gref_ops`
-- 显式 `module` 绑定（已补 example + smoke，仍可补更复杂的 descriptor 场景）
 - `AniVariable` 为核心的变量型 API 对外建模
 - `fn_object_ops` 的系统化 example
-- `promise_ops` 的 derive 级封装
+- `promise_ops` 的统一高层封装（虽已有 `#[ani(async)]`，但 `PromiseRaw` / `Deferred` / `AniResolver` 仍是多套路径）
+- `gref_ops` / `wref_ops` 更完整的 invalidation / GC / 生命周期行为回归
 - `load_library` / `native_library` 多库装载边界
 - `cframe_iterator`
-- `options/*`
-- `version_ops`
 - `verifyani/*`
 - `bridges/*`
 
@@ -379,7 +389,6 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 
 - 已实现 `#[ani(async)]`（后续补齐 ref/handle 友好模式与回归覆盖）
 - 继续收缩 `Unknown -> Object`
-- 已补齐显式 `module = ...` 绑定 example 与 ArkVM smoke（后续补复杂 descriptor 场景）
 - 为 `GlobalRef / WeakRef` 增加更明确的 example 和行为验证
 
 ### P1
@@ -387,10 +396,11 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 - 统一 `AniModule / AniNamespace / AniVariable / AniResolver` 的 public type model
 - 继续统一 class/property/static property metadata 模型
 - 系统化 `fn object` / `variable` / `module` / `namespace` 类型生成
+- 补显式 `module = ...` 的复杂 descriptor 场景回归
 
 ### P2
 
-- 评估 `version_ops`、`options/*`、`load_library`、`native_library` 是否需要上升为 ani-rs runtime 层 API
+- 评估 `load_library`、`native_library` 是否需要上升为 ani-rs runtime 层 API
 - 评估 `verifyani/*`、`bridges/*`、`cframe_iterator` 是否值得进入对外能力面
 
 ## 建议落地顺序
@@ -399,10 +409,10 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 
 1. `#[ani(async)]`
 2. `Unknown -> Object` 继续收口
-3. `module = ...` example 与回归
-4. `GlobalRef / WeakRef` example 与回归
-5. `AniModule / AniNamespace / AniVariable / AniResolver` 的 public type model 统一
-6. class/property/static property metadata 继续统一
+3. `GlobalRef / WeakRef` example 与回归
+4. `AniModule / AniNamespace / AniVariable / AniResolver` 的 public type model 统一
+5. class/property/static property metadata 继续统一
+6. 显式 `module = ...` 的复杂 descriptor 场景回归
 
 ## 维护建议
 

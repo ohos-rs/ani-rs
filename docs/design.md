@@ -76,17 +76,21 @@ ANI 绑定目标分为三类：
 当前支持形态：
 
 - `#[ani(async)] async fn foo(...) -> Result<T, E>`
-- 导出为 ArkTS `Promise<T>`
+- 普通 async 函数、class 绑定函数、以及带 Rust `self` receiver 的 async 方法，导出为 ArkTS `Promise<T>`
+- `#[ani(async)]` 可与 `signature = ...` 组合
+- `#[ani(async, constructor/getter/setter)]` 可用，保持 constructor/getter/setter 的同步 ArkTS 形态，并在 wrapper 内阻塞等待 Rust future 完成
+- 支持注入 `env` / `this` / `class`；Promise 形态下会在运行时线程重新构建这些线程关联句柄
 
 约束：
 
-- 不支持 `env/this/class` 注入参数
-- 不支持 Rust `self` receiver
-- 依赖参数与返回值满足 `Send + 'static`
+- Promise 形态下，当前仍会把常规参数先转换后再跨线程移交给 runtime worker；因此这部分捕获值仍需满足 `Send + 'static`
+- future 的输出值和错误值本身不再因为 runtime bridge 被强制要求 `Send`
+- 仍不建议在 async 任务中直接跨线程持有 `AniObject/AniRef` 等 VM handle；应优先依赖注入重建或显式 `GlobalRef` 托管模式
+- 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、以及 static class 注入；class-instance 的 `this/self` async 路径仍在继续收口，当前主要由 Rust 单测覆盖
 
 `tokio_rt` 行为：
 
-- 开启 `ani` 的 `tokio_rt` feature 时，使用 tokio runtime 执行 future
+- 开启 `ani` 的 `tokio_rt` feature 时，Promise 形态使用 dedicated local worker 执行 future，blocking 形态使用 current-thread runtime 执行 future
 - 未开启时，wrapper 仍可编译，但 Promise 会立即 reject 并提示开启 `tokio_rt`
 
 ## 错误与 panic 边界
@@ -137,4 +141,3 @@ ANI 引用模型：
 
 - `docs/napi-rs-diff.md`
 - `docs/capability-gap.md`
-
