@@ -124,6 +124,24 @@ fn expand_object_type_impls(
             pub const fn arkts_name() -> &'static str {
                 #qualified_name_lit
             }
+
+            #[doc(hidden)]
+            pub fn __ani_from_bound_ani_object<'env>(
+                env: &ani::env::Env<'env>,
+                value: ani::sys::ani_object,
+            ) -> ani::error::Result<Self> {
+                if value.is_null() {
+                    return Err(ani::error::Error::new(
+                        ani::error::Status::InvalidArgs,
+                        format!("Null pointer: {}", stringify!(#struct_name)),
+                    ));
+                }
+
+                let obj = unsafe { ani::types::AniObject::from_raw(value) };
+                Ok(Self {
+                    #(#field_reads,)*
+                })
+            }
         }
 
         impl ani::conversions::TypeInfo for #struct_name {
@@ -159,9 +177,7 @@ fn expand_object_type_impls(
                     ));
                 }
 
-                Ok(Self {
-                    #(#field_reads,)*
-                })
+                Self::__ani_from_bound_ani_object(env, value)
             }
         }
 

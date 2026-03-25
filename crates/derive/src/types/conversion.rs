@@ -87,7 +87,13 @@ fn generate_single_param_conversion_with_custom_error(
     let ty = &pat_type.ty;
     let ani_type = AniType::from_syn_type(ty);
 
-    generate_type_conversion_with_custom_error(&param_name, &converted_name, ty, &ani_type, on_error)
+    generate_type_conversion_with_custom_error(
+        &param_name,
+        &converted_name,
+        ty,
+        &ani_type,
+        on_error,
+    )
 }
 
 /// Extract parameter name from pattern
@@ -128,11 +134,19 @@ fn generate_type_conversion_with_custom_error(
 ) -> TokenStream {
     match ani_type {
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
-        AniType::String(s) => {
-            generate_string_type_conversion_with_custom_error(param_name, converted_name, s, on_error)
-        }
+        AniType::String(s) => generate_string_type_conversion_with_custom_error(
+            param_name,
+            converted_name,
+            s,
+            on_error,
+        ),
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
-            generate_generic_from_ani_conversion_with_custom_error(param_name, converted_name, ty, on_error)
+            generate_generic_from_ani_conversion_with_custom_error(
+                param_name,
+                converted_name,
+                ty,
+                on_error,
+            )
         }
         _ => quote! { let #converted_name = #param_name; },
     }

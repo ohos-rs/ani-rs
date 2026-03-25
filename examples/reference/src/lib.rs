@@ -318,16 +318,18 @@ pub fn clear_compare_object() -> Result<()> {
 #[ani]
 pub fn validate_global_handle_roundtrip(env: &Env, obj: AniRef<'_>) -> Result<bool> {
     let handle = env.create_global_ref(&obj)?;
-    let ok = !handle.as_raw().is_null();
-    env.delete_global_ref(handle)?;
+    let local = handle.to_local(env)?;
+    let ok = !handle.as_raw().is_null() && !local.as_raw().is_null();
+    env.delete_local_ref(&local)?;
+    handle.delete(env)?;
     Ok(ok)
 }
 
 #[ani]
 pub fn validate_weak_handle_roundtrip(env: &Env, obj: AniRef<'_>) -> Result<bool> {
     let handle = env.create_weak_ref(&obj)?;
-    let upgraded = env.upgrade_weak_ref(&handle)?.is_some();
-    env.delete_weak_ref(handle)?;
+    let upgraded = handle.is_alive(env)?;
+    handle.delete(env)?;
     Ok(upgraded)
 }
 

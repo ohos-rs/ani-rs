@@ -117,13 +117,13 @@ Enable `tokio` support on the `ani` dependency:
 
 ```toml
 [dependencies]
-ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["tokio_rt"] }
+ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["async"] }
 ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", default-features = false, features = ["time"] }
 ```
 
-Note: if you forget to enable `ani` feature `tokio_rt`, `#[ani(async)]` bindings can still compile,
-but the returned `Promise` will reject immediately with an error message telling you to enable the feature.
+Note: if you forget to enable `ani` feature `async` (or the lower-level `tokio_rt`),
+`#[ani(async)]` bindings can still compile, but the returned `Promise` will reject immediately.
 
 Then export an `async fn` as `Promise<T>`:
 

@@ -60,14 +60,15 @@
 现状：
 
 - 已实现 `#[ani(async)] async fn foo(...) -> Result<T>`：宏会自动导出为 ArkTS `Promise<T>` 形式的 native binding
-- 当前实现基于 `ani::tokio`（建议为 `ani` 依赖开启 `tokio_rt` feature；未开启时 Promise 会直接 reject 并提示开启）
+- 当前实现基于 `ani::tokio`（建议为 `ani` 依赖开启 `async` feature；底层仍保留 `tokio_rt` 及对齐 napi-rs 的 `tokio_*` 子 feature；未开启时 Promise 会直接 reject 并提示开启）
 - 当前约束：
   - 宏层不再拒绝注入 `env` / `this` / `class`，也不再拒绝 Rust `self` receiver；Rust 单测已经覆盖这部分展开与基础逻辑
   - 已支持 `constructor/getter/setter/signature` 与 `#[ani(async)]` 组合；其中 constructor/getter/setter 会保留同步 ArkTS 形态，并在 wrapper 内阻塞等待 future 完成
   - Promise 形态下，常规参数仍会在调用线程先完成转换，再跨线程移交到 dedicated local runtime worker；因此这部分捕获值当前仍需满足 `Send + 'static`
+  - 对 `AniObject / AniRef / AnyValue / AniArray* / AniFixedArray* / AniString / AniClass / AniModule / AniNamespace / AniError / AniFnObject` 等 ref-backed 常规参数，宏现在会自动借助 `RefContainer` 做跨线程托管与恢复
   - future 的输出值和错误值本身不再因为 runtime bridge 被统一强制要求 `Send + 'static`
-  - 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、以及 static class 注入；class-instance 的 `this/self` async 路径仍需继续收口
-  - 仍不建议在 async 任务中直接持有 `AniObject/AniRef` 等 VM handle；后续可以参考 napi-rs 的 “ref container” 思路，用 `GlobalRef` 做显式生命周期托管再进一步放开
+  - 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、static class 注入，以及 class-instance 的 `this/self` 路径与直接 `AniObject/AniRef` 常规参数
+  - 对尚未纳入 `RefContainer` 自动托管的类型，仍不建议在 async 任务中手写跨线程持有 VM handle；优先使用显式 `GlobalRef/RefContainer`
 
 代码位置：
 
@@ -78,14 +79,14 @@
 
 问题：
 
-- 仍有进一步对齐 napi-rs 的空间（例如 async 常规参数的跨线程托管、更多 handle/引用类参数保活策略、runtime backend 抽象等）
-- class-instance 的 `this/self` async 路径在 ArkVM example 级回归上仍未完全闭环，当前更多依赖 Rust 单测与宏展开测试
+- 仍有进一步对齐 napi-rs 的空间（例如扩大自动托管类型面、补更多自定义 wrapper/引用类参数策略、runtime backend 抽象等）
+- 现阶段自动托管仍主要覆盖 ref-backed handle；非该类参数仍依赖显式 `Send + 'static` 约束或用户手写托管
 
 建议目标：
 
 - 在当前基础上继续增强 async 能力面：
-  - 为跨线程常规参数与引用/handle 参数引入显式托管策略（类似 napi-rs 的 ref container），避免 GC 或线程语义问题
-  - 结合 `GlobalRef/WeakRef` 补齐可用模式与 example 回归覆盖
+  - 扩大跨线程常规参数与引用/handle 参数的自动托管覆盖面
+  - 继续把 `RefContainer` 能力与 `GlobalRef/WeakRef` 生命周期模型收敛成更统一的用户层模式
 
 #### 2. `Unknown -> Object` fallback 仍然偏多
 
@@ -148,7 +149,13 @@
 - runtime API 已有
 - `examples/reference` 主要覆盖的是 `Ref<T>` 使用模式
 - `examples/reference` / `examples/weak_ref` 已覆盖 `GlobalRef` / `WeakRef` 的 create/use/delete/upgrade 基础链路
-- 但仍缺少更完整的 weak invalidation / GC 语义场景
+- `GlobalRef / WeakRef` 现在具备句柄自身的 helper 方法：
+  - `GlobalRef::to_local / to_object / to_class / clone_ref / delete`
+  - `WeakRef::upgrade / is_alive / is_released / delete`
+- `examples/weak_ref` 已补齐更完整的 weak invalidation / GC 语义场景，包括：
+  - 仅弱引用下的失效回归
+  - `GlobalRef` 存活期间弱引用仍可 upgrade
+  - 删除 `GlobalRef` 后在压力窗口内最终失效
 - 真实 ArkVM 验证表明 raw `GlobalRef` / `WeakRef` 不适合作为 ETS public value 直接 roundtrip；当前 example 已改为 ETS 传 `Object`，native 内部完成 low-level handle 操作并返回断言结果
 
 代码位置：
@@ -159,8 +166,8 @@
 
 建议目标：
 
-- 继续补 `WeakRef` 的失效/GC 语义 example，而不只是 upgrade 成功路径
-- 视需要补单独 example，或继续扩展 `examples/reference` 覆盖更多生命周期行为
+- 维持当前 `WeakRef` 的失效/GC 回归
+- 视需要继续扩展 `examples/reference` 覆盖更多 `GlobalRef` 高层生命周期模式（如 clone / local restore）
 - 明确 public ETS type 与 Rust 句柄的预期使用边界
 
 ### 二、底层已具备，但宏层和类型层还没完全压平的能力
@@ -185,24 +192,25 @@
 - 先完成 `#[ani(async)]`
 - 再决定是否统一 `PromiseRaw<'static, T>` 的导出建模
 
-#### 2. `AniModule / AniNamespace / AniVariable` 缺少更好的 public ETS type model
+#### 2. `AniModule / AniNamespace / AniVariable / AniResolver / GlobalRef / WeakRef` 的 public ETS type model 已明确
 
 现状：
 
 - runtime handle 已经识别
 - runtime env API 已有 `find_module`、`find_namespace`、`find_*_variable`、`get/set_variable_*`
-- 但导出到 ETS 时仍然偏向 `Object`
+- 现在这批 handle 的 public ETS 暴露已经统一：
+  - `AniModule / AniNamespace / AniVariable / AniResolver / GlobalRef`：保留命名 opaque handle，ETS 里导出为 `export type X = Object`
+  - `WeakRef`：保持 `WeakRef<Object>`，不再和 object-backed handle 混成同一套写法
 
 问题：
 
-- public API 对 ArkTS 使用者不够直观
-- runtime handle 虽然能传，但类型表达不够强
+- 其余 runtime handle（例如 `AniRef / AniError / AniField / AniMethod`）虽然也已有明确 surface，但仍然属于 coarse-grained opaque handle
+- 这批类型本质上还是 low-level runtime handle，不适合作为高层业务模型直接 roundtrip
 
 建议目标：
 
-- 明确这些 handle 在 ETS public signature 里的表现形式
-- 判断哪些仍应保持 opaque object
-- 判断哪些可以升级为更明确的 nominal public type
+- 继续保持 “命名明确，但语义 opaque” 的边界
+- 仅在 ANI/ArkTS 语义本身足够稳定时，再评估是否要把更多 handle 提升成更强的 nominal public type
 
 #### 3. class/property/static property metadata 模型仍可继续统一
 
@@ -287,18 +295,12 @@
 
 - `AniRef`
 - `AniObject`
-- `AniModule`
-- `AniNamespace`
 - `AniEnum`
 - `AniError`
 - `AniMethod`
 - `AniStaticMethod`
 - `AniField`
 - `AniStaticField`
-- `AniVariable`
-- `AniResolver`
-- `GlobalRef`
-- `WeakRef`
 
 相关代码位置：
 
@@ -393,7 +395,6 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 
 ### P1
 
-- 统一 `AniModule / AniNamespace / AniVariable / AniResolver` 的 public type model
 - 继续统一 class/property/static property metadata 模型
 - 系统化 `fn object` / `variable` / `module` / `namespace` 类型生成
 - 补显式 `module = ...` 的复杂 descriptor 场景回归
@@ -410,9 +411,8 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 1. `#[ani(async)]`
 2. `Unknown -> Object` 继续收口
 3. `GlobalRef / WeakRef` example 与回归
-4. `AniModule / AniNamespace / AniVariable / AniResolver` 的 public type model 统一
-5. class/property/static property metadata 继续统一
-6. 显式 `module = ...` 的复杂 descriptor 场景回归
+4. class/property/static property metadata 继续统一
+5. 显式 `module = ...` 的复杂 descriptor 场景回归
 
 ## 维护建议
 

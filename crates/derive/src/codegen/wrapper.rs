@@ -17,6 +17,7 @@ use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, ReturnType, Type};
 
 use crate::types::{
+    ani_type::{AniType, RuntimeHandleType},
     generate_param_conversions, generate_param_conversions_with_custom_error,
     generate_return_conversion, rust_type_to_ani_type,
 };
@@ -161,6 +162,107 @@ fn ty_is_ref(ty: &Type) -> bool {
     quote!(#ty).to_string().replace(' ', "").starts_with('&')
 }
 
+fn async_ref_container_name(ident: &Ident) -> Ident {
+    format_ident!("__ani_async_ref_container_{}", ident)
+}
+
+fn async_param_ident(arg: &FnArg, index: usize) -> Option<Ident> {
+    match arg {
+        FnArg::Typed(pat_type) => match &*pat_type.pat {
+            Pat::Ident(pat_ident) => Some(pat_ident.ident.clone()),
+            _ => Some(format_ident!("arg{}", index)),
+        },
+        FnArg::Receiver(_) => None,
+    }
+}
+
+fn supports_async_ref_container(ty: &Type) -> bool {
+    matches!(
+        AniType::from_syn_type(ty),
+        AniType::AniObject
+            | AniType::AnyValue
+            | AniType::TupleValue
+            | AniType::EnumItem
+            | AniType::ArrayBuffer
+            | AniType::ArrayHandle(_)
+            | AniType::FixedArray(_)
+            | AniType::RuntimeHandle(
+                RuntimeHandleType::Ref
+                    | RuntimeHandleType::Class
+                    | RuntimeHandleType::Type
+                    | RuntimeHandleType::Module
+                    | RuntimeHandleType::Namespace
+                    | RuntimeHandleType::String
+                    | RuntimeHandleType::Enum
+                    | RuntimeHandleType::Error
+                    | RuntimeHandleType::FunctionObject
+            )
+    )
+}
+
+pub(crate) fn generate_async_ref_container_captures(
+    params: &[&FnArg],
+    env_ident: &Ident,
+    on_error: &TokenStream,
+) -> TokenStream {
+    let mut captures = Vec::new();
+
+    for (index, arg) in params.iter().enumerate() {
+        let FnArg::Typed(pat_type) = arg else {
+            continue;
+        };
+        if !supports_async_ref_container(&pat_type.ty) {
+            continue;
+        }
+
+        let Some(param_ident) = async_param_ident(arg, index) else {
+            continue;
+        };
+        let converted_ident = format_ident!("{}_converted", param_ident);
+        let container_ident = async_ref_container_name(&param_ident);
+
+        captures.push(quote! {
+            let #container_ident = match ani::conversions::RefContainer::new(&#env_ident, &#converted_ident) {
+                Ok(value) => value,
+                Err(e) => { #on_error }
+            };
+        });
+    }
+
+    quote! { #(#captures)* }
+}
+
+pub(crate) fn generate_async_ref_container_restores(
+    params: &[&FnArg],
+    env_ident: &Ident,
+) -> TokenStream {
+    let mut restores = Vec::new();
+
+    for (index, arg) in params.iter().enumerate() {
+        let FnArg::Typed(pat_type) = arg else {
+            continue;
+        };
+        if !supports_async_ref_container(&pat_type.ty) {
+            continue;
+        }
+
+        let Some(param_ident) = async_param_ident(arg, index) else {
+            continue;
+        };
+        let converted_ident = format_ident!("{}_converted", param_ident);
+        let container_ident = async_ref_container_name(&param_ident);
+        let ty = &pat_type.ty;
+
+        restores.push(quote! {
+            let #converted_ident: #ty = #container_ident
+                .to_local(&#env_ident)
+                .map_err(|e| e.to_string())?;
+        });
+    }
+
+    quote! { #(#restores)* }
+}
+
 pub fn generate_wrapper(
     func: &ItemFn,
     wrapper_name: &Ident,
@@ -258,10 +360,20 @@ pub fn generate_async_wrapper_with_target(
             }
         };
     };
-    let conversions = generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
+    let conversions =
+        generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
+    let async_param_captures = generate_async_ref_container_captures(
+        &regular_params,
+        &format_ident!("__ani_env"),
+        &conversion_error,
+    );
     let call_args = build_call_args(&params);
     let async_setup = generate_async_promise_setup(&params, binding_kind);
     let async_injected = generate_async_promise_injected_vars(&params, binding_kind);
+    let async_param_restores = generate_async_ref_container_restores(
+        &regular_params,
+        &format_ident!("__ani_env"),
+    );
 
     quote! {
         #[doc(hidden)]
@@ -269,9 +381,11 @@ pub fn generate_async_wrapper_with_target(
         unsafe extern "C" fn #wrapper_name(#(#wrapper_params),*) -> ani::sys::ani_object {
             #async_setup
             #conversions
+            #async_param_captures
 
             match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
                 #async_injected
+                #async_param_restores
                 #call_target(#(#call_args),*).await.map_err(|e| e.to_string())
             }) {
                 Ok(promise) => promise.into_raw(),
@@ -318,8 +432,7 @@ pub fn generate_async_blocking_wrapper_with_target(
     let param_error_return = build_param_error_return(return_type);
     let conversions = generate_param_conversions(&regular_params, &param_error_return);
     let call_args = build_call_args(&params);
-    let async_setup =
-        generate_async_blocking_setup(&params, binding_kind, &param_error_return);
+    let async_setup = generate_async_blocking_setup(&params, binding_kind, &param_error_return);
     let async_injected = generate_async_blocking_injected_vars(&params, binding_kind);
     let return_conversion = generate_return_conversion(return_type);
     let wrapper_return = build_wrapper_return(return_type);
@@ -365,9 +478,9 @@ fn generate_async_promise_setup(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
         setup.push(quote! {
-            let __ani_this_global = {
+            let __ani_this_container = {
                 let __ani_this_ref = unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
-                match __ani_env.create_global_ref(&__ani_this_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env, &__ani_this_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         #reject_return
@@ -379,10 +492,10 @@ fn generate_async_promise_setup(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
         setup.push(quote! {
-            let __ani_class_global = {
+            let __ani_class_container = {
                 let __ani_class_ref: ani::types::AniRef<'_> =
                     unsafe { ani::types::AniClass::from_raw(_class) }.into();
-                match __ani_env.create_global_ref(&__ani_class_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env, &__ani_class_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         #reject_return
@@ -410,10 +523,10 @@ fn generate_async_blocking_setup(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
         setup.push(quote! {
-            let __ani_this_global = {
+            let __ani_this_container = {
                 let __ani_this_ref =
                     unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
-                match __ani_env_outer.create_global_ref(&__ani_this_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env_outer, &__ani_this_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         #on_error_return
@@ -425,10 +538,10 @@ fn generate_async_blocking_setup(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
         setup.push(quote! {
-            let __ani_class_global = {
+            let __ani_class_container = {
                 let __ani_class_ref: ani::types::AniRef<'_> =
                     unsafe { ani::types::AniClass::from_raw(_class) }.into();
-                match __ani_env_outer.create_global_ref(&__ani_class_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env_outer, &__ani_class_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         #on_error_return
@@ -453,17 +566,17 @@ fn generate_async_promise_injected_vars(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
         vars.push(quote! {
-            let __ani_this = unsafe {
-                ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
-            };
+            let __ani_this: ani::types::AniObject<'_> = __ani_this_container
+                .to_local(&__ani_env)
+                .map_err(|e| e.to_string())?;
         });
     }
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
         vars.push(quote! {
-            let __ani_class = unsafe {
-                ani::types::AniClass::from_raw(__ani_class_global.as_raw() as ani::sys::ani_class)
-            };
+            let __ani_class: ani::types::AniClass<'_> = __ani_class_container
+                .to_local(&__ani_env)
+                .map_err(|e| e.to_string())?;
         });
     }
 
@@ -528,17 +641,17 @@ fn generate_async_blocking_injected_vars(
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::This) {
         vars.push(quote! {
-            let __ani_this = unsafe {
-                ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
-            };
+            let __ani_this: ani::types::AniObject<'_> = __ani_this_container
+                .to_local(&__ani_env_outer)
+                .map_err(|e| e.to_string())?;
         });
     }
 
     if binding_kind.is_class() && has_injected_param(params, InjectedParamKind::Class) {
         vars.push(quote! {
-            let __ani_class = unsafe {
-                ani::types::AniClass::from_raw(__ani_class_global.as_raw() as ani::sys::ani_class)
-            };
+            let __ani_class: ani::types::AniClass<'_> = __ani_class_container
+                .to_local(&__ani_env_outer)
+                .map_err(|e| e.to_string())?;
         });
     }
 

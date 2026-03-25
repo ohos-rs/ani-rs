@@ -6,6 +6,10 @@
 //! - Synchronous `block_on` helpers backed by a current-thread runtime for
 //!   bindings such as constructors/getters/setters that must preserve a
 //!   synchronous ArkTS shape.
+//!
+//! Enable `ani` feature `async` for the ergonomic napi-rs-style alias, or
+//! enable the lower-level `tokio_rt` feature directly. Additional `tokio_*`
+//! passthrough features mirror napi-rs naming.
 
 #[cfg(feature = "tokio_rt")]
 mod imp {
@@ -179,21 +183,23 @@ mod imp {
         let vm = env.get_vm()?;
         let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
 
-        submit_local_job(Box::new(move || match catch_unwind(AssertUnwindSafe(build)) {
-            Ok(future) => {
-                ::tokio::task::spawn_local(async move {
-                    match CatchUnwindFuture::new(future).await {
-                        Ok(outcome) => {
-                            let _ = finish_promise_display(vm, deferred, outcome);
+        submit_local_job(Box::new(move || {
+            match catch_unwind(AssertUnwindSafe(build)) {
+                Ok(future) => {
+                    ::tokio::task::spawn_local(async move {
+                        match CatchUnwindFuture::new(future).await {
+                            Ok(outcome) => {
+                                let _ = finish_promise_display(vm, deferred, outcome);
+                            }
+                            Err(panic) => {
+                                let _ = reject_panic_payload(vm, deferred, panic);
+                            }
                         }
-                        Err(panic) => {
-                            let _ = reject_panic_payload(vm, deferred, panic);
-                        }
-                    }
-                });
-            }
-            Err(panic) => {
-                let _ = reject_panic_payload(vm, deferred, panic);
+                    });
+                }
+                Err(panic) => {
+                    let _ = reject_panic_payload(vm, deferred, panic);
+                }
             }
         }))?;
 
@@ -281,7 +287,7 @@ mod imp {
     use crate::error::{Error, Result, Status};
 
     const MISSING_TOKIO_RT: &str =
-        "async bindings require enabling `ani` feature `tokio_rt` (ani = { ..., features = [\"tokio_rt\"] })";
+        "async bindings require enabling `ani` feature `async` (or `tokio_rt`)";
 
     pub fn spawn_future<'env, T, F>(env: &Env<'env>, _future: F) -> Result<PromiseRaw<'env, T>>
     where
@@ -342,7 +348,6 @@ mod imp {
     {
         Err(Error::new(Status::GenericFailure, MISSING_TOKIO_RT))
     }
-
 }
 
 #[cfg(feature = "tokio_rt")]

@@ -252,9 +252,9 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
         &signature_for_binding,
         binding_input,
     ) {
-            Ok(binding) => binding,
-            Err(err) => return err.to_compile_error(),
-        };
+        Ok(binding) => binding,
+        Err(err) => return err.to_compile_error(),
+    };
     emit_export_plan_ets(&binding);
 
     // Generate wrapper function name
@@ -395,7 +395,10 @@ pub(crate) fn async_export_mode(attrs: &BindgenAttrs) -> Option<AsyncExportMode>
     }
 }
 
-pub(crate) fn signature_for_export(attrs: &BindgenAttrs, sig: &Signature) -> syn::Result<Signature> {
+pub(crate) fn signature_for_export(
+    attrs: &BindgenAttrs,
+    sig: &Signature,
+) -> syn::Result<Signature> {
     if !matches!(async_export_mode(attrs), Some(AsyncExportMode::Promise)) {
         return Ok(sig.clone());
     }
@@ -1890,7 +1893,8 @@ mod tests {
         };
         let func: ItemFn = parse_quote! { async fn compute() -> Result<i32> { Ok(1) } };
         assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
-        let sig = signature_for_export(&attrs, &func.sig).expect("signature_for_export should work");
+        let sig =
+            signature_for_export(&attrs, &func.sig).expect("signature_for_export should work");
         assert_eq!(generate_fn_signature(&sig, false), ":C{std.core.Promise}");
     }
 
@@ -1900,7 +1904,8 @@ mod tests {
             is_async: true,
             ..Default::default()
         };
-        let func: ItemFn = parse_quote! { async fn compute(env: &Env<'_>) -> Result<i32> { let _ = env; Ok(1) } };
+        let func: ItemFn =
+            parse_quote! { async fn compute(env: &Env<'_>) -> Result<i32> { let _ = env; Ok(1) } };
         assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
     }
 

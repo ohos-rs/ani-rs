@@ -74,8 +74,10 @@ use std::marker::PhantomData;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniObject, AniRef, GlobalRef, WeakRef};
+use crate::types::*;
+use crate::vm::AniVm;
 
+use super::AnyValue;
 use super::traits::{FromAni, ToAni, TypeInfo};
 
 // ============================================================================
@@ -160,6 +162,84 @@ impl<T> Ref<T> {
     #[inline]
     pub fn as_global_ref(&self) -> &GlobalRef {
         &self.inner
+    }
+}
+
+impl GlobalRef {
+    /// Materialize this global handle as a local [`AniRef`] on the current
+    /// thread.
+    #[inline]
+    pub fn to_local<'env>(&self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        env.local_ref_from_global_ref(self)
+    }
+
+    /// Materialize this global handle as a local [`AniObject`] on the current
+    /// thread.
+    #[inline]
+    pub fn to_object<'env>(&self, env: &Env<'env>) -> Result<AniObject<'env>> {
+        env.local_object_from_global_ref(self)
+    }
+
+    /// Materialize this global handle as a local [`AniClass`] on the current
+    /// thread.
+    #[inline]
+    pub fn to_class<'env>(&self, env: &Env<'env>) -> Result<AniClass<'env>> {
+        env.local_class_from_global_ref(self)
+    }
+
+    /// Clone this handle by creating a second global reference to the same
+    /// object.
+    pub fn clone_ref(&self, env: &Env<'_>) -> Result<Self> {
+        let local = self.to_local(env)?;
+        let cloned = env.create_global_ref(&local);
+        let delete_local = env.delete_local_ref(&local);
+
+        match (cloned, delete_local) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(err), _) => Err(err),
+            (Ok(_), Err(err)) => Err(err),
+        }
+    }
+
+    /// Delete this global reference explicitly.
+    #[inline]
+    pub fn delete(self, env: &Env<'_>) -> Result<()> {
+        env.delete_global_ref(self)
+    }
+}
+
+impl WeakRef {
+    /// Upgrade this weak handle to a thread-local [`AniRef`], if the target is
+    /// still alive.
+    #[inline]
+    pub fn upgrade<'env>(&self, env: &Env<'env>) -> Result<Option<AniRef<'env>>> {
+        env.upgrade_weak_ref(self)
+    }
+
+    /// Check whether this weak handle can still be upgraded.
+    ///
+    /// Any temporary local reference created during the check is deleted before
+    /// returning, so this helper does not accidentally keep the object alive.
+    pub fn is_alive(&self, env: &Env<'_>) -> Result<bool> {
+        match self.upgrade(env)? {
+            Some(local) => {
+                env.delete_local_ref(&local)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Check whether the weak target has already been released.
+    #[inline]
+    pub fn is_released(&self, env: &Env<'_>) -> Result<bool> {
+        self.is_alive(env).map(|alive| !alive)
+    }
+
+    /// Delete this weak reference explicitly.
+    #[inline]
+    pub fn delete(self, env: &Env<'_>) -> Result<()> {
+        env.delete_weak_ref(self)
     }
 }
 
@@ -369,12 +449,187 @@ impl<T> std::fmt::Debug for Ref<T> {
 }
 
 // ============================================================================
+// RefContainer - Async-safe local reference container
+// ============================================================================
+
+/// Convert a thread-affine ANI local handle into an owned [`GlobalRef`].
+///
+/// This is primarily used by [`RefContainer`] and async wrapper generation to
+/// capture local ANI values on the caller thread, then materialize them again
+/// on a runtime worker thread.
+pub trait ToGlobalRefSource {
+    /// Promote the local handle into an owned [`GlobalRef`].
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef>;
+}
+
+/// Restore a thread-affine ANI local handle from a [`GlobalRef`].
+///
+/// Implementations are provided for ANI local-reference wrapper types such as
+/// [`AniRef`], [`AniObject`], [`AniClass`], [`AniString`], arrays, and other
+/// reference-backed runtime handles.
+pub trait FromGlobalRef<'env>: Sized {
+    /// Materialize the local handle on the current thread.
+    fn from_global_ref(env: &Env<'env>, global: &GlobalRef) -> Result<Self>;
+}
+
+macro_rules! impl_global_ref_bridge_for_ref_type {
+    ($ty:ident, $raw:ty) => {
+        impl<'env> ToGlobalRefSource for $ty<'env> {
+            fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+                let value = unsafe { AniRef::from_raw(self.as_raw() as sys::ani_ref) };
+                env.create_global_ref(&value)
+            }
+        }
+
+        impl<'env> FromGlobalRef<'env> for $ty<'env> {
+            fn from_global_ref(env: &Env<'env>, global: &GlobalRef) -> Result<Self> {
+                let local = env.local_ref_from_global_ref(global)?;
+                Ok(unsafe { $ty::from_raw(local.as_raw() as $raw) })
+            }
+        }
+    };
+}
+
+impl_global_ref_bridge_for_ref_type!(AniRef, sys::ani_ref);
+impl_global_ref_bridge_for_ref_type!(AniObject, sys::ani_object);
+impl_global_ref_bridge_for_ref_type!(AniClass, sys::ani_class);
+impl_global_ref_bridge_for_ref_type!(AniType, sys::ani_type);
+impl_global_ref_bridge_for_ref_type!(AniModule, sys::ani_module);
+impl_global_ref_bridge_for_ref_type!(AniNamespace, sys::ani_namespace);
+impl_global_ref_bridge_for_ref_type!(AniString, sys::ani_string);
+impl_global_ref_bridge_for_ref_type!(AniEnum, sys::ani_enum);
+impl_global_ref_bridge_for_ref_type!(AniError, sys::ani_error);
+impl_global_ref_bridge_for_ref_type!(AniFnObject, sys::ani_fn_object);
+impl_global_ref_bridge_for_ref_type!(AniArray, sys::ani_array);
+impl_global_ref_bridge_for_ref_type!(AniArrayInt, sys::ani_fixedarray_int);
+impl_global_ref_bridge_for_ref_type!(AniArrayLong, sys::ani_fixedarray_long);
+impl_global_ref_bridge_for_ref_type!(AniArrayDouble, sys::ani_fixedarray_double);
+impl_global_ref_bridge_for_ref_type!(AniArrayRef, sys::ani_array);
+impl_global_ref_bridge_for_ref_type!(AniFixedArray, sys::ani_fixedarray);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayBoolean, sys::ani_fixedarray_boolean);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayChar, sys::ani_fixedarray_char);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayByte, sys::ani_fixedarray_byte);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayShort, sys::ani_fixedarray_short);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayInt, sys::ani_fixedarray_int);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayLong, sys::ani_fixedarray_long);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayFloat, sys::ani_fixedarray_float);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayDouble, sys::ani_fixedarray_double);
+impl_global_ref_bridge_for_ref_type!(AniFixedArrayRef, sys::ani_fixedarray_ref);
+impl_global_ref_bridge_for_ref_type!(AniArrayBuffer, sys::ani_arraybuffer);
+impl_global_ref_bridge_for_ref_type!(AniEnumItem, sys::ani_enum_item);
+impl_global_ref_bridge_for_ref_type!(AniTupleValue, sys::ani_tuple_value);
+
+impl<'env> ToGlobalRefSource for AnyValue<'env> {
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        env.create_global_ref(self.as_ref())
+    }
+}
+
+impl<'env> FromGlobalRef<'env> for AnyValue<'env> {
+    fn from_global_ref(env: &Env<'env>, global: &GlobalRef) -> Result<Self> {
+        let local = env.local_ref_from_global_ref(global)?;
+        Ok(Self::from_ref(local))
+    }
+}
+
+/// Owned global-reference container for async tasks.
+///
+/// `RefContainer` captures a thread-affine ANI local handle as a [`GlobalRef`]
+/// together with its owning [`AniVm`]. When the container is dropped, it
+/// reattaches to the VM if needed and deletes the global reference
+/// automatically. This provides a napi-rs-style "ref container" building block
+/// for async workflows.
+pub struct RefContainer {
+    vm: AniVm,
+    inner: Option<GlobalRef>,
+}
+
+impl RefContainer {
+    /// Create a new container from a local ANI handle.
+    pub fn new<'env, T>(env: &Env<'env>, value: &T) -> Result<Self>
+    where
+        T: ToGlobalRefSource,
+    {
+        let vm = env.get_vm()?;
+        let inner = value.to_global_ref(env)?;
+        Ok(Self {
+            vm,
+            inner: Some(inner),
+        })
+    }
+
+    /// Create a container from an existing [`GlobalRef`].
+    pub fn from_global_ref(vm: AniVm, inner: GlobalRef) -> Self {
+        Self {
+            vm,
+            inner: Some(inner),
+        }
+    }
+
+    /// Borrow the owned [`GlobalRef`].
+    pub fn as_global_ref(&self) -> Option<&GlobalRef> {
+        self.inner.as_ref()
+    }
+
+    /// Materialize the requested local ANI handle on the current thread.
+    pub fn to_local<'env, T>(&self, env: &Env<'env>) -> Result<T>
+    where
+        T: FromGlobalRef<'env>,
+    {
+        let global = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::InvalidArgs, "RefContainer has no global ref"))?;
+        T::from_global_ref(env, global)
+    }
+
+    /// Create a second container pointing at the same object.
+    pub fn clone_container(&self, env: &Env<'_>) -> Result<Self> {
+        let local = self.to_local::<AniRef<'_>>(env)?;
+        let cloned = env.create_global_ref(&local)?;
+        Ok(Self {
+            vm: env.get_vm()?,
+            inner: Some(cloned),
+        })
+    }
+
+    /// Consume the container and return the owned [`GlobalRef`] without
+    /// deleting it on drop.
+    pub fn into_global_ref(mut self) -> GlobalRef {
+        self.inner
+            .take()
+            .expect("RefContainer should always contain a global ref before into_global_ref")
+    }
+}
+
+impl std::fmt::Debug for RefContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefContainer")
+            .field("raw", &self.inner.as_ref().map(GlobalRef::as_raw))
+            .finish()
+    }
+}
+
+impl Drop for RefContainer {
+    fn drop(&mut self) {
+        let Some(global) = self.inner.take() else {
+            return;
+        };
+
+        if let Ok(guard) = self.vm.attach_current_thread_scoped() {
+            let _ = guard.env().delete_global_ref(global);
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::NonNull;
 
     #[test]
     fn test_ref_is_send_sync() {
@@ -382,6 +637,7 @@ mod tests {
         assert_send_sync::<Ref<AniObject<'static>>>();
         assert_send_sync::<GlobalRef>();
         assert_send_sync::<WeakRef>();
+        assert_send_sync::<RefContainer>();
     }
 
     #[test]
@@ -390,5 +646,59 @@ mod tests {
         assert_eq!(GlobalRef::ani_c_type(), "ani_ref");
         assert_eq!(WeakRef::type_signature(), "Lstd/core/WeakRef;");
         assert_eq!(WeakRef::ani_c_type(), "ani_wref");
+    }
+
+    #[test]
+    fn test_ref_container_trait_support_covers_common_local_handles() {
+        fn assert_to_global<T: ToGlobalRefSource>() {}
+        fn assert_from_global<'env, T: FromGlobalRef<'env>>() {}
+
+        assert_to_global::<AniRef<'static>>();
+        assert_to_global::<AniObject<'static>>();
+        assert_to_global::<AniClass<'static>>();
+        assert_to_global::<AniString<'static>>();
+        assert_to_global::<AniArrayBuffer<'static>>();
+        assert_to_global::<AniFixedArrayInt<'static>>();
+        assert_to_global::<AnyValue<'static>>();
+
+        assert_from_global::<AniRef<'static>>();
+        assert_from_global::<AniObject<'static>>();
+        assert_from_global::<AniClass<'static>>();
+        assert_from_global::<AniString<'static>>();
+        assert_from_global::<AniArrayBuffer<'static>>();
+        assert_from_global::<AniFixedArrayInt<'static>>();
+        assert_from_global::<AnyValue<'static>>();
+    }
+
+    #[test]
+    fn test_ref_container_into_global_ref_preserves_raw() {
+        let vm = unsafe { AniVm::from_raw_unchecked(NonNull::<sys::ani_vm>::dangling().as_ptr()) };
+        let raw = NonNull::<std::ffi::c_void>::dangling().as_ptr() as sys::ani_ref;
+        let global = unsafe { GlobalRef::from_raw(raw) };
+        let container = RefContainer::from_global_ref(vm, global);
+        let global = container.into_global_ref();
+        assert_eq!(global.as_raw(), raw);
+    }
+
+    #[test]
+    fn test_global_and_weak_ref_helper_methods_compile() {
+        fn compile<'env>(env: &Env<'env>) {
+            let raw = NonNull::<std::ffi::c_void>::dangling().as_ptr() as sys::ani_ref;
+            let global = unsafe { GlobalRef::from_raw(raw) };
+            let weak = unsafe { WeakRef::from_raw(raw as sys::ani_wref) };
+
+            let _ = global.to_local(env);
+            let _ = unsafe { GlobalRef::from_raw(raw) }.to_object(env);
+            let _ = unsafe { GlobalRef::from_raw(raw) }.to_class(env);
+            let _ = unsafe { GlobalRef::from_raw(raw) }.clone_ref(env);
+            let _ = unsafe { GlobalRef::from_raw(raw) }.delete(env);
+
+            let _ = weak.upgrade(env);
+            let _ = unsafe { WeakRef::from_raw(raw as sys::ani_wref) }.is_alive(env);
+            let _ = unsafe { WeakRef::from_raw(raw as sys::ani_wref) }.is_released(env);
+            let _ = unsafe { WeakRef::from_raw(raw as sys::ani_wref) }.delete(env);
+        }
+
+        let _ = compile;
     }
 }

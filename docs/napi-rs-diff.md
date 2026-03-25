@@ -83,11 +83,12 @@
 
 - 已支持 `#[ani(async)] async fn ... -> Result<T>` 自动导出 `Promise<T>`
 - `ani::tokio` 已补齐 tokio task panic 捕获并转 Promise rejection（避免 Promise 永远 pending）
+- 已引入 `RefContainer`，并在 `#[ani(async)]` 中自动托管一批 ref-backed 常规参数与注入的 `this/class`
 
 仍待对齐点：
 
-- “引用/handle 参数在 async 中的安全使用” 还缺少类似 napi-rs 的统一托管策略
-- 需要围绕 `GlobalRef/WeakRef` 明确可用模式，并补齐 example + ArkVM 回归
+- 自动托管仍未覆盖所有可能的 wrapper/handle 组合
+- 仍需继续把 `RefContainer`、`GlobalRef`、`WeakRef` 收敛成更统一的 async 使用模式
 
 ## 6. panic 边界与异常模型
 
@@ -123,10 +124,10 @@
 
 可以直接对齐且高价值（P0/P1）：
 
-- `#[ani(async)]`（已落地，后续增强参数/handle 安全模式）
+- `#[ani(async)]`（已落地，后续继续扩大自动托管参数/handle 范围）
 - 继续收敛类型系统，减少 `Unknown -> Object`
 - 显式 `module = ...` 绑定 example 与 ArkVM smoke（已补齐）
-- `GlobalRef/WeakRef` 更完整的语义覆盖（含失效/GC 行为）
+- `GlobalRef/WeakRef` 更完整的语义覆盖（含失效/GC 行为，已补基础 helper 与 ArkVM 回归）
 
 不一定能对齐或需要重设计：
 

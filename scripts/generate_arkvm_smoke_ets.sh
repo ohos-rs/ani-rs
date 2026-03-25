@@ -137,6 +137,15 @@ function main(): void {
   __assert_true("tokio_void_async", tokioVoidAsync);
   let envText: string = waitForCompletion(() => __ANI_GENERATED__.env_roundtrip("hello"));
   __assert_eq_string("env_roundtrip", envText, "env:hello");
+  let refPayload: Object = new Object();
+  let sameObject: boolean = waitForCompletion(() => __ANI_GENERATED__.async_object_strict_equals(refPayload, refPayload));
+  __assert_true("async_object_strict_equals_same", sameObject);
+  let otherObject: boolean = waitForCompletion(() => __ANI_GENERATED__.async_object_strict_equals(refPayload, new Object()));
+  __assert_true("async_object_strict_equals_diff", !otherObject);
+  let refRoundtrip: boolean = waitForCompletion(() => __ANI_GENERATED__.async_ref_roundtrip(refPayload));
+  __assert_true("async_ref_roundtrip", refRoundtrip);
+  let manualContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_ref_container_ready(refPayload));
+  __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
   let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));
   __assert_eq_string("signature_override_echo", signatureText, "sig:value");
 
@@ -152,6 +161,16 @@ function main(): void {
 
   let classReady: boolean = waitForCompletion(() => AsyncWidget.class_handle_ready());
   __assert_true("async_class_injection", classReady);
+
+  let widget = new AsyncWidget();
+  let firstBump: int = waitForCompletion(() => widget.bump(2));
+  __assert_eq_int("async_receiver_bump_first", firstBump, 2);
+  let secondBump: int = waitForCompletion(() => widget.bump(1));
+  __assert_eq_int("async_receiver_bump_second", secondBump, 3);
+  let widgetDesc: string = waitForCompletion(() => widget.describe());
+  __assert_eq_string("async_receiver_describe", widgetDesc, "widget:3");
+  let thisReady: boolean = waitForCompletion(() => widget.this_handle_ready());
+  __assert_true("async_this_injection", thisReady);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);
@@ -1130,6 +1149,18 @@ class WeakPayload {
   }
 }
 __assert_true("weak_ref_roundtrip", __ANI_GENERATED__.weak_ref_roundtrip(new WeakPayload("value")));
+__assert_true(
+  "weak_ref_releases_after_pressure",
+  __ANI_GENERATED__.weak_ref_releases_after_pressure(512),
+);
+__assert_true(
+  "weak_ref_survives_global_ref_pressure",
+  __ANI_GENERATED__.weak_ref_survives_global_ref_pressure(512),
+);
+__assert_true(
+  "weak_ref_releases_after_global_drop",
+  __ANI_GENERATED__.weak_ref_releases_after_global_drop(512),
+);
 ETS
       ;;
     ani-example-wrap-ptr)

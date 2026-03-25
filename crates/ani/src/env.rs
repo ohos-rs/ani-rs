@@ -3763,6 +3763,40 @@ impl<'local> Env<'local> {
         ani_call!(self, GlobalReference_Delete, gref.as_raw())
     }
 
+    /// Materialize a thread-local reference from a global reference.
+    ///
+    /// ANI does not currently expose a dedicated `GlobalReference_GetReference`
+    /// API, so we bridge through a temporary weak reference on the current
+    /// thread and immediately upgrade it back to a local reference.
+    pub fn local_ref_from_global_ref(&self, gref: &GlobalRef) -> Result<AniRef<'local>> {
+        let source = unsafe { AniRef::from_raw(gref.as_raw()) };
+        let weak = self.create_weak_ref(&source)?;
+        let upgraded = self.upgrade_weak_ref(&weak);
+        let delete_result = self.delete_weak_ref(weak);
+
+        match (upgraded, delete_result) {
+            (Ok(Some(local)), Ok(())) => Ok(local),
+            (Ok(None), Ok(())) => Err(Error::new(
+                Status::NotFound,
+                "Global reference target was released",
+            )),
+            (Ok(_), Err(err)) => Err(err),
+            (Err(err), _) => Err(err),
+        }
+    }
+
+    /// Materialize a thread-local object from a global reference.
+    pub fn local_object_from_global_ref(&self, gref: &GlobalRef) -> Result<AniObject<'local>> {
+        let local = self.local_ref_from_global_ref(gref)?;
+        Ok(unsafe { AniObject::from_raw(local.as_raw() as sys::ani_object) })
+    }
+
+    /// Materialize a thread-local class from a global reference.
+    pub fn local_class_from_global_ref(&self, gref: &GlobalRef) -> Result<AniClass<'local>> {
+        let local = self.local_ref_from_global_ref(gref)?;
+        Ok(unsafe { AniClass::from_raw(local.as_raw() as sys::ani_class) })
+    }
+
     /// Create a weak reference from a local/global reference.
     pub fn create_weak_ref<'a>(&self, obj: &AniRef<'a>) -> Result<WeakRef> {
         ani_call_wrap!(

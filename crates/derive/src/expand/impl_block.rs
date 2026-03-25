@@ -10,7 +10,8 @@ use syn::{Attribute, FnArg, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Type};
 
 use crate::codegen::{
     ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, emit_export_plan_ets,
-    generate_async_blocking_wrapper_with_target, generate_async_wrapper_with_target,
+    generate_async_blocking_wrapper_with_target, generate_async_ref_container_captures,
+    generate_async_ref_container_restores, generate_async_wrapper_with_target,
     generate_register_call, generate_wrapper_with_target,
 };
 use crate::parser::{BindgenAttrs, parse_bindgen_attrs_from_attribute};
@@ -434,10 +435,10 @@ fn generate_async_blocking_receiver_wrapper(
             #(, #wrapper_params)*
         ) #wrapper_return {
             let __ani_env_outer = ani::env::Env::from_raw_unchecked(env);
-            let __ani_this_global = {
+            let __ani_this_container = {
                 let __ani_this_ref =
                     unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
-                match __ani_env_outer.create_global_ref(&__ani_this_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env_outer, &__ani_this_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
@@ -449,12 +450,12 @@ fn generate_async_blocking_receiver_wrapper(
             let __ani_future = async move {
                 let __ani_env = ani::env::Env::from_raw_unchecked(env);
                 let env = __ani_env.as_raw();
-                let __ani_this = unsafe {
-                    ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
-                };
-                let mut __ani_self: #self_ty = ani::conversions::FromAni::from_ani(
+                let __ani_this: ani::types::AniObject<'_> = __ani_this_container
+                    .to_local(&__ani_env)
+                    .map_err(|e| e.to_string())?;
+                let mut __ani_self: #self_ty = #self_ty::__ani_from_bound_ani_object(
                     &__ani_env,
-                    __ani_this_global.as_raw() as <#self_ty as ani::conversions::FromAni<'_>>::Input,
+                    __ani_this.as_raw(),
                 )
                 .map_err(|e| e.to_string())?;
                 #injected_env_bindings
@@ -489,10 +490,17 @@ fn generate_async_receiver_wrapper(
     let conversion_error = generate_promise_reject_and_return();
     let conversions =
         generate_param_conversions_with_custom_error(&regular_params, &conversion_error);
+    let async_param_captures = generate_async_ref_container_captures(
+        &regular_params,
+        &format_ident!("__ani_env"),
+        &conversion_error,
+    );
     let wrapper_params = regular_wrapper_params(func);
     let injected_env_bindings = generate_receiver_env_bindings(func);
     let call_args = build_receiver_call_args(func);
     let method_name = &func.sig.ident;
+    let async_param_restores =
+        generate_async_ref_container_restores(&regular_params, &format_ident!("__ani_env"));
     let writeback = if receiver.is_mut() {
         quote! {
             ani::conversions::WriteBackToAniObject::write_back_to_ani_object(
@@ -521,9 +529,9 @@ fn generate_async_receiver_wrapper(
                     #conversion_error
                 }
             };
-            let __ani_this_global = {
+            let __ani_this_container = {
                 let __ani_this_ref = unsafe { ani::types::AniRef::from_raw(this as ani::sys::ani_ref) };
-                match __ani_env.create_global_ref(&__ani_this_ref) {
+                match ani::conversions::RefContainer::new(&__ani_env, &__ani_this_ref) {
                     Ok(value) => value,
                     Err(e) => {
                         #conversion_error
@@ -531,20 +539,22 @@ fn generate_async_receiver_wrapper(
                 }
             };
             #conversions
+            #async_param_captures
 
             match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
                 let __ani_attach = __ani_vm.attach_current_thread_scoped().map_err(|e| e.to_string())?;
                 let __ani_env = __ani_attach.env();
                 let env = __ani_env.as_raw();
-                let __ani_this = unsafe {
-                    ani::types::AniObject::from_raw(__ani_this_global.as_raw() as ani::sys::ani_object)
-                };
-                let mut __ani_self: #self_ty = ani::conversions::FromAni::from_ani(
+                let __ani_this: ani::types::AniObject<'_> = __ani_this_container
+                    .to_local(&__ani_env)
+                    .map_err(|e| e.to_string())?;
+                let mut __ani_self: #self_ty = #self_ty::__ani_from_bound_ani_object(
                     __ani_env,
-                    __ani_this_global.as_raw() as <#self_ty as ani::conversions::FromAni<'_>>::Input,
+                    __ani_this.as_raw(),
                 )
                 .map_err(|e| e.to_string())?;
                 #injected_env_bindings
+                #async_param_restores
                 let result = __ani_self.#method_name(#(#call_args),*).await;
                 #writeback
                 result.map_err(|e| e.to_string())

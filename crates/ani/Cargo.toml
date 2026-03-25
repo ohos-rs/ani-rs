@@ -12,8 +12,22 @@ categories = ["api-bindings", "development-tools::ffi"]
 default = []
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
-# Enable tokio-based Promise helpers
+# Ergonomic alias matching napi-rs async exports.
+async = ["tokio_rt"]
+# Enable ani's tokio-backed Promise/runtime bridge.
 tokio_rt = ["dep:tokio"]
+# Tokio passthrough feature set aligned with napi-rs naming.
+tokio_fs = ["tokio/fs"]
+tokio_full = ["tokio/full"]
+tokio_io_std = ["tokio/io-std"]
+tokio_io_util = ["tokio/io-util"]
+tokio_macros = ["tokio/macros"]
+tokio_net = ["tokio/net"]
+tokio_process = ["tokio/process"]
+tokio_signal = ["tokio/signal"]
+tokio_sync = ["tokio/sync"]
+tokio_test_util = ["tokio/test-util"]
+tokio_time = ["tokio/time"]
 
 [dependencies]
 ani-sys = { path = "../sys" }
@@ -21,6 +35,6 @@ ctor = "0.6"
 
 # Optional dependencies
 anyhow = { version = "1", optional = true }
-tokio = { version = "1", optional = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", optional = true, default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]

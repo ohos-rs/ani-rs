@@ -462,24 +462,60 @@ fn section_break(out: &mut String, has_content: &mut bool) {
     *has_content = true;
 }
 
-const BUILTIN_OPAQUE_ETS_TYPE_ALIASES: &[(&str, &str)] = &[
-    ("AniRef", "Object"),
-    ("GlobalRef", "Object"),
-    ("AniType", "Object"),
-    ("AniModule", "Object"),
-    ("AniNamespace", "Object"),
-    ("AniEnum", "Object"),
-    ("AniError", "Object"),
-    ("AniMethod", "Object"),
-    ("AniStaticMethod", "Object"),
-    ("AniField", "Object"),
-    ("AniStaticField", "Object"),
-    ("AniVariable", "Object"),
-    ("AniResolver", "Object"),
-    ("AnyValue", "Object"),
-    ("TupleValue", "Object"),
-    ("EnumItem", "Object"),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BuiltinEtsTypeSurface {
+    rust_name: &'static str,
+    public_ty: &'static str,
+    alias_target: Option<&'static str>,
+}
+
+impl BuiltinEtsTypeSurface {
+    const fn opaque_object(rust_name: &'static str) -> Self {
+        Self {
+            rust_name,
+            public_ty: rust_name,
+            alias_target: Some("Object"),
+        }
+    }
+
+    const fn direct(rust_name: &'static str, public_ty: &'static str) -> Self {
+        Self {
+            rust_name,
+            public_ty,
+            alias_target: None,
+        }
+    }
+}
+
+const BUILTIN_ETS_TYPE_SURFACES: &[BuiltinEtsTypeSurface] = &[
+    BuiltinEtsTypeSurface::opaque_object("AniRef"),
+    BuiltinEtsTypeSurface::opaque_object("GlobalRef"),
+    BuiltinEtsTypeSurface::opaque_object("AniType"),
+    BuiltinEtsTypeSurface::opaque_object("AniModule"),
+    BuiltinEtsTypeSurface::opaque_object("AniNamespace"),
+    BuiltinEtsTypeSurface::opaque_object("AniEnum"),
+    BuiltinEtsTypeSurface::opaque_object("AniError"),
+    BuiltinEtsTypeSurface::opaque_object("AniMethod"),
+    BuiltinEtsTypeSurface::opaque_object("AniStaticMethod"),
+    BuiltinEtsTypeSurface::opaque_object("AniField"),
+    BuiltinEtsTypeSurface::opaque_object("AniStaticField"),
+    BuiltinEtsTypeSurface::opaque_object("AniVariable"),
+    BuiltinEtsTypeSurface::opaque_object("AniResolver"),
+    BuiltinEtsTypeSurface::opaque_object("AnyValue"),
+    BuiltinEtsTypeSurface::opaque_object("TupleValue"),
+    BuiltinEtsTypeSurface::opaque_object("EnumItem"),
+    BuiltinEtsTypeSurface::direct("WeakRef", "WeakRef<Object>"),
 ];
+
+fn builtin_ets_type_surface(name: &str) -> Option<&'static BuiltinEtsTypeSurface> {
+    BUILTIN_ETS_TYPE_SURFACES
+        .iter()
+        .find(|surface| surface.rust_name == name)
+}
+
+fn builtin_ets_public_type(name: &str) -> Option<&'static str> {
+    builtin_ets_type_surface(name).map(|surface| surface.public_ty)
+}
 
 fn contains_type_token(haystack: &str, token: &str) -> bool {
     let mut search_from = 0usize;
@@ -529,9 +565,11 @@ fn append_builtin_opaque_ets_aliases(
     class_members: &[EtsClassMemberDecl],
     has_content: &mut bool,
 ) {
-    let aliases = BUILTIN_OPAQUE_ETS_TYPE_ALIASES
+    let aliases = BUILTIN_ETS_TYPE_SURFACES
         .iter()
-        .copied()
+        .filter_map(|surface| {
+            surface.alias_target.map(|target| (surface.public_ty, target))
+        })
         .filter(|(alias, _)| rendered_decl_uses_builtin_alias(alias, decls, objects, class_members))
         .collect::<Vec<_>>();
     if aliases.is_empty() {
@@ -864,8 +902,8 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
             )
         }
         AniType::AniObject => "Object".to_string(),
-        AniType::GlobalRef => "GlobalRef".to_string(),
-        AniType::WeakRef => "WeakRef<Object>".to_string(),
+        AniType::GlobalRef => builtin_ets_public_type("GlobalRef").unwrap().to_string(),
+        AniType::WeakRef => builtin_ets_public_type("WeakRef").unwrap().to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
         AniType::ArrayHandle(handle) => array_handle_to_ets(*handle).to_string(),
         AniType::AnyValue => "AnyValue".to_string(),
@@ -1061,21 +1099,21 @@ fn path_type_to_ets(type_path: &syn::TypePath) -> Option<String> {
 
 fn runtime_handle_to_ets(handle: RuntimeHandleType) -> &'static str {
     match handle {
-        RuntimeHandleType::Ref => "AniRef",
+        RuntimeHandleType::Ref => builtin_ets_public_type("AniRef").unwrap(),
         RuntimeHandleType::Class => "Class",
-        RuntimeHandleType::Type => "AniType",
-        RuntimeHandleType::Module => "AniModule",
-        RuntimeHandleType::Namespace => "AniNamespace",
+        RuntimeHandleType::Type => builtin_ets_public_type("AniType").unwrap(),
+        RuntimeHandleType::Module => builtin_ets_public_type("AniModule").unwrap(),
+        RuntimeHandleType::Namespace => builtin_ets_public_type("AniNamespace").unwrap(),
         RuntimeHandleType::String => "string",
-        RuntimeHandleType::Enum => "AniEnum",
-        RuntimeHandleType::Error => "AniError",
-        RuntimeHandleType::Method => "AniMethod",
-        RuntimeHandleType::StaticMethod => "AniStaticMethod",
-        RuntimeHandleType::Field => "AniField",
-        RuntimeHandleType::StaticField => "AniStaticField",
+        RuntimeHandleType::Enum => builtin_ets_public_type("AniEnum").unwrap(),
+        RuntimeHandleType::Error => builtin_ets_public_type("AniError").unwrap(),
+        RuntimeHandleType::Method => builtin_ets_public_type("AniMethod").unwrap(),
+        RuntimeHandleType::StaticMethod => builtin_ets_public_type("AniStaticMethod").unwrap(),
+        RuntimeHandleType::Field => builtin_ets_public_type("AniField").unwrap(),
+        RuntimeHandleType::StaticField => builtin_ets_public_type("AniStaticField").unwrap(),
         RuntimeHandleType::Function | RuntimeHandleType::FunctionObject => "Function",
-        RuntimeHandleType::Variable => "AniVariable",
-        RuntimeHandleType::Resolver => "AniResolver",
+        RuntimeHandleType::Variable => builtin_ets_public_type("AniVariable").unwrap(),
+        RuntimeHandleType::Resolver => builtin_ets_public_type("AniResolver").unwrap(),
     }
 }
 
@@ -1103,24 +1141,16 @@ fn array_handle_to_ets(handle: ArrayHandleType) -> &'static str {
 }
 
 fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
+    if let Some(surface) = builtin_ets_public_type(ident) {
+        return Some(surface);
+    }
+
     match ident {
-        "AniRef" => Some("AniRef"),
         "AniObject" => Some("Object"),
         "AniClass" => Some("Class"),
-        "AniType" => Some("AniType"),
-        "AniModule" => Some("AniModule"),
-        "AniNamespace" => Some("AniNamespace"),
         "AniString" => Some("string"),
-        "AniEnum" => Some("AniEnum"),
-        "AniError" => Some("AniError"),
         "AniEnumItem" | "EnumItem" => Some("EnumItem"),
         "AniTupleValue" | "TupleValue" => Some("TupleValue"),
-        "AniMethod" => Some("AniMethod"),
-        "AniStaticMethod" => Some("AniStaticMethod"),
-        "AniField" => Some("AniField"),
-        "AniStaticField" => Some("AniStaticField"),
-        "AniVariable" => Some("AniVariable"),
-        "AniResolver" => Some("AniResolver"),
         "AnyValue" => Some("AnyValue"),
         "Null" => Some("null"),
         "Undefined" => Some("undefined"),
@@ -1136,8 +1166,6 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("FixedArray<long>"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("FixedArray<float>"),
         "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("FixedArray<double>"),
-        "GlobalRef" => Some("GlobalRef"),
-        "WeakRef" => Some("WeakRef<Object>"),
         _ => None,
     }
 }
@@ -2516,20 +2544,45 @@ set name(name: string | null | undefined) {
     }
 
     #[test]
-    fn test_render_decls_emits_builtin_opaque_aliases_for_runtime_handles() {
+    fn test_runtime_handle_public_type_model_is_explicit() {
+        let module_ty: Type = syn::parse_quote!(AniModule<'_>);
+        assert_eq!(ets_public_type_for_syn_type(&module_ty), "AniModule");
+
+        let namespace_ty: Type = syn::parse_quote!(AniNamespace<'_>);
+        assert_eq!(ets_public_type_for_syn_type(&namespace_ty), "AniNamespace");
+
+        let variable_ty: Type = syn::parse_quote!(AniVariable);
+        assert_eq!(ets_public_type_for_syn_type(&variable_ty), "AniVariable");
+
+        let resolver_ty: Type = syn::parse_quote!(AniResolver);
+        assert_eq!(ets_public_type_for_syn_type(&resolver_ty), "AniResolver");
+
+        let global_ty: Type = syn::parse_quote!(GlobalRef);
+        assert_eq!(ets_public_type_for_syn_type(&global_ty), "GlobalRef");
+
+        let weak_ty: Type = syn::parse_quote!(WeakRef);
+        assert_eq!(ets_public_type_for_syn_type(&weak_ty), "WeakRef<Object>");
+    }
+
+    #[test]
+    fn test_render_decls_emits_handle_aliases_for_object_backed_runtime_handles() {
         let decls = vec![EtsDecl {
             kind: EtsDeclKind::Global,
             target: String::new(),
-            rendered: "native function inspect(field: AniField, global: GlobalRef, weak: WeakRef<Object>, error: AniError, value: AnyValue): AniResolver;".to_string(),
+            rendered: "native function inspect(module: AniModule, namespace: AniNamespace, field: AniField, variable: AniVariable, global: GlobalRef, weak: WeakRef<Object>, error: AniError, value: AnyValue): AniResolver;".to_string(),
         }];
         let rendered = render_decls(&decls, &[], &[]);
+        assert!(rendered.contains("export type AniModule = Object;"));
+        assert!(rendered.contains("export type AniNamespace = Object;"));
         assert!(rendered.contains("export type AniField = Object;"));
+        assert!(rendered.contains("export type AniVariable = Object;"));
         assert!(rendered.contains("export type GlobalRef = Object;"));
         assert!(rendered.contains("export type AniError = Object;"));
         assert!(rendered.contains("export type AnyValue = Object;"));
         assert!(rendered.contains("export type AniResolver = Object;"));
+        assert!(!rendered.contains("export type WeakRef ="));
         assert!(rendered.contains(
-            "export native function inspect(field: AniField, global: GlobalRef, weak: WeakRef<Object>, error: AniError, value: AnyValue): AniResolver;"
+            "export native function inspect(module: AniModule, namespace: AniNamespace, field: AniField, variable: AniVariable, global: GlobalRef, weak: WeakRef<Object>, error: AniError, value: AnyValue): AniResolver;"
         ));
     }
 

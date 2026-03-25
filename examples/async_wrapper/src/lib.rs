@@ -1,8 +1,8 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
-use ani::conversions::PromiseRaw;
+use ani::conversions::{PromiseRaw, RefContainer};
 use ani::prelude::*;
-use ani_derive::{AniClass, ani};
+use ani_derive::{ani, AniClass};
 use std::sync::{
     atomic::{AtomicI32, Ordering},
     Mutex, OnceLock,
@@ -48,13 +48,14 @@ impl AsyncWidget {
     #[ani(async)]
     pub async fn bump(&mut self, delta: i32) -> Result<i32> {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        Ok(delta + 1)
+        self._tag += delta;
+        Ok(self._tag)
     }
 
     #[ani(async)]
     pub async fn describe(&self, env: &Env<'_>) -> Result<String> {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let text = env.create_string("widget:ok")?;
+        let text = env.create_string(&format!("widget:{}", self._tag))?;
         env.get_string(&text)
     }
 
@@ -210,6 +211,28 @@ pub async fn env_roundtrip(env: &Env<'_>, value: String) -> Result<String> {
     env.get_string(&text)
 }
 
+#[ani(async)]
+pub async fn async_object_strict_equals(
+    env: &Env<'_>,
+    lhs: AniObject<'_>,
+    rhs: AniObject<'_>,
+) -> Result<bool> {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let lhs_ref: AniRef<'_> = lhs.into();
+    let rhs_ref: AniRef<'_> = rhs.into();
+    env.reference_strict_equals(&lhs_ref, &rhs_ref)
+}
+
+#[ani(async)]
+pub async fn async_ref_roundtrip(env: &Env<'_>, value: AniRef<'_>) -> Result<bool> {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let global = env.create_global_ref(&value)?;
+    let restored = env.local_ref_from_global_ref(&global)?;
+    let same = env.reference_strict_equals(&value, &restored)?;
+    env.delete_global_ref(global)?;
+    Ok(same)
+}
+
 #[ani(class = "AsyncWidget", async)]
 pub async fn this_handle_ready(this: &AniObject<'_>) -> Result<bool> {
     tokio::time::sleep(Duration::from_millis(5)).await;
@@ -251,6 +274,25 @@ pub fn tokio_fail(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, 
     ani::tokio::spawn_future(env, async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
         Err(Error::new(Status::InvalidArgs, message))
+    })
+    .map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn tokio_manual_ref_container_ready(
+    env: &Env<'_>,
+    value: AniObject<'_>,
+) -> Result<PromiseRaw<'static, bool>> {
+    let vm = env.get_vm()?;
+    let container = RefContainer::new(env, &value)?;
+
+    ani::tokio::spawn_future_factory(env, move || async move {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let attach = vm.attach_current_thread_scoped()?;
+        let env = attach.env();
+        let local: AniObject<'_> = container.to_local(&env)?;
+        let ty = env.get_object_type(&local)?;
+        Ok(!ty.as_raw().is_null())
     })
     .map(PromiseRaw::into_static)
 }
@@ -298,15 +340,24 @@ mod tests {
         let bumped = ani::tokio::block_on_future_result(widget.bump(2))
             .expect("runtime should execute")
             .expect("future should succeed");
-        assert_eq!(bumped, 3);
+        assert_eq!(bumped, 2);
+        assert_eq!(widget._tag, 2);
     }
 
     #[test]
     fn async_signature_override_logic_works() {
-        let echoed = ani::tokio::block_on_future_result(signature_override_echo("value".to_string()))
-            .expect("runtime should execute")
-            .expect("future should succeed");
+        let echoed =
+            ani::tokio::block_on_future_result(signature_override_echo("value".to_string()))
+                .expect("runtime should execute")
+                .expect("future should succeed");
         assert_eq!(echoed, "sig:value");
+    }
+
+    #[test]
+    fn async_ref_container_examples_compile() {
+        let _ = async_object_strict_equals;
+        let _ = async_ref_roundtrip;
+        let _ = tokio_manual_ref_container_ready;
     }
 
     #[test]

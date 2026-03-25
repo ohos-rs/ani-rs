@@ -5,7 +5,11 @@
 
 export type AniRef = Object;
 
+export native function weak_ref_releases_after_global_drop(rounds: int): boolean;
+export native function weak_ref_releases_after_pressure(rounds: int): boolean;
 export native function weak_ref_roundtrip(value: AniRef): boolean;
+export native function weak_ref_survives_global_ref_pressure(rounds: int): boolean;
+export native function weak_ref_tracks_global_ref_lifecycle(rounds: int): boolean;
 
 
 
@@ -88,6 +92,18 @@ class WeakPayload {
   }
 }
 __assert_true("weak_ref_roundtrip", weak_ref_roundtrip(new WeakPayload("value")));
+__assert_true(
+  "weak_ref_releases_after_pressure",
+  weak_ref_releases_after_pressure(512),
+);
+__assert_true(
+  "weak_ref_survives_global_ref_pressure",
+  weak_ref_survives_global_ref_pressure(512),
+);
+__assert_true(
+  "weak_ref_releases_after_global_drop",
+  weak_ref_releases_after_global_drop(512),
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

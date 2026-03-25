@@ -27,7 +27,7 @@ ani
   ├─ ToAni/FromAni 转换体系
   ├─ Promise/Deferred/Resolver
   ├─ 自动注册与绑定执行（ANI_Constructor）
-  └─ tokio Promise bridge（feature: tokio_rt）
+  └─ tokio Promise bridge（feature: async / tokio_rt）
      ↓
 ani-sys
   └─ ANI C API 原始 FFI 绑定
@@ -80,18 +80,22 @@ ANI 绑定目标分为三类：
 - `#[ani(async)]` 可与 `signature = ...` 组合
 - `#[ani(async, constructor/getter/setter)]` 可用，保持 constructor/getter/setter 的同步 ArkTS 形态，并在 wrapper 内阻塞等待 Rust future 完成
 - 支持注入 `env` / `this` / `class`；Promise 形态下会在运行时线程重新构建这些线程关联句柄
+- 对 `AniObject / AniRef / AnyValue / AniArray* / AniFixedArray* / AniString / AniClass / AniModule / AniNamespace / AniError / AniFnObject` 等 ref-backed 常规参数，Promise 形态下会自动通过 `RefContainer` 托管并在运行时线程恢复
 
 约束：
 
 - Promise 形态下，当前仍会把常规参数先转换后再跨线程移交给 runtime worker；因此这部分捕获值仍需满足 `Send + 'static`
 - future 的输出值和错误值本身不再因为 runtime bridge 被强制要求 `Send`
-- 仍不建议在 async 任务中直接跨线程持有 `AniObject/AniRef` 等 VM handle；应优先依赖注入重建或显式 `GlobalRef` 托管模式
-- 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、以及 static class 注入；class-instance 的 `this/self` async 路径仍在继续收口，当前主要由 Rust 单测覆盖
+- 仍不建议用户手写跨线程持有任意 VM handle；优先依赖宏自动 `RefContainer` 托管、注入重建，或显式 `GlobalRef/RefContainer` 模式
+- 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、static class 注入，以及 class-instance 的 `this/self` 与直接 `AniObject/AniRef` 常规参数路径
 
-`tokio_rt` 行为：
+Tokio feature 设计：
 
-- 开启 `ani` 的 `tokio_rt` feature 时，Promise 形态使用 dedicated local worker 执行 future，blocking 形态使用 current-thread runtime 执行 future
-- 未开启时，wrapper 仍可编译，但 Promise 会立即 reject 并提示开启 `tokio_rt`
+- `async = ["tokio_rt"]`：对齐 napi-rs 的易用别名，建议优先启用
+- `tokio_rt`：打开 ani 自身的 tokio runtime / Promise bridge
+- 额外暴露 `tokio_fs` / `tokio_full` / `tokio_io_std` / `tokio_io_util` / `tokio_macros` / `tokio_net` / `tokio_process` / `tokio_signal` / `tokio_sync` / `tokio_test_util` / `tokio_time`，命名与 napi-rs 对齐
+- 开启 `async` 或 `tokio_rt` 时，Promise 形态使用 dedicated local worker 执行 future，blocking 形态使用 current-thread runtime 执行 future
+- 未开启时，wrapper 仍可编译，但 Promise 会立即 reject 并提示开启 `async` / `tokio_rt`
 
 ## 错误与 panic 边界
 
@@ -110,6 +114,9 @@ ANI 绑定目标分为三类：
 
 - 区分 `null` 与 `undefined` 语义
 - 优先生成精确 public ETS type，持续减少 `Unknown -> Object` fallback
+- 运行时 handle 的 public ETS model 明确分两类：
+  - `AniModule / AniNamespace / AniVariable / AniResolver / GlobalRef` 这类 object-backed handle 保留命名，但导出为 `export type X = Object`
+  - `WeakRef` 保持为 `WeakRef<Object>`，直接对齐 ArkTS `std.core.WeakRef` 容器语义
 
 ## 引用与生命周期
 
@@ -122,7 +129,9 @@ ANI 引用模型：
 当前策略：
 
 - 句柄能力已提供底层 API 与基础 example
-- 在 async 场景中仍限制直接传递线程相关 handle，避免越过 VM/线程边界
+- `GlobalRef / WeakRef` 现已补齐基础 helper：`delete`、`to_local` / `to_object` / `to_class`、`upgrade`、`is_alive` / `is_released`
+- `WeakRef` example 已覆盖 create/use/delete/upgrade、仅弱引用下的 GC invalidation，以及 `GlobalRef` 存活/释放两个生命周期阶段
+- 在 async 场景中，优先依赖 `RefContainer` 或注入重建，避免手写越过 VM/线程边界的 handle 生命周期
 
 ## 与 napi-rs 对齐策略
 
