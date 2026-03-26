@@ -49,6 +49,7 @@ export namespace example {
   }
 }
 
+export native function async_call_scoped_callback(callback: (arg0: string) => string, value: string): Promise<string>;
 export native function async_check_status(task_id: int): boolean;
 export native function async_compute_start(input: int): int;
 export native function async_fetch(url: string): string;
@@ -194,6 +195,11 @@ function main(): void {
   __assert_true("async_object_strict_equals_diff", !otherObject);
   let refRoundtrip: boolean = waitForCompletion(() => async_ref_roundtrip(refPayload));
   __assert_true("async_ref_roundtrip", refRoundtrip);
+  let asyncStringCallback = (input: string): string => {
+    return "cb:" + input;
+  };
+  let scopedCallbackText: string = waitForCompletion(() => async_call_scoped_callback(asyncStringCallback, "ark"));
+  __assert_eq_string("async_call_scoped_callback", scopedCallbackText, "cb:ark");
   let manualContainerReady: boolean = waitForCompletion(() => tokio_manual_ref_container_ready(refPayload));
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
   let signatureText: string = waitForCompletion(() => signature_override_echo("value"));

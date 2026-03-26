@@ -65,7 +65,7 @@
   - 宏层不再拒绝注入 `env` / `this` / `class`，也不再拒绝 Rust `self` receiver；Rust 单测已经覆盖这部分展开与基础逻辑
   - 已支持 `constructor/getter/setter/signature` 与 `#[ani(async)]` 组合；其中 constructor/getter/setter 会保留同步 ArkTS 形态，并在 wrapper 内阻塞等待 future 完成
   - Promise 形态下，常规参数仍会在调用线程先完成转换，再跨线程移交到 dedicated local runtime worker；因此这部分捕获值当前仍需满足 `Send + 'static`
-  - 对 `AniObject / AniRef / AnyValue / AniArray* / AniFixedArray* / AniString / AniClass / AniModule / AniNamespace / AniError / AniFnObject` 等 ref-backed 常规参数，宏现在会自动借助 `RefContainer` 做跨线程托管与恢复
+  - 对 `AniObject / AniRef / AnyValue / AniArray* / AniFixedArray* / AniString / AniClass / AniModule / AniNamespace / AniError / AniFnObject / Function<'_, ...>` 等 ref-backed 常规参数，宏现在会自动借助 `RefContainer` 做跨线程托管与恢复
   - future 的输出值和错误值本身不再因为 runtime bridge 被统一强制要求 `Send + 'static`
   - 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、static class 注入，以及 class-instance 的 `this/self` 路径与直接 `AniObject/AniRef` 常规参数
   - 对尚未纳入 `RefContainer` 自动托管的类型，仍不建议在 async 任务中手写跨线程持有 VM handle；优先使用显式 `GlobalRef/RefContainer`

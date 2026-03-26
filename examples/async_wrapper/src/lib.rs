@@ -233,6 +233,16 @@ pub async fn async_ref_roundtrip(env: &Env<'_>, value: AniRef<'_>) -> Result<boo
     Ok(same)
 }
 
+#[ani(async)]
+pub async fn async_call_scoped_callback(
+    env: &Env<'_>,
+    callback: Function<'_, (String,), String>,
+    value: String,
+) -> Result<String> {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    callback.call(env, (value,))
+}
+
 #[ani(class = "AsyncWidget", async)]
 pub async fn this_handle_ready(this: &AniObject<'_>) -> Result<bool> {
     tokio::time::sleep(Duration::from_millis(5)).await;
@@ -357,6 +367,7 @@ mod tests {
     fn async_ref_container_examples_compile() {
         let _ = async_object_strict_equals;
         let _ = async_ref_roundtrip;
+        let _ = async_call_scoped_callback;
         let _ = tokio_manual_ref_container_ready;
     }
 

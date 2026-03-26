@@ -83,7 +83,7 @@
 
 - 已支持 `#[ani(async)] async fn ... -> Result<T>` 自动导出 `Promise<T>`
 - `ani::tokio` 已补齐 tokio task panic 捕获并转 Promise rejection（避免 Promise 永远 pending）
-- 已引入 `RefContainer`，并在 `#[ani(async)]` 中自动托管一批 ref-backed 常规参数与注入的 `this/class`
+- 已引入 `RefContainer`，并在 `#[ani(async)]` 中自动托管一批 ref-backed 常规参数（含 scoped `Function<'_, ...>` 回调）与注入的 `this/class`
 
 仍待对齐点：
 

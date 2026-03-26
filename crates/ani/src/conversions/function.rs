@@ -85,8 +85,9 @@ use crate::ani_call_ret;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::GlobalRef;
+use crate::types::{AniRef, GlobalRef};
 
+use super::reference::{FromGlobalRef, ToGlobalRefSource};
 use super::{FromAni, TypeInfo};
 
 // ============================================================================
@@ -495,6 +496,25 @@ where
     }
 }
 
+impl<'scope, Args, Return> ToGlobalRefSource for Function<'scope, Args, Return> {
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        let value = unsafe { AniRef::from_raw(self.value as sys::ani_ref) };
+        env.create_global_ref(&value)
+    }
+}
+
+impl<'env, Args, Return> FromGlobalRef<'env> for Function<'env, Args, Return> {
+    fn from_global_ref(env: &Env<'env>, global: &GlobalRef) -> Result<Self> {
+        let local = env.local_ref_from_global_ref(global)?;
+        Ok(Function {
+            value: local.as_raw() as sys::ani_fn_object,
+            _args: PhantomData,
+            _return: PhantomData,
+            _scope: PhantomData,
+        })
+    }
+}
+
 /// Internal helper to call a function object
 fn call_function_impl<Args, Return>(
     env: &Env<'_>,
@@ -718,7 +738,6 @@ where
         }
 
         // Create a global reference to the function object
-        use crate::types::AniRef;
         let ani_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
         let global_ref = env.create_global_ref(&ani_ref)?;
 
@@ -789,6 +808,15 @@ mod tests {
     fn test_function_type_info() {
         assert_eq!(<Function<(), ()>>::type_signature(), "Lstd/core/Function0;");
         assert_eq!(<Function<(i32,), String>>::ani_c_type(), "ani_fn_object");
+    }
+
+    #[test]
+    fn test_scoped_function_supports_ref_container_traits() {
+        fn assert_to_global<T: ToGlobalRefSource>() {}
+        fn assert_from_global<'env, T: FromGlobalRef<'env>>() {}
+
+        assert_to_global::<Function<'static, (String,), String>>();
+        assert_from_global::<Function<'static, (String,), String>>();
     }
 
     #[test]

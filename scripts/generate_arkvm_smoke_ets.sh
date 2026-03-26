@@ -144,6 +144,11 @@ function main(): void {
   __assert_true("async_object_strict_equals_diff", !otherObject);
   let refRoundtrip: boolean = waitForCompletion(() => __ANI_GENERATED__.async_ref_roundtrip(refPayload));
   __assert_true("async_ref_roundtrip", refRoundtrip);
+  let asyncStringCallback = (input: string): string => {
+    return "cb:" + input;
+  };
+  let scopedCallbackText: string = waitForCompletion(() => __ANI_GENERATED__.async_call_scoped_callback(asyncStringCallback, "ark"));
+  __assert_eq_string("async_call_scoped_callback", scopedCallbackText, "cb:ark");
   let manualContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_ref_container_ready(refPayload));
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
   let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));

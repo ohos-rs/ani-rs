@@ -17,7 +17,7 @@ use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, ReturnType, Type};
 
 use crate::types::{
-    ani_type::{AniType, RuntimeHandleType},
+    ani_type::{AniType, FunctionType, RuntimeHandleType},
     generate_param_conversions, generate_param_conversions_with_custom_error,
     generate_return_conversion, rust_type_to_ani_type,
 };
@@ -179,7 +179,8 @@ fn async_param_ident(arg: &FnArg, index: usize) -> Option<Ident> {
 fn supports_async_ref_container(ty: &Type) -> bool {
     matches!(
         AniType::from_syn_type(ty),
-        AniType::AniObject
+        AniType::Function(FunctionType::Function { .. })
+            | AniType::AniObject
             | AniType::AnyValue
             | AniType::TupleValue
             | AniType::EnumItem
@@ -370,10 +371,8 @@ pub fn generate_async_wrapper_with_target(
     let call_args = build_call_args(&params);
     let async_setup = generate_async_promise_setup(&params, binding_kind);
     let async_injected = generate_async_promise_injected_vars(&params, binding_kind);
-    let async_param_restores = generate_async_ref_container_restores(
-        &regular_params,
-        &format_ident!("__ani_env"),
-    );
+    let async_param_restores =
+        generate_async_ref_container_restores(&regular_params, &format_ident!("__ani_env"));
 
     quote! {
         #[doc(hidden)]
