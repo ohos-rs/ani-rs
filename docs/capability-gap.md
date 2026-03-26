@@ -66,6 +66,8 @@
   - 已支持 `constructor/getter/setter/signature` 与 `#[ani(async)]` 组合；其中 constructor/getter/setter 会保留同步 ArkTS 形态，并在 wrapper 内阻塞等待 future 完成
   - Promise 形态下，常规参数仍会在调用线程先完成转换，再跨线程移交到 dedicated local runtime worker；因此这部分捕获值当前仍需满足 `Send + 'static`
   - 对 `AniObject / AniRef / AnyValue / AniArray* / AniFixedArray* / AniString / AniClass / AniModule / AniNamespace / AniError / AniFnObject / Function<'_, ...>` 等 ref-backed 常规参数，宏现在会自动借助 `RefContainer` 做跨线程托管与恢复
+  - `FunctionRef<...>` 作为 owned global callback 已可直接跨线程捕获；同时 `FunctionRef<...>` 已支持作为 `#[ani(async)]` 的 Promise 输出值返回到 ArkTS，Docker/ArkVM smoke 已覆盖真实回调 roundtrip
+  - `RefContainer::new(...)` 现在也可直接接住 `GlobalRef` / `Ref<T>` / `FunctionRef<...>` 这类已拥有 global 的句柄，manual async 场景可以统一走 “container restore local handle” 模式
   - future 的输出值和错误值本身不再因为 runtime bridge 被统一强制要求 `Send + 'static`
   - 当前 Docker/ArkVM 稳定回归已经覆盖全局 env 注入、async constructor/getter/setter 组合、static class 注入，以及 class-instance 的 `this/self` 路径与直接 `AniObject/AniRef` 常规参数
   - 对尚未纳入 `RefContainer` 自动托管的类型，仍不建议在 async 任务中手写跨线程持有 VM handle；优先使用显式 `GlobalRef/RefContainer`
@@ -152,6 +154,7 @@
 - `GlobalRef / WeakRef` 现在具备句柄自身的 helper 方法：
   - `GlobalRef::to_local / to_object / to_class / clone_ref / delete`
   - `WeakRef::upgrade / is_alive / is_released / delete`
+- `Ref<T>` / `FunctionRef<...>` 现在会在 `FromAni` 场景下记录 owning `AniVm`，`Drop` 时自动删除持有的 global ref；`ToAni` 返回 ArkTS 时会先还原 thread-local handle，避免把 raw global handle 直接当作业务返回值泄露出去
 - `examples/weak_ref` 已补齐更完整的 weak invalidation / GC 语义场景，包括：
   - 仅弱引用下的失效回归
   - `GlobalRef` 存活期间弱引用仍可 upgrade
@@ -180,7 +183,11 @@
 
 - `PromiseRaw`、`Deferred`、`AniResolver` 都可用
 - 已有 `async_wrapper`、`error` example 覆盖一部分场景
-- 但缺少统一的 derive 级设计
+- 现在已补一层统一桥接：
+  - `Deferred<T>` 已 typed 化，并与 `PromiseRaw<T>` 对齐
+  - `Env::promise_new_typed<T>()` 可直接把 low-level `promise_new()` 桥接到 `Deferred<T> + PromiseRaw<T>`
+  - `AniResolver` 已补 `resolve_value / reject_error / reject_message / into_deferred` helper，可与 `Deferred<T>` 互转
+- 但仍缺少完全统一的 derive 级设计
 
 问题：
 

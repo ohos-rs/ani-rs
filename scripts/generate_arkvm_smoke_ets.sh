@@ -137,6 +137,19 @@ function main(): void {
   __assert_true("tokio_void_async", tokioVoidAsync);
   let envText: string = waitForCompletion(() => __ANI_GENERATED__.env_roundtrip("hello"));
   __assert_eq_string("env_roundtrip", envText, "env:hello");
+  let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_new_typed_resolve("hello"));
+  __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
+  let resolverPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_resolver_resolve_value("world"));
+  __assert_eq_string("promise_resolver_resolve_value", resolverPromiseText, "resolver:world");
+  let resolverRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.promise_resolver_reject_message("resolver boom");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("promise_resolver_reject_message", resolverRejected);
   let refPayload: Object = new Object();
   let sameObject: boolean = waitForCompletion(() => __ANI_GENERATED__.async_object_strict_equals(refPayload, refPayload));
   __assert_true("async_object_strict_equals_same", sameObject);
@@ -147,10 +160,16 @@ function main(): void {
   let asyncStringCallback = (input: string): string => {
     return "cb:" + input;
   };
+  let echoedAsyncFunctionRef = waitForCompletion(() => __ANI_GENERATED__.async_echo_function_ref(asyncStringCallback));
+  __assert_eq_string("async_echo_function_ref", echoedAsyncFunctionRef("vm"), "cb:vm");
   let scopedCallbackText: string = waitForCompletion(() => __ANI_GENERATED__.async_call_scoped_callback(asyncStringCallback, "ark"));
   __assert_eq_string("async_call_scoped_callback", scopedCallbackText, "cb:ark");
   let manualContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_ref_container_ready(refPayload));
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
+  let manualGlobalContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_global_ref_container_ready(refPayload));
+  __assert_true("tokio_manual_global_ref_container_ready", manualGlobalContainerReady);
+  let manualFunctionContainerText: string = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_function_ref_container_call(asyncStringCallback, "box"));
+  __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
   let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));
   __assert_eq_string("signature_override_echo", signatureText, "sig:value");
 
@@ -453,6 +472,10 @@ __ANI_GENERATED__.register_string_transformer(closureFn);
 __assert_eq_string("transform_string_closure", __ANI_GENERATED__.transform_string("vm"), "closure:vm");
 __ANI_GENERATED__.register_string_transformer(nestedFn);
 __assert_eq_string("transform_string_nested", __ANI_GENERATED__.transform_string("arkvm"), "hello arkvm");
+let echoedScoped = __ANI_GENERATED__.echo_scoped_string_callback(wrapValue);
+__assert_eq_string("echo_scoped_string_callback", echoedScoped("roundtrip"), "wrapped:roundtrip");
+let echoedGlobal = __ANI_GENERATED__.echo_function_ref(closureFn);
+__assert_eq_string("echo_function_ref", echoedGlobal("again"), "closure:again");
 ETS
       ;;
     ani-example-function-variable)

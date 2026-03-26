@@ -16,6 +16,8 @@ export native function call_with_multi_args(callback: (arg0: int, arg1: int) => 
 export native function call_with_three_args(callback: (arg0: int, arg1: int, arg2: int) => int, a: int, b: int, c: int): int;
 export native function chain_callbacks(first: (arg0: int) => int, second: (arg0: int) => int, value: int): int;
 export native function clear_callback(): void;
+export native function echo_function_ref(callback: (arg0: string) => string): (arg0: string) => string;
+export native function echo_scoped_string_callback(callback: (arg0: string) => string): (arg0: string) => string;
 export native function has_callback(): boolean;
 export native function has_string_transformer(): boolean;
 export native function invoke_multi_arg_callback(a: int, b: int, c: int): int;
@@ -141,6 +143,10 @@ register_string_transformer(closureFn);
 __assert_eq_string("transform_string_closure", transform_string("vm"), "closure:vm");
 register_string_transformer(nestedFn);
 __assert_eq_string("transform_string_nested", transform_string("arkvm"), "hello arkvm");
+let echoedScoped = echo_scoped_string_callback(wrapValue);
+__assert_eq_string("echo_scoped_string_callback", echoedScoped("roundtrip"), "wrapped:roundtrip");
+let echoedGlobal = echo_function_ref(closureFn);
+__assert_eq_string("echo_function_ref", echoedGlobal("again"), "closure:again");
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

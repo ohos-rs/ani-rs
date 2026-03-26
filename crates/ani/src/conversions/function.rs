@@ -86,9 +86,10 @@ use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
 use crate::types::{AniRef, GlobalRef};
+use crate::vm::AniVm;
 
 use super::reference::{FromGlobalRef, ToGlobalRefSource};
-use super::{FromAni, TypeInfo};
+use super::{FromAni, ToAni, TypeInfo};
 
 // ============================================================================
 // ToAniArgs Trait
@@ -503,6 +504,16 @@ impl<'scope, Args, Return> ToGlobalRefSource for Function<'scope, Args, Return> 
     }
 }
 
+impl<Args, Return> ToGlobalRefSource for FunctionRef<Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        self.as_global_ref().clone_ref(env)
+    }
+}
+
 impl<'env, Args, Return> FromGlobalRef<'env> for Function<'env, Args, Return> {
     fn from_global_ref(env: &Env<'env>, global: &GlobalRef) -> Result<Self> {
         let local = env.local_ref_from_global_ref(global)?;
@@ -585,7 +596,8 @@ where
 /// }
 /// ```
 pub struct FunctionRef<Args, Return> {
-    inner: GlobalRef,
+    vm: Option<AniVm>,
+    inner: Option<GlobalRef>,
     _args: PhantomData<Args>,
     _return: PhantomData<Return>,
 }
@@ -599,6 +611,49 @@ where
     Args: ToAniArgs,
     Return: for<'a> FromAni<'a>,
 {
+    #[inline]
+    fn managed(vm: AniVm, inner: GlobalRef) -> Self {
+        Self {
+            vm: Some(vm),
+            inner: Some(inner),
+            _args: PhantomData,
+            _return: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn inner_ref(&self) -> &GlobalRef {
+        self.inner
+            .as_ref()
+            .expect("FunctionRef should contain a global ref until consumed")
+    }
+
+    /// Create a new `FunctionRef` from an existing global reference.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the `GlobalRef` points to a valid function object.
+    #[inline]
+    pub unsafe fn from_global_ref(inner: GlobalRef) -> Self {
+        Self {
+            vm: None,
+            inner: Some(inner),
+            _args: PhantomData,
+            _return: PhantomData,
+        }
+    }
+
+    /// Create a managed `FunctionRef` from an existing global reference and VM.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the `GlobalRef` points to a valid function object and
+    /// `vm` is the owning VM for that reference.
+    #[inline]
+    pub unsafe fn from_global_ref_managed(vm: AniVm, inner: GlobalRef) -> Self {
+        Self::managed(vm, inner)
+    }
+
     /// Call the function with the given arguments
     ///
     /// # Arguments
@@ -617,7 +672,8 @@ where
     /// let result = callback_ref.call(&env, (42,))?;
     /// ```
     pub fn call(&self, env: &Env<'_>, args: Args) -> Result<Return> {
-        call_function_impl(env, self.inner.as_raw() as sys::ani_fn_object, args)
+        let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        call_function_impl(env, local.as_raw() as sys::ani_fn_object, args)
     }
 
     /// Borrow the function back as a scoped Function
@@ -632,19 +688,53 @@ where
     /// # Returns
     ///
     /// A `Function` that can be used in the current scope.
-    pub fn borrow_back<'scope>(&self, _env: &Env<'scope>) -> Function<'scope, Args, Return> {
+    pub fn borrow_back<'scope>(&self, env: &Env<'scope>) -> Function<'scope, Args, Return> {
+        let local = env
+            .local_ref_from_global_ref(self.as_global_ref())
+            .expect("FunctionRef::borrow_back failed to materialize local function");
         Function {
-            value: self.inner.as_raw() as sys::ani_fn_object,
+            value: local.as_raw() as sys::ani_fn_object,
             _args: PhantomData,
             _return: PhantomData,
             _scope: PhantomData,
         }
     }
 
+    /// Clone this handle by creating a second global reference.
+    pub fn clone_ref(&self, env: &Env<'_>) -> Result<Self> {
+        let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        let global = env.create_global_ref(&local)?;
+        Ok(Self::managed(env.get_vm()?, global))
+    }
+
+    /// Borrow the underlying global reference.
+    #[inline]
+    pub fn as_global_ref(&self) -> &GlobalRef {
+        self.inner_ref()
+    }
+
+    /// Consume this handle and return the owned global reference.
+    #[inline]
+    pub fn into_global_ref(mut self) -> GlobalRef {
+        self.inner
+            .take()
+            .expect("FunctionRef should contain a global ref before into_global_ref")
+    }
+
+    /// Delete this global reference explicitly.
+    #[inline]
+    pub fn delete(mut self, env: &Env<'_>) -> Result<()> {
+        let global = self
+            .inner
+            .take()
+            .expect("FunctionRef should contain a global ref before delete");
+        env.delete_global_ref(global)
+    }
+
     /// Get the raw global reference
     #[inline]
     pub fn as_raw(&self) -> sys::ani_ref {
-        self.inner.as_raw()
+        self.inner_ref().as_raw()
     }
 }
 
@@ -685,6 +775,30 @@ where
 
     fn ani_c_type() -> &'static str {
         "ani_fn_object"
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for Function<'env, Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.value)
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for &Function<'env, Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.value)
     }
 }
 
@@ -741,11 +855,46 @@ where
         let ani_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
         let global_ref = env.create_global_ref(&ani_ref)?;
 
-        Ok(FunctionRef {
-            inner: global_ref,
-            _args: PhantomData,
-            _return: PhantomData,
-        })
+        Ok(FunctionRef::managed(env.get_vm()?, global_ref))
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for FunctionRef<Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        Ok(local.as_raw() as sys::ani_fn_object)
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for &FunctionRef<Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        Ok(local.as_raw() as sys::ani_fn_object)
+    }
+}
+
+impl<Args, Return> Drop for FunctionRef<Args, Return> {
+    fn drop(&mut self) {
+        let Some(vm) = self.vm.as_ref() else {
+            return;
+        };
+        let Some(global) = self.inner.take() else {
+            return;
+        };
+
+        let _ = vm.with_attached(|env| env.delete_global_ref(global));
     }
 }
 
@@ -816,6 +965,7 @@ mod tests {
         fn assert_from_global<'env, T: FromGlobalRef<'env>>() {}
 
         assert_to_global::<Function<'static, (String,), String>>();
+        assert_to_global::<FunctionRef<(String,), String>>();
         assert_from_global::<Function<'static, (String,), String>>();
     }
 

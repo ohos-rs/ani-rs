@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::slice;
 
+use crate::conversions::{Deferred, PromiseRaw};
 use crate::error::{BusinessError, Error, Result, Status, check_status};
 use crate::sys;
 use crate::types::*;
@@ -5233,6 +5234,18 @@ impl<'local> Env<'local> {
         }))
     }
 
+    /// Create a new Promise together with a typed [`Deferred<T>`] facade.
+    ///
+    /// This bridges the low-level `promise_new()` API into the higher-level
+    /// `PromiseRaw<T> + Deferred<T>` model used by `ani::conversions`.
+    pub fn promise_new_typed<T>(&self) -> Result<(Deferred<T>, PromiseRaw<'local, T>)> {
+        let (resolver, promise) = self.promise_new()?;
+        Ok((
+            Deferred::from_resolver(resolver),
+            unsafe { PromiseRaw::from_raw(promise.into_raw()) },
+        ))
+    }
+
     /// Resolve a Promise with a value
     ///
     /// This resolves the promise associated with the given resolver and queues
@@ -5294,12 +5307,12 @@ impl<'local> Env<'local> {
     /// * `resolver` - The resolver for the promise to reject
     /// * `message` - The error message
     pub fn promise_reject_with_message(&self, resolver: &AniResolver, message: &str) -> Result<()> {
-        let error_string = self.create_string(message)?;
+        let error = crate::conversions::create_promise_error(self, message)?;
         ani_call!(
             self,
             PromiseResolver_Reject,
             resolver.as_raw(),
-            error_string.as_raw() as sys::ani_error
+            error.as_raw()
         )
     }
 }

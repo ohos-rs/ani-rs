@@ -192,6 +192,36 @@ pub fn promise_maybe_succeed(env: &Env<'_>, should_succeed: bool, value: i32) ->
     Ok(promise.into_object().as_raw() as i64)
 }
 
+#[ani]
+pub fn promise_new_typed_resolve(
+    env: &Env<'_>,
+    value: String,
+) -> Result<PromiseRaw<'static, String>> {
+    let (deferred, promise) = env.promise_new_typed::<String>()?;
+    deferred.resolve_value(env, format!("typed:{value}"))?;
+    Ok(promise.into_static())
+}
+
+#[ani]
+pub fn promise_resolver_resolve_value(
+    env: &Env<'_>,
+    value: String,
+) -> Result<PromiseRaw<'static, String>> {
+    let (resolver, promise) = env.promise_new()?;
+    resolver.resolve_value(env, format!("resolver:{value}"))?;
+    Ok(unsafe { PromiseRaw::<String>::from_raw(promise.into_raw()) }.into_static())
+}
+
+#[ani]
+pub fn promise_resolver_reject_message(
+    env: &Env<'_>,
+    message: String,
+) -> Result<PromiseRaw<'static, ()>> {
+    let (resolver, promise) = env.promise_new()?;
+    resolver.reject_message(env, &message)?;
+    Ok(unsafe { PromiseRaw::<()>::from_raw(promise.into_raw()) }.into_static())
+}
+
 #[ani(class = "example.MyClass")]
 pub fn get_info(_env: &Env<'_>, this: &AniObject<'_>) -> String {
     let _ = this;
@@ -241,6 +271,14 @@ pub async fn async_call_scoped_callback(
 ) -> Result<String> {
     tokio::time::sleep(Duration::from_millis(5)).await;
     callback.call(env, (value,))
+}
+
+#[ani(async)]
+pub async fn async_echo_function_ref(
+    callback: FunctionRef<(String,), String>,
+) -> Result<FunctionRef<(String,), String>> {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    Ok(callback)
 }
 
 #[ani(class = "AsyncWidget", async)]
@@ -307,6 +345,47 @@ pub fn tokio_manual_ref_container_ready(
     .map(PromiseRaw::into_static)
 }
 
+#[ani]
+pub fn tokio_manual_global_ref_container_ready(
+    env: &Env<'_>,
+    value: AniObject<'_>,
+) -> Result<PromiseRaw<'static, bool>> {
+    let vm = env.get_vm()?;
+    let value_ref: AniRef<'_> = value.into();
+    let global = env.create_global_ref(&value_ref)?;
+    let container = RefContainer::new(env, &global)?;
+    global.delete(env)?;
+
+    ani::tokio::spawn_future_factory(env, move || async move {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let attach = vm.attach_current_thread_scoped()?;
+        let env = attach.env();
+        let local: AniObject<'_> = container.to_local(&env)?;
+        let ty = env.get_object_type(&local)?;
+        Ok(!ty.as_raw().is_null())
+    })
+    .map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn tokio_manual_function_ref_container_call(
+    env: &Env<'_>,
+    callback: FunctionRef<(String,), String>,
+    value: String,
+) -> Result<PromiseRaw<'static, String>> {
+    let vm = env.get_vm()?;
+    let container = RefContainer::new(env, &callback)?;
+
+    ani::tokio::spawn_future_factory(env, move || async move {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let attach = vm.attach_current_thread_scoped()?;
+        let env = attach.env();
+        let callback: Function<'_, (String,), String> = container.to_local(&env)?;
+        callback.call(env, (value,))
+    })
+    .map(PromiseRaw::into_static)
+}
+
 // ============================================================================
 // #[ani(async)] macro-based async bindings.
 // ============================================================================
@@ -368,7 +447,13 @@ mod tests {
         let _ = async_object_strict_equals;
         let _ = async_ref_roundtrip;
         let _ = async_call_scoped_callback;
+        let _ = async_echo_function_ref;
+        let _ = promise_new_typed_resolve;
+        let _ = promise_resolver_resolve_value;
+        let _ = promise_resolver_reject_message;
         let _ = tokio_manual_ref_container_ready;
+        let _ = tokio_manual_global_ref_container_ready;
+        let _ = tokio_manual_function_ref_container_call;
     }
 
     #[test]

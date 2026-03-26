@@ -149,6 +149,16 @@ pub fn call_string_callback(
     callback.call(env, (input,))
 }
 
+/// Return the same scoped callback back to ArkTS.
+///
+/// This exercises `Function<'_, ...>` as a native return value.
+#[ani]
+pub fn echo_scoped_string_callback(
+    callback: Function<'_, (String,), String>,
+) -> Function<'_, (String,), String> {
+    callback
+}
+
 // ============================================================================
 // Stored Callback - FunctionRef (Global Reference)
 // ============================================================================
@@ -251,6 +261,16 @@ pub fn register_string_transformer(
     let mut guard = STRING_TRANSFORMER.lock().unwrap();
     *guard = Some(callback);
     Ok(())
+}
+
+/// Return the same stored-style callback back to ArkTS.
+///
+/// This exercises `FunctionRef<...>` as a native return value.
+#[ani]
+pub fn echo_function_ref(
+    callback: FunctionRef<(String,), String>,
+) -> FunctionRef<(String,), String> {
+    callback
 }
 
 /// Transform a string using the registered transformer

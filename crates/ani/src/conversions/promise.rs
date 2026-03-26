@@ -41,12 +41,15 @@
 use std::marker::PhantomData;
 use std::ptr;
 
-use crate::bindgen_runtime::ToAni;
+use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniObject, AniRef, AniResolver, AniString};
+use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString};
 use crate::{ani_call, ani_call_2ret};
+
+use super::function::{Function, FunctionRef, ToAniArgs};
+use super::{FromAni, ToAni as ConversionToAni};
 
 /// Raw Promise value in ANI
 ///
@@ -187,6 +190,16 @@ impl<'env, T> PromiseRaw<'env, T> {
         Self::resolve(env, &ani_str.into())
     }
 
+    /// Create a new Promise and immediately resolve it with any supported Rust value.
+    pub fn resolve_value<V>(env: &Env<'env>, value: V) -> Result<Self>
+    where
+        V: PromiseValue<'env>,
+    {
+        let (deferred, promise) = Self::deferred(env)?;
+        deferred.resolve_value(env, value)?;
+        Ok(promise)
+    }
+
     /// Create a new Promise and immediately reject it with the given error message
     ///
     /// # Arguments
@@ -220,6 +233,14 @@ impl<'env, T> PromiseRaw<'env, T> {
         })
     }
 
+    /// Create a new Promise and immediately reject it with a typed [`Error`].
+    pub fn reject_with_error<S: AsRef<str> + std::fmt::Debug>(
+        env: &Env<'env>,
+        error: Error<S>,
+    ) -> Result<Self> {
+        Self::reject(env, error.to_string())
+    }
+
     /// Create a new Promise with a deferred resolver
     ///
     /// Returns a tuple of (Deferred, PromiseRaw). The Deferred can be used
@@ -234,7 +255,7 @@ impl<'env, T> PromiseRaw<'env, T> {
     /// let result = env.create_string("done")?;
     /// deferred.resolve(&env, &result.into())?;
     /// ```
-    pub fn deferred(env: &Env<'env>) -> Result<(Deferred, Self)> {
+    pub fn deferred(env: &Env<'env>) -> Result<(Deferred<T>, Self)> {
         let (resolver, promise) = ani_call_2ret!(
             env,
             Promise_New,
@@ -247,6 +268,7 @@ impl<'env, T> PromiseRaw<'env, T> {
 
         let deferred = Deferred {
             resolver: unsafe { AniResolver::from_raw(resolver) },
+            _marker: PhantomData,
         };
 
         let promise_raw = Self {
@@ -285,8 +307,9 @@ impl<'env, T> PromiseRaw<'env, T> {
 ///     Ok(promise)
 /// }
 /// ```
-pub struct Deferred {
+pub struct Deferred<T = ()> {
     resolver: AniResolver,
+    _marker: PhantomData<fn() -> T>,
 }
 
 /// Value that can resolve an ANI Promise.
@@ -297,8 +320,49 @@ pub trait PromiseValue<'env>: Sized {
 
 // Deferred can be sent across threads
 // But resolving/rejecting requires a valid env for the current thread
-unsafe impl Send for Deferred {}
-unsafe impl Sync for Deferred {}
+unsafe impl<T> Send for Deferred<T> {}
+unsafe impl<T> Sync for Deferred<T> {}
+
+impl AniResolver {
+    /// Resolve the associated Promise with a reference value.
+    pub fn resolve_ref(&self, env: &Env<'_>, value: &AniRef<'_>) -> Result<()> {
+        env.promise_resolve(self, value)
+    }
+
+    /// Resolve the associated Promise with any supported Rust value.
+    pub fn resolve_value<'env, T>(&self, env: &Env<'env>, value: T) -> Result<()>
+    where
+        T: PromiseValue<'env>,
+    {
+        let value_ref = value.into_promise_ref(env)?;
+        self.resolve_ref(env, &value_ref)
+    }
+
+    /// Reject the associated Promise with an ANI error object.
+    pub fn reject_error(&self, env: &Env<'_>, error: &AniError<'_>) -> Result<()> {
+        env.promise_reject(self, error)
+    }
+
+    /// Reject the associated Promise with a string message.
+    pub fn reject_message(&self, env: &Env<'_>, error: impl AsRef<str>) -> Result<()> {
+        env.promise_reject_with_message(self, error.as_ref())
+    }
+
+    /// Reject the associated Promise with a typed [`Error`].
+    pub fn reject_with_error<S: AsRef<str> + std::fmt::Debug>(
+        &self,
+        env: &Env<'_>,
+        error: Error<S>,
+    ) -> Result<()> {
+        self.reject_message(env, error.to_string())
+    }
+
+    /// Wrap this raw resolver in a typed [`Deferred<T>`] facade.
+    #[inline]
+    pub fn into_deferred<T>(self) -> Deferred<T> {
+        Deferred::from_resolver(self)
+    }
+}
 
 macro_rules! impl_boxed_promise_value {
     ($($ty:ty),+ $(,)?) => {
@@ -334,6 +398,28 @@ impl<'env> PromiseValue<'env> for AniRef<'env> {
     }
 }
 
+impl<'env, Args, Return> PromiseValue<'env> for Function<'env, Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;
+        Ok(unsafe { AniRef::from_raw(value as sys::ani_ref) })
+    }
+}
+
+impl<'env, Args, Return> PromiseValue<'env> for FunctionRef<Args, Return>
+where
+    Args: ToAniArgs,
+    Return: for<'a> FromAni<'a>,
+{
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;
+        Ok(unsafe { AniRef::from_raw(value as sys::ani_ref) })
+    }
+}
+
 impl<'env> PromiseValue<'env> for () {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
         // `Promise<void>` resolves to `undefined` in ArkTS.
@@ -344,14 +430,44 @@ impl<'env> PromiseValue<'env> for () {
 
 impl<'env, T> PromiseValue<'env> for T
 where
-    T: ToAni<'env, Output = sys::ani_object>,
+    T: BindgenToAni<'env, Output = sys::ani_object>,
 {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
         Ok(unsafe { AniRef::from_raw(self.to_ani(env)? as sys::ani_ref) })
     }
 }
 
-impl Deferred {
+impl<T> Deferred<T> {
+    /// Build a typed deferred facade from an existing raw resolver.
+    #[inline]
+    pub fn from_resolver(resolver: AniResolver) -> Self {
+        Self {
+            resolver,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Rebind the phantom payload type without changing the underlying resolver.
+    #[inline]
+    pub fn cast<U>(self) -> Deferred<U> {
+        Deferred {
+            resolver: self.resolver,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Borrow the underlying raw ANI resolver wrapper.
+    #[inline]
+    pub fn as_resolver(&self) -> &AniResolver {
+        &self.resolver
+    }
+
+    /// Consume this typed facade and return the underlying resolver.
+    #[inline]
+    pub fn into_resolver(self) -> AniResolver {
+        self.resolver
+    }
+
     /// Resolve the Promise with a value
     ///
     /// After calling this method, the Deferred is consumed and the resolver
@@ -362,13 +478,7 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `value` - The value to resolve with (as AniRef)
     pub fn resolve(self, env: &Env<'_>, value: &AniRef<'_>) -> Result<()> {
-        ani_call!(
-            env,
-            PromiseResolver_Resolve,
-            self.resolver.as_raw(),
-            value.as_raw()
-        )
-        .map_err(|_| Error::new(Status::GenericFailure, "Failed to resolve promise"))
+        self.resolver.resolve_ref(env, value)
     }
 
     /// Resolve the Promise with an int value
@@ -394,9 +504,9 @@ impl Deferred {
     }
 
     /// Resolve the Promise with any supported Rust value.
-    pub fn resolve_value<'env, T>(self, env: &Env<'env>, value: T) -> Result<()>
+    pub fn resolve_value<'env, V>(self, env: &Env<'env>, value: V) -> Result<()>
     where
-        T: PromiseValue<'env>,
+        V: PromiseValue<'env>,
     {
         let value_ref = value.into_promise_ref(env)?;
         self.resolve(env, &value_ref)
@@ -412,14 +522,7 @@ impl Deferred {
     /// * `env` - The ANI environment
     /// * `error` - The error message
     pub fn reject(self, env: &Env<'_>, error: impl AsRef<str>) -> Result<()> {
-        let error_obj = create_promise_error(env, error.as_ref())?;
-        ani_call!(
-            env,
-            PromiseResolver_Reject,
-            self.resolver.as_raw(),
-            error_obj.as_raw()
-        )
-        .map_err(|_| Error::new(Status::GenericFailure, "Failed to reject promise"))
+        self.resolver.reject_message(env, error)
     }
 
     /// Reject the Promise with an Error
@@ -433,7 +536,7 @@ impl Deferred {
         env: &Env<'_>,
         error: Error<S>,
     ) -> Result<()> {
-        self.reject(env, error.to_string())
+        self.resolver.reject_with_error(env, error)
     }
 
     /// Get the raw resolver
@@ -523,7 +626,10 @@ fn create_boxed_double<'a>(env: &Env<'a>, value: f64) -> Result<AniObject<'a>> {
 
 /// Create a boxed Boolean value
 #[allow(dead_code)]
-fn create_promise_error<'a>(env: &Env<'a>, message: &str) -> Result<crate::types::AniError<'a>> {
+pub(crate) fn create_promise_error<'a>(
+    env: &Env<'a>,
+    message: &str,
+) -> Result<crate::types::AniError<'a>> {
     let err_cls = env
         .find_class("escompat.Error")
         .or_else(|_| env.find_class("@ohos.base.BusinessError"))?;
@@ -556,5 +662,31 @@ fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>>
 
 #[cfg(test)]
 mod tests {
-    // Tests would go here
+    use super::*;
+
+    #[test]
+    fn deferred_type_is_send_sync_for_any_payload() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Deferred<()>>();
+        assert_send_sync::<Deferred<String>>();
+        assert_send_sync::<Deferred<FunctionRef<(String,), String>>>();
+    }
+
+    #[test]
+    fn deferred_cast_and_resolver_bridge_compile() {
+        fn compile<'env>(env: &Env<'env>, resolver: AniResolver, value: AniRef<'env>) {
+            let deferred = Deferred::<String>::from_resolver(resolver);
+            let _ = deferred.as_resolver().resolve_ref(env, &value);
+            let _ = deferred.as_resolver().resolve_value(env, "ok".to_string());
+            let _ = deferred
+                .as_resolver()
+                .reject_with_error(env, Error::new(Status::InvalidArgs, "bad"));
+
+            let deferred = deferred.cast::<bool>();
+            let resolver = deferred.into_resolver();
+            let _: Deferred<bool> = resolver.into_deferred();
+        }
+
+        let _ = compile;
+    }
 }

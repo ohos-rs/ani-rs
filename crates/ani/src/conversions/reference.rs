@@ -123,7 +123,8 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 /// }
 /// ```
 pub struct Ref<T> {
-    inner: GlobalRef,
+    vm: Option<AniVm>,
+    inner: Option<GlobalRef>,
     _marker: PhantomData<T>,
 }
 
@@ -132,6 +133,22 @@ unsafe impl<T> Send for Ref<T> {}
 unsafe impl<T> Sync for Ref<T> {}
 
 impl<T> Ref<T> {
+    #[inline]
+    fn managed(vm: AniVm, inner: GlobalRef) -> Self {
+        Self {
+            vm: Some(vm),
+            inner: Some(inner),
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn inner_ref(&self) -> &GlobalRef {
+        self.inner
+            .as_ref()
+            .expect("Ref<T> should contain a global ref until consumed")
+    }
+
     /// Create a new `Ref<T>` from a `GlobalRef`
     ///
     /// # Safety
@@ -141,27 +158,53 @@ impl<T> Ref<T> {
     #[inline]
     pub unsafe fn from_global_ref(inner: GlobalRef) -> Self {
         Self {
-            inner,
+            vm: None,
+            inner: Some(inner),
             _marker: PhantomData,
         }
+    }
+
+    /// Create a managed `Ref<T>` from a `GlobalRef` and owning [`AniVm`].
+    ///
+    /// Values created via [`FromAni`] already use this path automatically.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the `GlobalRef` actually points to an object of
+    /// type `T`, and that `vm` is the owning VM for that reference.
+    #[inline]
+    pub unsafe fn from_global_ref_managed(vm: AniVm, inner: GlobalRef) -> Self {
+        Self::managed(vm, inner)
     }
 
     /// Get the underlying raw pointer
     #[inline]
     pub fn as_raw(&self) -> sys::ani_ref {
-        self.inner.as_raw()
+        self.inner_ref().as_raw()
     }
 
     /// Consume self and return the underlying `GlobalRef`
     #[inline]
-    pub fn into_global_ref(self) -> GlobalRef {
+    pub fn into_global_ref(mut self) -> GlobalRef {
         self.inner
+            .take()
+            .expect("Ref<T> should contain a global ref before into_global_ref")
     }
 
     /// Get a reference to the underlying `GlobalRef`
     #[inline]
     pub fn as_global_ref(&self) -> &GlobalRef {
-        &self.inner
+        self.inner_ref()
+    }
+
+    /// Delete this global reference explicitly.
+    #[inline]
+    pub fn delete(mut self, env: &Env<'_>) -> Result<()> {
+        let global = self
+            .inner
+            .take()
+            .expect("Ref<T> should contain a global ref before delete");
+        env.delete_global_ref(global)
     }
 }
 
@@ -208,6 +251,12 @@ impl GlobalRef {
     }
 }
 
+impl ToGlobalRefSource for GlobalRef {
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        self.clone_ref(env)
+    }
+}
+
 impl WeakRef {
     /// Upgrade this weak handle to a thread-local [`AniRef`], if the target is
     /// still alive.
@@ -250,9 +299,8 @@ impl WeakRef {
 impl Ref<AniObject<'static>> {
     /// Borrow the reference as a local `AniObject`
     ///
-    /// The returned object is valid for the lifetime of the borrow.
-    /// This doesn't create a new reference - it just provides typed access
-    /// to the underlying global reference.
+    /// The returned object is a fresh local reference valid for the current
+    /// native call scope.
     ///
     /// # Example
     ///
@@ -263,14 +311,16 @@ impl Ref<AniObject<'static>> {
     /// }
     /// ```
     #[inline]
-    pub fn borrow<'env>(&self, _env: &Env<'env>) -> AniObject<'env> {
-        unsafe { AniObject::from_raw(self.inner.as_raw() as sys::ani_object) }
+    pub fn borrow<'env>(&self, env: &Env<'env>) -> AniObject<'env> {
+        env.local_object_from_global_ref(self.as_global_ref())
+            .expect("Ref<AniObject>::borrow failed to materialize local object")
     }
 
     /// Borrow the reference as a local `AniRef`
     #[inline]
-    pub fn borrow_as_ref<'env>(&self, _env: &Env<'env>) -> AniRef<'env> {
-        unsafe { AniRef::from_raw(self.inner.as_raw()) }
+    pub fn borrow_as_ref<'env>(&self, env: &Env<'env>) -> AniRef<'env> {
+        env.local_ref_from_global_ref(self.as_global_ref())
+            .expect("Ref<AniObject>::borrow_as_ref failed to materialize local ref")
     }
 }
 
@@ -327,10 +377,7 @@ impl<'env> FromAni<'env> for Ref<AniObject<'static>> {
         let ani_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
         let global_ref = env.create_global_ref(&ani_ref)?;
 
-        Ok(Ref {
-            inner: global_ref,
-            _marker: PhantomData,
-        })
+        Ok(Ref::managed(env.get_vm()?, global_ref))
     }
 }
 
@@ -363,16 +410,18 @@ impl<'env> FromAni<'env> for WeakRef {
 impl<'env> ToAni<'env> for Ref<AniObject<'static>> {
     type Output = sys::ani_object;
 
-    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self.inner.as_raw() as sys::ani_object)
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_object_from_global_ref(self.as_global_ref())?;
+        Ok(local.as_raw())
     }
 }
 
 impl<'env> ToAni<'env> for &Ref<AniObject<'static>> {
     type Output = sys::ani_object;
 
-    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self.inner.as_raw() as sys::ani_object)
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_object_from_global_ref(self.as_global_ref())?;
+        Ok(local.as_raw())
     }
 }
 
@@ -427,12 +476,15 @@ impl<T> Ref<T> {
     /// let cloned = obj_ref.clone_ref(env)?;
     /// ```
     pub fn clone_ref(&self, env: &Env<'_>) -> Result<Self> {
-        let ani_ref = unsafe { AniRef::from_raw(self.inner.as_raw()) };
+        let ani_ref = env.local_ref_from_global_ref(self.as_global_ref())?;
         let new_global = env.create_global_ref(&ani_ref)?;
-        Ok(Ref {
-            inner: new_global,
-            _marker: PhantomData,
-        })
+        Ok(Ref::managed(env.get_vm()?, new_global))
+    }
+}
+
+impl<T> ToGlobalRefSource for Ref<T> {
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        self.as_global_ref().clone_ref(env)
     }
 }
 
@@ -443,8 +495,21 @@ impl<T> Ref<T> {
 impl<T> std::fmt::Debug for Ref<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ref")
-            .field("raw", &self.inner.as_raw())
+            .field("raw", &self.inner.as_ref().map(GlobalRef::as_raw))
             .finish()
+    }
+}
+
+impl<T> Drop for Ref<T> {
+    fn drop(&mut self) {
+        let Some(vm) = self.vm.as_ref() else {
+            return;
+        };
+        let Some(global) = self.inner.take() else {
+            return;
+        };
+
+        let _ = vm.with_attached(|env| env.delete_global_ref(global));
     }
 }
 
@@ -653,6 +718,7 @@ mod tests {
         fn assert_to_global<T: ToGlobalRefSource>() {}
         fn assert_from_global<'env, T: FromGlobalRef<'env>>() {}
 
+        assert_to_global::<GlobalRef>();
         assert_to_global::<AniRef<'static>>();
         assert_to_global::<AniObject<'static>>();
         assert_to_global::<AniClass<'static>>();
@@ -660,6 +726,7 @@ mod tests {
         assert_to_global::<AniArrayBuffer<'static>>();
         assert_to_global::<AniFixedArrayInt<'static>>();
         assert_to_global::<AnyValue<'static>>();
+        assert_to_global::<Ref<AniObject<'static>>>();
 
         assert_from_global::<AniRef<'static>>();
         assert_from_global::<AniObject<'static>>();

@@ -147,7 +147,7 @@ mod imp {
 
     fn reject_panic_payload(
         vm: crate::vm::AniVm,
-        deferred: Deferred,
+        deferred: Deferred<()>,
         panic: Box<dyn Any + Send>,
     ) -> Result<()> {
         let guard = vm.attach_current_thread_scoped()?;
@@ -182,6 +182,7 @@ mod imp {
     {
         let vm = env.get_vm()?;
         let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
+        let deferred = deferred.cast::<()>();
 
         submit_local_job(Box::new(move || {
             match catch_unwind(AssertUnwindSafe(build)) {
@@ -262,7 +263,7 @@ mod imp {
 
     fn finish_promise_display<T, E>(
         vm: crate::vm::AniVm,
-        deferred: Deferred,
+        deferred: Deferred<()>,
         outcome: std::result::Result<T, E>,
     ) -> Result<()>
     where

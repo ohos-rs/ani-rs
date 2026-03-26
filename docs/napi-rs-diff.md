@@ -84,6 +84,9 @@
 - 已支持 `#[ani(async)] async fn ... -> Result<T>` 自动导出 `Promise<T>`
 - `ani::tokio` 已补齐 tokio task panic 捕获并转 Promise rejection（避免 Promise 永远 pending）
 - 已引入 `RefContainer`，并在 `#[ani(async)]` 中自动托管一批 ref-backed 常规参数（含 scoped `Function<'_, ...>` 回调）与注入的 `this/class`
+- `Ref<T>` / `FunctionRef<...>` 已开始向 napi-rs 风格的 managed owning handle 收敛：`FromAni` 会记录 VM，`Drop` 自动回收 global ref，返回 ArkTS 时会先还原 local handle；同步和异步 callback return 都已有 ArkVM smoke
+- `RefContainer` 现在也能统一接住 `GlobalRef` / `Ref<T>` / `FunctionRef<...>` 作为 async bridge source，manual tokio helper 与宏路径之间的心智模型更接近
+- Promise 路径开始收敛到同一套模型：`Deferred<T>` 已 typed 化，`Env::promise_new_typed<T>()` 和 `AniResolver` helper 能把 low-level resolver 流程桥回 `PromiseRaw<T> / Deferred<T>` 语义
 
 仍待对齐点：
 

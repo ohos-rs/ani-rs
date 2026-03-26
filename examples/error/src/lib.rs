@@ -196,7 +196,7 @@ fn reject_with_error_handle(
     resolver: AniResolver,
     error: AniError<'_>,
 ) -> Result<()> {
-    env.promise_reject(&resolver, &error)
+    resolver.reject_error(env, &error)
 }
 
 // ===========================================================================
