@@ -40,6 +40,7 @@
 - getter/setter
 - overload 绑定
 - object/class nominal 类型生成
+- `Vec<T>` / `VecDeque<T>` / `LinkedList<T>` 的 primitive/ref/object array 导出与回归
 - record/set/map/fixed array/tuple/enum item/any value 等类型的基础生成
 - `PromiseRaw` / `Deferred` 以及 `#[ani(async)]` 驱动的异步包装 example
 - module/member、function variable、namespace variable、class static by name 等运行时查找型能力
@@ -104,6 +105,10 @@
 - `HashMap<String, V>` / `HashSet<T>` / `BTreeSet<T>` / `BTreeMap<K, V>` 会保留为 `Record` / `Set` / `Map`，而不是对象兜底
 - `FixedIntArray` / `FixedBooleanArray` / `AniFixedArrayInt` 等 fixed array wrapper 已提升为正式类型分支，不再依赖 `Unknown` 二次兜底
 - `AniArray` / `AniArrayRef` / `AniFixedArray` / `AniFixedArrayRef` 也已提升为正式类型分支，ETS public type 会保持 `Array<Object>` / `FixedArray<Object>`，不再靠 runtime-name fallback
+- `Vec<T>` / `VecDeque<T>` / `LinkedList<T>` 现在也已完成 runtime 对齐：
+  - primitive element 继续走 `A{i}` / `A{z}` 等 fixed array bind signature
+  - ref/object element 在 ArkTS public ETS 中仍保留精确 `Array<string>` / `Array<User>`，但底层 bind signature 会按 ArkVM 实际能力收敛到 `std.core.Array`
+  - `examples/array_generic` 已覆盖 `Vec<String>`、`VecDeque<String>`、`LinkedList<i32>`、`Vec<#[ani(object)] T>`，并通过 Docker/ArkVM smoke
 - 函数级泛型参数 `T` / `U` 以及 `Function<(T,), T>` 这类回调泛型，ETS 已能保留类型参数而不是回落到 `Object`
 - `Either<T, U>` / `HashMap<String, T>` / `HashSet<T>` / `BTreeMap<String, Either<T, U>>` 这类嵌套容器现在也会继续保留函数级类型参数，不再在容器内部把 `T/U` 误判成 nominal object
 - 已支持但过去未识别的 `CString` / `isize` / `usize` 现在也会生成 `string` / `long`，不再走未知对象兜底

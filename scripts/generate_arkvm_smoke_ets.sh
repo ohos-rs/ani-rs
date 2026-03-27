@@ -83,6 +83,46 @@ let pushObj: Object = new ArrayPayload(1);
 let setObj: Object = new ArrayPayload(2);
 __assert_bool("array_push_and_pop_bool", __ANI_GENERATED__.array_push_and_pop(pushObj));
 __assert_bool("array_set_and_get_bool", __ANI_GENERATED__.array_set_and_get(setObj));
+__assert_eq_string(
+  "join_string_array",
+  __ANI_GENERATED__.join_string_array(["ani", "ark", "vm"]),
+  "ani|ark|vm",
+);
+let producedStrings = __ANI_GENERATED__.make_string_array();
+__assert_eq_int("make_string_array_len", producedStrings.length, 3);
+__assert_eq_string("make_string_array_last", producedStrings[2], "vm");
+__assert_eq_string(
+  "join_string_vecdeque",
+  __ANI_GENERATED__.join_string_vecdeque(["front", "middle", "back"]),
+  "front|middle|back",
+);
+let producedDeque = __ANI_GENERATED__.make_string_vecdeque();
+__assert_eq_int("make_string_vecdeque_len", producedDeque.length, 3);
+__assert_eq_string("make_string_vecdeque_first", producedDeque[0], "front");
+__assert_eq_int(
+  "sum_i32_linked_list",
+  __ANI_GENERATED__.sum_i32_linked_list([2, 3, 4]),
+  9,
+);
+let producedLinkedList = __ANI_GENERATED__.make_i32_linked_list();
+__assert_eq_int("make_i32_linked_list_len", producedLinkedList.length, 3);
+__assert_eq_int("make_i32_linked_list_tail", producedLinkedList[2], 5);
+let userA = new ArrayUser();
+userA.id = 1;
+userA.name = "alice";
+let userB = new ArrayUser();
+userB.id = 2;
+userB.name = "bob";
+__assert_eq_string(
+  "summarize_user_array",
+  __ANI_GENERATED__.summarize_user_array([userA, userB]),
+  "1#alice|2#bob",
+);
+let producedUsers = __ANI_GENERATED__.make_user_array();
+__assert_eq_int("make_user_array_len", producedUsers.length, 2);
+let firstUser = producedUsers[0] as ArrayUser;
+__assert_eq_int("make_user_array_first_id", firstUser.id, 7);
+__assert_eq_string("make_user_array_first_name", firstUser.name, "alice");
 ETS
       ;;
     ani-example-arraybuffer)

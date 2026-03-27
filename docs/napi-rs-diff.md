@@ -66,6 +66,9 @@
 
 - 核心是 `ToAni/FromAni` 与 `AniType`（用于签名与 ETS public type）
 - 需要处理 `null/undefined` 的差异，并在 ETS 侧生成必要的 bridge wrapper
+- `Vec<T>` / `VecDeque<T>` / `LinkedList<T>` 这类容器现在也开始区分 “public ETS type 精确表达” 与 “底层 bind signature 兼容 ArkVM”：
+  - primitive element 仍走 fixed-array signature
+  - ref/object element 的 ArkTS public type 仍保持 `Array<string>` / `Array<User>`，但 bind signature 会收敛为 `std.core.Array`
 
 对齐建议：
 

@@ -5240,10 +5240,9 @@ impl<'local> Env<'local> {
     /// `PromiseRaw<T> + Deferred<T>` model used by `ani::conversions`.
     pub fn promise_new_typed<T>(&self) -> Result<(Deferred<T>, PromiseRaw<'local, T>)> {
         let (resolver, promise) = self.promise_new()?;
-        Ok((
-            Deferred::from_resolver(resolver),
-            unsafe { PromiseRaw::from_raw(promise.into_raw()) },
-        ))
+        Ok((Deferred::from_resolver(resolver), unsafe {
+            PromiseRaw::from_raw(promise.into_raw())
+        }))
     }
 
     /// Resolve a Promise with a value

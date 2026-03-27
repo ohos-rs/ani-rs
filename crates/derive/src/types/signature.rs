@@ -366,7 +366,11 @@ mod tests {
         assert_eq!(rust_type_to_signature(&syn::parse_quote!(Vec<i32>)), "A{i}");
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Vec<String>)),
-            "A{C{std.core.String}}"
+            "Lstd/core/Array;"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(Vec<crate::models::UserInfo>)),
+            "Lstd/core/Array;"
         );
     }
 
@@ -377,7 +381,7 @@ mod tests {
         };
         assert_eq!(
             generate_fn_signature(&sig, false),
-            "C{std.core.Object}A{C{std.core.Object}}:C{std.core.Object}"
+            "C{std.core.Object}C{std.core.Array}:C{std.core.Object}"
         );
     }
 

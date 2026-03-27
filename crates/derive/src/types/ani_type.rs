@@ -39,6 +39,10 @@ pub enum PrimitiveType {
 pub enum StringType {
     String,
     Str,
+    CString,
+    PathBuf,
+    BoxStr,
+    CowStr,
 }
 
 /// Generic wrapper types with inner type
@@ -399,12 +403,16 @@ impl AniType {
             return AniType::String(StringType::String);
         }
 
-        if ident == "str" || ident == "CString" {
+        if ident == "str" {
             return AniType::String(StringType::Str);
         }
 
+        if ident == "CString" {
+            return AniType::String(StringType::CString);
+        }
+
         if ident == "PathBuf" {
-            return AniType::String(StringType::String);
+            return AniType::String(StringType::PathBuf);
         }
 
         // Check for unit type represented as path
@@ -471,6 +479,22 @@ impl AniType {
 
         if let Some(elem) = parse_fixed_array_type(&ident) {
             return AniType::FixedArray(elem);
+        }
+
+        if ident == "Box" {
+            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                    return AniType::String(StringType::BoxStr);
+                }
+            }
+        }
+
+        if ident == "Cow" {
+            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                    return AniType::String(StringType::CowStr);
+                }
+            }
         }
 
         if let Some(inner) = extract_transparent_wrapper_inner_type(&ident, &segment.arguments) {
@@ -926,9 +950,7 @@ impl AniType {
             AniType::Map(_) => to_new_style_ref_signature("Lstd/core/Map;"),
             AniType::Function(function) => format!("C{{{}}}", function_signature_name(function)),
 
-            AniType::Wrapper(WrapperType::Vec(inner)) => {
-                format!("A{{{}}}", inner.to_fixed_array_elem_signature())
-            }
+            AniType::Wrapper(WrapperType::Vec(inner)) => inner.to_vec_bind_signature_variant(),
             AniType::Wrapper(WrapperType::Option(inner)) => inner.to_union_variant_signature(),
             AniType::Wrapper(WrapperType::Result(inner)) => inner.to_union_variant_signature(),
             AniType::Wrapper(WrapperType::Ref(inner)) => inner.to_union_variant_signature(),
@@ -953,10 +975,17 @@ impl AniType {
         }
     }
 
-    fn to_fixed_array_elem_signature(&self) -> String {
+    fn to_vec_bind_signature(&self) -> String {
         match self {
-            AniType::Primitive(p) => p.to_new_primitive_signature().to_string(),
-            _ => self.to_union_variant_signature(),
+            AniType::Primitive(p) => format!("A{{{}}}", p.to_new_primitive_signature()),
+            _ => "Lstd/core/Array;".to_string(),
+        }
+    }
+
+    fn to_vec_bind_signature_variant(&self) -> String {
+        match self {
+            AniType::Primitive(p) => format!("A{{{}}}", p.to_new_primitive_signature()),
+            _ => "C{std.core.Array}".to_string(),
         }
     }
 }
@@ -1038,7 +1067,7 @@ impl WrapperType {
                     "C{std.core.Null}"
                 )
             }
-            WrapperType::Vec(inner) => format!("A{{{}}}", inner.to_fixed_array_elem_signature()),
+            WrapperType::Vec(inner) => inner.to_vec_bind_signature(),
             WrapperType::Result(inner) => inner.to_signature(),
             WrapperType::Ref(inner) => {
                 // For Ref<AniObject>, return Object signature
@@ -1535,11 +1564,19 @@ mod tests {
 
         let ty: Type = syn::parse_quote!(std::ffi::CString);
         let ani_type = AniType::from_syn_type(&ty);
-        assert!(matches!(ani_type, AniType::String(StringType::Str)));
+        assert!(matches!(ani_type, AniType::String(StringType::CString)));
 
         let ty: Type = syn::parse_quote!(std::path::PathBuf);
         let ani_type = AniType::from_syn_type(&ty);
-        assert!(matches!(ani_type, AniType::String(StringType::String)));
+        assert!(matches!(ani_type, AniType::String(StringType::PathBuf)));
+
+        let ty: Type = syn::parse_quote!(Box<str>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::BoxStr)));
+
+        let ty: Type = syn::parse_quote!(std::borrow::Cow<'static, str>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::CowStr)));
     }
 
     #[test]

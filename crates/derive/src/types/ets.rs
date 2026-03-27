@@ -18,8 +18,8 @@ use crate::codegen::{
 use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
-    AniType, ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, StringType,
-    WrapperType, is_custom_object_name, resolve_object_type_alias, type_path_qualified_name,
+    AniType, ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, WrapperType,
+    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -568,7 +568,9 @@ fn append_builtin_opaque_ets_aliases(
     let aliases = BUILTIN_ETS_TYPE_SURFACES
         .iter()
         .filter_map(|surface| {
-            surface.alias_target.map(|target| (surface.public_ty, target))
+            surface
+                .alias_target
+                .map(|target| (surface.public_ty, target))
         })
         .filter(|(alias, _)| rendered_decl_uses_builtin_alias(alias, decls, objects, class_members))
         .collect::<Vec<_>>();
@@ -773,7 +775,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Primitive(PrimitiveType::Bool) => "false".to_string(),
         AniType::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => "0.0".to_string(),
         AniType::Primitive(_) => "0".to_string(),
-        AniType::String(StringType::String | StringType::Str) => "\"\"".to_string(),
+        AniType::String(_) => "\"\"".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
@@ -863,7 +865,7 @@ fn ani_type_to_ets_in_context(ty: &AniType, context: EtsRenderContext) -> String
 fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> String {
     match ty {
         AniType::Primitive(p) => primitive_to_ets(p).to_string(),
-        AniType::String(StringType::String | StringType::Str) => "string".to_string(),
+        AniType::String(_) => "string".to_string(),
         AniType::Unit => "void".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
@@ -1002,7 +1004,7 @@ fn collect_surface_union_parts(ty: &AniType, context: EtsRenderContext) -> Optio
     let mut parts = UnionParts::default();
     match ty {
         AniType::Primitive(p) => parts.push_variant(primitive_to_ets(p).to_string()),
-        AniType::String(StringType::String | StringType::Str) => {
+        AniType::String(_) => {
             parts.push_variant("string".to_string())
         }
         AniType::Null => parts.has_null = true,

@@ -125,11 +125,15 @@ pub fn weak_ref_releases_after_global_drop(env: &Env<'_>, rounds: i32) -> Result
     let (weak, global) = fresh_weak_global_pair(env)?;
     let started_alive = weak_is_alive(env, &weak);
     let delete_global = global.delete(env);
-    let released_after_drop =
-        weak_releases_under_pressure(env, &weak, rounds.saturating_mul(16));
+    let released_after_drop = weak_releases_under_pressure(env, &weak, rounds.saturating_mul(16));
     let delete_weak = weak.delete(env);
 
-    match (started_alive, delete_global, released_after_drop, delete_weak) {
+    match (
+        started_alive,
+        delete_global,
+        released_after_drop,
+        delete_weak,
+    ) {
         (Ok(alive), Ok(()), Ok(released), Ok(())) => Ok(alive && released),
         (Err(err), _, _, _) => Err(err),
         (_, Err(err), _, _) => Err(err),
@@ -140,10 +144,8 @@ pub fn weak_ref_releases_after_global_drop(env: &Env<'_>, rounds: i32) -> Result
 
 #[ani]
 pub fn weak_ref_tracks_global_ref_lifecycle(env: &Env<'_>, rounds: i32) -> Result<bool> {
-    Ok(
-        weak_ref_survives_global_ref_pressure(env, rounds)?
-            && weak_ref_releases_after_global_drop(env, rounds)?,
-    )
+    Ok(weak_ref_survives_global_ref_pressure(env, rounds)?
+        && weak_ref_releases_after_global_drop(env, rounds)?)
 }
 
 #[cfg(test)]
