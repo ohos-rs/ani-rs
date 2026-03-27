@@ -642,9 +642,33 @@ pub fn clear_registrations() {
 mod tests {
     use super::*;
     use core::ptr;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct TestEnvVarGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl TestEnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let lock = TEST_LOCK.lock().expect("lock test mutex");
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                std::env::remove_var("ANI_TEST_MODULE_NAME");
+            }
+        }
+    }
 
     #[test]
     fn descriptor_candidates_non_builtin_has_defmodule_fallback() {
@@ -659,6 +683,38 @@ mod tests {
     fn descriptor_candidates_builtin_has_no_defmodule_fallback() {
         let candidates = descriptor_candidates("std.core.String");
         assert_eq!(candidates, vec!["std.core.String".to_string()]);
+    }
+
+    #[test]
+    fn descriptor_candidates_respect_test_override_for_explicit_module_binding() {
+        let _guard = TestEnvVarGuard::set("ANI_TEST_MODULE_NAME", "arkvm_test");
+
+        let candidates = descriptor_candidates("explicit_module_binding");
+        assert_eq!(
+            candidates,
+            vec![
+                "arkvm_test".to_string(),
+                "@defModule.arkvm_test".to_string(),
+                "explicit_module_binding".to_string(),
+                "@defModule.explicit_module_binding".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn descriptor_candidates_preserve_suffix_when_test_override_is_active() {
+        let _guard = TestEnvVarGuard::set("ANI_TEST_MODULE_NAME", "arkvm_test");
+
+        let candidates = descriptor_candidates("custom.entry.module");
+        assert_eq!(
+            candidates,
+            vec![
+                "arkvm_test.entry.module".to_string(),
+                "@defModule.arkvm_test.entry.module".to_string(),
+                "custom.entry.module".to_string(),
+                "@defModule.custom.entry.module".to_string()
+            ]
+        );
     }
 
     #[test]

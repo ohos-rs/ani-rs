@@ -132,7 +132,7 @@
 
 - `#[ani(async)]`（已落地，后续继续扩大自动托管参数/handle 范围）
 - 继续收敛类型系统，减少 `Unknown -> Object`
-- 显式 `module = ...` 绑定 example 与 ArkVM smoke（已补齐）
+- 显式 `module = ...` 绑定 example 与 ArkVM smoke（已补齐，含 descriptor mismatch 场景）
 - `GlobalRef/WeakRef` 更完整的语义覆盖（含失效/GC 行为，已补基础 helper 与 ArkVM 回归）
 
 不一定能对齐或需要重设计：
@@ -145,6 +145,6 @@
 
 1. 完善 `#[ani(async)]` 的可用模式与回归覆盖
 2. `Unknown -> Object` 继续收口
-3. `module = ...` example 与回归（已补齐 smoke，后续补复杂 descriptor 场景）
+3. `module = ...` example 与回归（已补齐 smoke，含复杂 descriptor 场景）
 4. `GlobalRef/WeakRef` example 与回归
 5. handle public type model 统一（`AniModule/AniNamespace/AniVariable/AniResolver` 等）

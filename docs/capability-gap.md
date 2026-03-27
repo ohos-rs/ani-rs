@@ -131,23 +131,23 @@
 - 对可以识别的对象类型、handle 类型、record/union/either/result 进一步细化 public ETS type
 - 将 fallback 变成真正少数兜底，而不是常规路径
 
-#### 3. 显式 `module = ...` 绑定已落地，剩余是复杂 descriptor 场景覆盖
+#### 3. 显式 `module = ...` 绑定已落地，复杂 descriptor 场景也已补齐
 
 现状：
 
 - `examples/module_binding` 已落地，并接入 ArkVM smoke（`scripts/generate_arkvm_smoke_ets.sh`）
-- 基础等价 descriptor 场景已经通过 Docker ArkVM 回归验证
-- 当前更多覆盖的是等价 module descriptor，复杂映射场景仍较少
+- Docker ArkVM 回归已覆盖 “crate/generated ETS module 名称”和 `#[ani(module = "...")]` descriptor 明确不一致的真实场景
+- `module_register` 单测已覆盖 test override 下的 descriptor remap 与 dotted suffix 保留逻辑
 
 问题：
 
 - “有无该能力” 已经不是问题
-- 仍缺一个 “descriptor 与 crate 名不一致” 的真实场景回归，避免只覆盖最简单路径
+- 当前主要剩余的是继续维持这组回归，避免后续 descriptor fallback/override 重构时退化
 
 建议目标：
 
 - 维持现有 `examples/module_binding` + ArkVM smoke 回归
-- 后续补一个 “descriptor 与 crate 名不一致” 的真实场景用例
+- 保留 `module_register` 中对 override remap/suffix 的单测
 
 #### 4. `GlobalRef / WeakRef` 需要更明确的高层能力面
 
@@ -424,7 +424,7 @@ OpenHarmony ANI 原生测试目录包含以下能力面：
 2. `Unknown -> Object` 继续收口
 3. `GlobalRef / WeakRef` example 与回归
 4. class/property/static property metadata 继续统一
-5. 显式 `module = ...` 的复杂 descriptor 场景回归
+5. 继续维持显式 `module = ...` 的复杂 descriptor 场景回归
 
 ## 维护建议
 
