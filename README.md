@@ -156,31 +156,52 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 | `Vec<T>` | `[T` | `Array<T>` |
 | `Option<i32>` | `Lstd/core/Int;` | `Int \| null` |
 
-## Crates
+## Workspace
 
 | Crate | Description |
 |-------|-------------|
-| `ani-sys` | Raw FFI bindings to ANI C API |
-| `ani-core` | Safe wrapper types and traits |
-| `ani_derive` | Procedural macros |
-| `ani-build` | Build script helpers |
-| `ani-ets-gen` | ETS code generation tool |
-| `ani-types` | Type definitions for ETS generation |
+| `ani-sys` | Raw FFI bindings to the ANI C API |
+| `ani` | Safe runtime wrappers, conversions, Promise bridge, refs, and registration |
+| `ani-derive` | Procedural macros for `#[ani]`, `#[ani(init)]`, `#[ani(async)]`, and ETS emission |
 
 ## Examples
 
-Check out the [examples](examples/) directory:
+The [`examples`](examples/) workspace currently contains 52 runnable cases covering:
 
-- **new_basic** - Basic function bindings
-- **new_class** - Class method bindings
-- **basic** - Original example with build script
-- **class** - Complex class examples
+- module / namespace / class bindings
+- overload, constructor, getter, setter, and `impl` receiver methods
+- object/class derives and ETS public type generation
+- async `Promise<T>` export and manual resolver/deferred flows
+- refs, `GlobalRef`, `WeakRef`, VM/runtime handles, and ArkVM smoke coverage
+
+Start with:
+
+- [`examples/new_basic`](examples/new_basic)
+- [`examples/new_class`](examples/new_class)
+- [`examples/impl_block`](examples/impl_block)
+- [`examples/async_wrapper`](examples/async_wrapper)
+- [`examples/weak_ref`](examples/weak_ref)
 
 ## Documentation
 
-- [Design Document](docs/design.md) - Architecture and design decisions
-- [ETS Generation](docs/ets-generation.md) - How to generate ETS declaration files
-- [API Reference](https://docs.rs/ani-core) - Full API documentation
+Repository docs now ship as a VitePress site rooted at [`docs/`](docs/):
+
+- [`docs/index.md`](docs/index.md) - Documentation home
+- [`docs/guide/getting-started.md`](docs/guide/getting-started.md) - Quick start
+- [`docs/guide/compatibility.md`](docs/guide/compatibility.md) - Usage notes and runtime boundaries
+- [`docs/guide/examples.md`](docs/guide/examples.md) - Example index
+- [`docs/reference/capabilities.md`](docs/reference/capabilities.md) - Supported capability matrix
+- [`docs/reference/runtime-handles.md`](docs/reference/runtime-handles.md) - Runtime handles and ref lifecycle
+- [`docs/design.md`](docs/design.md) - Architecture and design decisions
+- [`docs/capability-gap.md`](docs/capability-gap.md) - Capability baseline and scope boundaries
+- [`docs/napi-rs-diff.md`](docs/napi-rs-diff.md) - Design differences vs `napi-rs`
+
+Run the docs locally:
+
+```bash
+pnpm install
+pnpm docs:dev
+```
 
 ## Requirements
 

@@ -3,6 +3,9 @@
 .vscode
 target
 .cache
+node_modules
+docs/.vitepress/cache
+docs/.vitepress/dist
 
 *.abc
 *.log
