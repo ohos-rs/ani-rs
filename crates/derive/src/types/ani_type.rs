@@ -40,9 +40,15 @@ pub enum StringType {
     String,
     Str,
     CString,
+    CStr,
+    OsString,
+    OsStr,
     PathBuf,
+    Path,
     BoxStr,
+    BoxPath,
     CowStr,
+    CowPath,
 }
 
 /// Generic wrapper types with inner type
@@ -411,8 +417,24 @@ impl AniType {
             return AniType::String(StringType::CString);
         }
 
+        if ident == "CStr" {
+            return AniType::String(StringType::CStr);
+        }
+
+        if ident == "OsString" {
+            return AniType::String(StringType::OsString);
+        }
+
+        if ident == "OsStr" {
+            return AniType::String(StringType::OsStr);
+        }
+
         if ident == "PathBuf" {
             return AniType::String(StringType::PathBuf);
+        }
+
+        if ident == "Path" {
+            return AniType::String(StringType::Path);
         }
 
         // Check for unit type represented as path
@@ -486,6 +508,9 @@ impl AniType {
                 if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
                     return AniType::String(StringType::BoxStr);
                 }
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                    return AniType::String(StringType::BoxPath);
+                }
             }
         }
 
@@ -493,6 +518,9 @@ impl AniType {
             if let Some(inner) = extract_first_generic_type(&segment.arguments) {
                 if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
                     return AniType::String(StringType::CowStr);
+                }
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                    return AniType::String(StringType::CowPath);
                 }
             }
         }
@@ -507,6 +535,10 @@ impl AniType {
                 inner: extract_first_generic_type(&segment.arguments)
                     .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
             });
+        }
+
+        if ident == "Deferred" {
+            return AniType::RuntimeHandle(RuntimeHandleType::Resolver);
         }
 
         // HashMap<String, V> maps to ArkTS Record<string, V>
@@ -1259,11 +1291,16 @@ pub(crate) fn is_custom_object_name(ident: &str) -> bool {
             | "BTreeSet"
             | "VecDeque"
             | "LinkedList"
+            | "CStr"
+            | "OsStr"
+            | "OsString"
+            | "Path"
             | "PathBuf"
             | "Function"
             | "FunctionRef"
             | "FnArgs"
             | "PromiseRaw"
+            | "Deferred"
             | "NativePointer"
     )
 }
@@ -1468,6 +1505,11 @@ fn is_type_param_path(type_path: &TypePath, type_params: &HashSet<String>) -> bo
 
 fn is_path_ident(type_path: &TypePath, ident: &str) -> bool {
     type_path.path.is_ident(ident)
+        || type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == ident)
 }
 
 /// Extract the first generic type argument
@@ -1540,6 +1582,42 @@ fn parse_function_generics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct TestEnvVarGuard {
+        previous: Option<String>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl TestEnvVarGuard {
+        fn unset(key: &str) -> Self {
+            let lock = TEST_ENV_LOCK.lock().expect("lock test env mutex");
+            let previous = std::env::var(key).ok();
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            let _ = key;
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                match &self.previous {
+                    Some(previous) => std::env::set_var("ANI_TEST_MODULE_NAME", previous),
+                    None => std::env::remove_var("ANI_TEST_MODULE_NAME"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_parse_primitive() {
@@ -1566,17 +1644,41 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::String(StringType::CString)));
 
+        let ty: Type = syn::parse_quote!(&std::ffi::CStr);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::CStr)));
+
+        let ty: Type = syn::parse_quote!(std::ffi::OsString);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::OsString)));
+
+        let ty: Type = syn::parse_quote!(&std::ffi::OsStr);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::OsStr)));
+
         let ty: Type = syn::parse_quote!(std::path::PathBuf);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::String(StringType::PathBuf)));
+
+        let ty: Type = syn::parse_quote!(&std::path::Path);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::Path)));
 
         let ty: Type = syn::parse_quote!(Box<str>);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::String(StringType::BoxStr)));
 
+        let ty: Type = syn::parse_quote!(Box<std::path::Path>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::BoxPath)));
+
         let ty: Type = syn::parse_quote!(std::borrow::Cow<'static, str>);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::String(StringType::CowStr)));
+
+        let ty: Type = syn::parse_quote!(std::borrow::Cow<'static, std::path::Path>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::CowPath)));
     }
 
     #[test]
@@ -1605,6 +1707,28 @@ mod tests {
         } else {
             panic!("Expected Vec type");
         }
+    }
+
+    #[test]
+    fn test_parse_promise_raw_and_deferred() {
+        let ty: Type = syn::parse_quote!(PromiseRaw<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        match ani_type {
+            AniType::Promise(PromiseType { inner: Some(inner) }) => {
+                assert!(matches!(
+                    inner.as_ref(),
+                    AniType::String(StringType::String)
+                ));
+            }
+            other => panic!("Expected PromiseRaw type, got {other:?}"),
+        }
+
+        let ty: Type = syn::parse_quote!(Deferred<String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(
+            ani_type,
+            AniType::RuntimeHandle(RuntimeHandleType::Resolver)
+        ));
     }
 
     #[test]
@@ -2056,6 +2180,7 @@ mod tests {
 
     #[test]
     fn test_unknown_custom_type_signature() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let ty: Type = syn::parse_quote!(crate::models::UserInfo);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::CustomObject(_)));
@@ -2064,6 +2189,7 @@ mod tests {
 
     #[test]
     fn test_unknown_custom_type_signature_local_type_is_module_qualified() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let ty: Type = syn::parse_quote!(UserProfile);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lani_derive/UserProfile;");
@@ -2071,6 +2197,7 @@ mod tests {
 
     #[test]
     fn test_unknown_custom_type_signature_uses_registered_object_alias() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         register_object_type_alias("AliasedProfile", "models.AliasedProfile");
         let ty: Type = syn::parse_quote!(AliasedProfile);
         let ani_type = AniType::from_syn_type(&ty);
@@ -2082,6 +2209,7 @@ mod tests {
 
     #[test]
     fn test_transparent_wrapper_custom_type_signature() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let ty: Type = syn::parse_quote!(Box<crate::models::UserInfo>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
@@ -2093,6 +2221,7 @@ mod tests {
 
     #[test]
     fn test_reference_and_cow_surface_types_preserve_inner_signature() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let ty: Type = syn::parse_quote!(&crate::models::UserInfo);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");
@@ -2104,6 +2233,7 @@ mod tests {
 
     #[test]
     fn test_sync_and_cell_wrappers_preserve_inner_signature() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let ty: Type = syn::parse_quote!(std::sync::Mutex<crate::models::UserInfo>);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lani_derive/models/UserInfo;");

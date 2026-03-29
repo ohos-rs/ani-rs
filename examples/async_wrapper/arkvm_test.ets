@@ -61,11 +61,14 @@ export native function async_square(n: int): int;
 export native function batch_compute(count: int): long;
 export native function env_roundtrip(value: string): Promise<string>;
 export native function promise_delayed(delay_ms: int, value: string): long;
+export native function promise_env_rejected(message: string): Promise<string>;
+export native function promise_env_resolved(value: string): Promise<string>;
 export native function promise_maybe_succeed(should_succeed: boolean, value: int): long;
 export native function promise_new_typed_resolve(value: string): Promise<string>;
 export native function promise_reject(message: string): long;
 export native function promise_resolve_int(value: int): long;
 export native function promise_resolve_string(value: string): long;
+export native function promise_resolver_into_deferred(value: string): Promise<string>;
 export native function promise_resolver_reject_message(message: string): Promise<void>;
 export native function promise_resolver_resolve_value(value: string): Promise<string>;
 export native function signature_override_echo(value: string): Promise<string>;
@@ -78,6 +81,7 @@ export native function tokio_fetch_text_async(url: string): Promise<string>;
 export native function tokio_manual_function_ref_container_call(callback: (arg0: string) => string, value: string): Promise<string>;
 export native function tokio_manual_global_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_manual_ref_container_ready(value: Object): Promise<boolean>;
+export native function tokio_manual_typed_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_void_async(delay_ms: int): Promise<void>;
 
 
@@ -196,8 +200,21 @@ function main(): void {
   __assert_eq_string("env_roundtrip", envText, "env:hello");
   let typedPromiseText: string = waitForCompletion(() => promise_new_typed_resolve("hello"));
   __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
+  let envResolvedText: string = waitForCompletion(() => promise_env_resolved("hello"));
+  __assert_eq_string("promise_env_resolved", envResolvedText, "env:hello");
+  let envRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await promise_env_rejected("env boom");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("promise_env_rejected", envRejected);
   let resolverPromiseText: string = waitForCompletion(() => promise_resolver_resolve_value("world"));
   __assert_eq_string("promise_resolver_resolve_value", resolverPromiseText, "resolver:world");
+  let deferredBridgeText: string = waitForCompletion(() => promise_resolver_into_deferred("bridge"));
+  __assert_eq_string("promise_resolver_into_deferred", deferredBridgeText, "bridge:bridge");
   let resolverRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await promise_resolver_reject_message("resolver boom");
@@ -225,6 +242,8 @@ function main(): void {
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
   let manualGlobalContainerReady: boolean = waitForCompletion(() => tokio_manual_global_ref_container_ready(refPayload));
   __assert_true("tokio_manual_global_ref_container_ready", manualGlobalContainerReady);
+  let manualTypedRefContainerReady: boolean = waitForCompletion(() => tokio_manual_typed_ref_container_ready(refPayload));
+  __assert_true("tokio_manual_typed_ref_container_ready", manualTypedRefContainerReady);
   let manualFunctionContainerText: string = waitForCompletion(() => tokio_manual_function_ref_container_call(asyncStringCallback, "box"));
   __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
   let signatureText: string = waitForCompletion(() => signature_override_echo("value"));

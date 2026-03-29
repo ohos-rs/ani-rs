@@ -28,7 +28,7 @@ static WIDGET_REVISION: AtomicI32 = AtomicI32::new(1);
 
 #[ani(class = "Widget")]
 impl Widget {
-    #[ani(constructor)]
+    #[ani(constructor, name = "build")]
     pub fn new(env: &Env<'_>, this: &AniObject<'_>, name: String, count: i32) -> Result<()> {
         Widget {
             _name: name,
@@ -55,6 +55,11 @@ impl Widget {
     #[ani]
     pub fn describe(&self) -> String {
         format!("Widget({}, {})", self._name, self._count)
+    }
+
+    #[ani]
+    pub fn consume(self) -> String {
+        format!("{}#{}", self._name, self._count)
     }
 
     #[ani]
@@ -285,6 +290,7 @@ mod tests {
         assert_eq!(widget.get_count(), 6);
         widget.index_set_flag(3.0, false);
         assert_eq!(widget.get_count(), -3);
+        assert_eq!(widget.consume(), "slot@2#-3");
 
         let mut iterator = WidgetIndexIterator { current: 0, end: 2 };
         assert_eq!(iterator.next(), Some(0));

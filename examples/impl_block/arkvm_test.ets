@@ -35,6 +35,7 @@ export class Widget {
   native bump(delta: int): int;
   native checked_snapshot(min_count: int): WidgetSnapshot;
   native choose_snapshot(detailed: boolean): WidgetSnapshot | string;
+  native consume(): string;
   native describe(): string;
   native __ani_native_maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null;
   maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null | undefined {
@@ -196,6 +197,7 @@ __assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_int("Widget.bump", widget.bump(3), 8);
 __assert_eq_int("Widget.count_after_bump", widget.count, 8);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(renamed, 8)");
+__assert_eq_string("Widget.consume", widget.consume(), "renamed#8");
 __assert_eq_string("Widget.index_get", widget.$_get(4.0), "renamed#4");
 widget.$_set(2.0, "slot");
 __assert_eq_string("Widget.index_set_text_name", widget.name, "slot@2");

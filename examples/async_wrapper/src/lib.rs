@@ -1,6 +1,6 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
-use ani::conversions::{PromiseRaw, RefContainer};
+use ani::conversions::{Deferred, PromiseRaw, RefContainer};
 use ani::prelude::*;
 use ani_derive::{ani, AniClass};
 use std::sync::{
@@ -203,12 +203,35 @@ pub fn promise_new_typed_resolve(
 }
 
 #[ani]
+pub fn promise_env_resolved(env: &Env<'_>, value: String) -> Result<PromiseRaw<'static, String>> {
+    env.promise_resolved(format!("env:{value}"))
+        .map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn promise_env_rejected(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, String>> {
+    env.promise_rejected::<String>(&message)
+        .map(PromiseRaw::into_static)
+}
+
+#[ani]
 pub fn promise_resolver_resolve_value(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
     let (resolver, promise) = env.promise_new()?;
     resolver.resolve_value(env, format!("resolver:{value}"))?;
+    Ok(unsafe { PromiseRaw::<String>::from_raw(promise.into_raw()) }.into_static())
+}
+
+#[ani]
+pub fn promise_resolver_into_deferred(
+    env: &Env<'_>,
+    value: String,
+) -> Result<PromiseRaw<'static, String>> {
+    let (resolver, promise) = env.promise_new()?;
+    let deferred: Deferred<String> = resolver.into_deferred();
+    deferred.resolve_value(env, format!("bridge:{value}"))?;
     Ok(unsafe { PromiseRaw::<String>::from_raw(promise.into_raw()) }.into_static())
 }
 
@@ -368,6 +391,25 @@ pub fn tokio_manual_global_ref_container_ready(
 }
 
 #[ani]
+pub fn tokio_manual_typed_ref_container_ready(
+    env: &Env<'_>,
+    value: Ref<AniObject<'static>>,
+) -> Result<PromiseRaw<'static, bool>> {
+    let vm = env.get_vm()?;
+    let container = RefContainer::new(env, &value)?;
+
+    ani::tokio::spawn_future_factory(env, move || async move {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let attach = vm.attach_current_thread_scoped()?;
+        let env = attach.env();
+        let local: AniObject<'_> = container.to_local(&env)?;
+        let ty = env.get_object_type(&local)?;
+        Ok(!ty.as_raw().is_null())
+    })
+    .map(PromiseRaw::into_static)
+}
+
+#[ani]
 pub fn tokio_manual_function_ref_container_call(
     env: &Env<'_>,
     callback: FunctionRef<(String,), String>,
@@ -449,10 +491,14 @@ mod tests {
         let _ = async_call_scoped_callback;
         let _ = async_echo_function_ref;
         let _ = promise_new_typed_resolve;
+        let _ = promise_env_resolved;
+        let _ = promise_env_rejected;
         let _ = promise_resolver_resolve_value;
+        let _ = promise_resolver_into_deferred;
         let _ = promise_resolver_reject_message;
         let _ = tokio_manual_ref_container_ready;
         let _ = tokio_manual_global_ref_container_ready;
+        let _ = tokio_manual_typed_ref_container_ready;
         let _ = tokio_manual_function_ref_container_call;
     }
 

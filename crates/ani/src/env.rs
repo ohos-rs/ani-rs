@@ -5245,6 +5245,27 @@ impl<'local> Env<'local> {
         }))
     }
 
+    /// Create and immediately resolve a typed Promise from a Rust value.
+    pub fn promise_resolved<V>(&self, value: V) -> Result<PromiseRaw<'local, V>>
+    where
+        V: crate::conversions::PromiseValue<'local>,
+    {
+        PromiseRaw::<V>::resolve_value(self, value)
+    }
+
+    /// Create and immediately reject a typed Promise with a message.
+    pub fn promise_rejected<T>(&self, error: impl AsRef<str>) -> Result<PromiseRaw<'local, T>> {
+        PromiseRaw::<T>::reject(self, error)
+    }
+
+    /// Create and immediately reject a typed Promise with a typed [`Error`].
+    pub fn promise_rejected_with_error<T, S: AsRef<str> + std::fmt::Debug>(
+        &self,
+        error: Error<S>,
+    ) -> Result<PromiseRaw<'local, T>> {
+        PromiseRaw::<T>::reject_with_error(self, error)
+    }
+
     /// Resolve a Promise with a value
     ///
     /// This resolves the promise associated with the given resolver and queues

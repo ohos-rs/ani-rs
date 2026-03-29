@@ -7,8 +7,8 @@
 //! - PathBuf <-> ani_string (lossy conversion)
 
 use std::borrow::Cow;
-use std::ffi::CString;
-use std::path::PathBuf;
+use std::ffi::{CStr, CString, OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 use crate::ani_call_ret;
 use crate::env::Env;
@@ -65,6 +65,48 @@ impl<'env, 'a> ToAni<'env> for &'a str {
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         env.create_string(self)
+    }
+}
+
+// ============================================================================
+// &OsStr - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for OsStr {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env, 'a> ToAni<'env> for &'a OsStr {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+// ============================================================================
+// &Path - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for Path {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env, 'a> ToAni<'env> for &'a Path {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
     }
 }
 
@@ -165,6 +207,27 @@ impl<'env> FromAni<'env> for CString {
 }
 
 // ============================================================================
+// &CStr - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for CStr {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env, 'a> ToAni<'env> for &'a CStr {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+// ============================================================================
 // PathBuf - Lstd/core/String;
 // ============================================================================
 
@@ -191,6 +254,96 @@ impl<'env> FromAni<'env> for PathBuf {
     fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(PathBuf::from(s))
+    }
+}
+
+// ============================================================================
+// OsString - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for OsString {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env> ToAni<'env> for OsString {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+impl<'env> FromAni<'env> for OsString {
+    type Input = AniString<'env>;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let s = env.get_string(&value)?;
+        Ok(OsString::from(s))
+    }
+}
+
+// ============================================================================
+// Box<Path> - Lstd/core/String;
+// ============================================================================
+
+impl TypeInfo for Box<Path> {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env> ToAni<'env> for Box<Path> {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+impl<'env> FromAni<'env> for Box<Path> {
+    type Input = AniString<'env>;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let s = env.get_string(&value)?;
+        Ok(PathBuf::from(s).into_boxed_path())
+    }
+}
+
+// ============================================================================
+// Cow<Path> - Lstd/core/String;
+// ============================================================================
+
+impl<'a> TypeInfo for Cow<'a, Path> {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env, 'a> ToAni<'env> for Cow<'a, Path> {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(&self.to_string_lossy())
+    }
+}
+
+impl<'env> FromAni<'env> for Cow<'static, Path> {
+    type Input = AniString<'env>;
+
+    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let s = env.get_string(&value)?;
+        Ok(Cow::Owned(PathBuf::from(s)))
     }
 }
 
@@ -260,5 +413,11 @@ mod tests {
     fn test_string_type_signature() {
         assert_eq!(String::type_signature(), "Lstd/core/String;");
         assert_eq!(<&str>::type_signature(), "Lstd/core/String;");
+        assert_eq!(OsStr::type_signature(), "Lstd/core/String;");
+        assert_eq!(OsString::type_signature(), "Lstd/core/String;");
+        assert_eq!(Path::type_signature(), "Lstd/core/String;");
+        assert_eq!(Box::<Path>::type_signature(), "Lstd/core/String;");
+        assert_eq!(Cow::<'static, Path>::type_signature(), "Lstd/core/String;");
+        assert_eq!(CStr::type_signature(), "Lstd/core/String;");
     }
 }

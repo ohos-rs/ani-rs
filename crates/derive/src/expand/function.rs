@@ -6,12 +6,14 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, ReturnType, Signature, Type};
 
+#[cfg(test)]
+use crate::codegen::ClassPropertyAccessorDescriptor;
 use crate::codegen::{
     ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
-    ClassOpDescriptor, ClassOpKind, ClassPropertyAccessorDescriptor, ClassPropertyDescriptor,
-    ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
-    WrapperBindingKind, emit_export_plan_ets, generate_async_blocking_wrapper,
-    generate_async_wrapper, generate_register_fn, generate_wrapper,
+    ClassOpDescriptor, ClassOpKind, ClassPropertyDescriptor, ClassRegisterDescriptor,
+    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget, WrapperBindingKind,
+    emit_export_plan_ets, generate_async_blocking_wrapper, generate_async_wrapper,
+    generate_register_fn, generate_wrapper,
 };
 use crate::parser::{BindgenAttrs, InitAttrs};
 use crate::types::{
@@ -336,13 +338,6 @@ pub(crate) fn validate_constructor_usage(attrs: &BindgenAttrs, func: &ItemFn) ->
         ));
     }
 
-    if attrs.name.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "#[ani(constructor)] does not support custom #[ani(name = ...)]",
-        ));
-    }
-
     match &func.sig.output {
         ReturnType::Default => Ok(()),
         ReturnType::Type(_, ty) if is_unit_type(ty) => Ok(()),
@@ -505,38 +500,27 @@ impl ClassMemberPlanKind {
         native_symbol_name: &str,
     ) -> ClassDescriptorMember {
         match self {
-            ClassMemberPlanKind::Constructor => {
-                ClassDescriptorMember::Constructor(ClassCallableDescriptor {
-                    metadata,
-                    native_symbol_name: native_symbol_name.to_string(),
-                })
-            }
-            ClassMemberPlanKind::Method { .. } => {
-                ClassDescriptorMember::Method(ClassCallableDescriptor {
-                    metadata,
-                    native_symbol_name: native_symbol_name.to_string(),
-                })
-            }
+            ClassMemberPlanKind::Constructor => ClassDescriptorMember::Constructor(
+                ClassCallableDescriptor::new(metadata, native_symbol_name),
+            ),
+            ClassMemberPlanKind::Method { .. } => ClassDescriptorMember::Method(
+                ClassCallableDescriptor::new(metadata, native_symbol_name),
+            ),
             ClassMemberPlanKind::Property(accessor) => {
-                let mut property = ClassPropertyDescriptor {
-                    metadata,
-                    getter: None,
-                    setter: None,
-                };
-                let accessor_descriptor = ClassPropertyAccessorDescriptor {
-                    native_symbol_name: native_symbol_name.to_string(),
-                };
-                match accessor.kind {
-                    AccessorKind::Getter => property.getter = Some(accessor_descriptor),
-                    AccessorKind::Setter => property.setter = Some(accessor_descriptor),
-                }
-                ClassDescriptorMember::Property(property)
+                ClassDescriptorMember::Property(match accessor.kind {
+                    AccessorKind::Getter => {
+                        ClassPropertyDescriptor::with_getter(metadata, native_symbol_name)
+                    }
+                    AccessorKind::Setter => {
+                        ClassPropertyDescriptor::with_setter(metadata, native_symbol_name)
+                    }
+                })
             }
-            ClassMemberPlanKind::Op(kind) => ClassDescriptorMember::Op(ClassOpDescriptor {
+            ClassMemberPlanKind::Op(kind) => ClassDescriptorMember::Op(ClassOpDescriptor::new(
                 metadata,
-                native_symbol_name: native_symbol_name.to_string(),
-                kind: kind.clone(),
-            }),
+                native_symbol_name,
+                kind.clone(),
+            )),
         }
     }
 }
@@ -1141,7 +1125,43 @@ fn is_unit_ani_type(ty: &AniType) -> bool {
 mod tests {
     use super::*;
     use crate::parser::BindgenAttrs;
+    use std::sync::{Mutex, MutexGuard};
     use syn::parse_quote;
+
+    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct TestEnvVarGuard {
+        previous: Option<String>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl TestEnvVarGuard {
+        fn unset(key: &str) -> Self {
+            let lock = TEST_ENV_LOCK.lock().expect("lock test env mutex");
+            let previous = std::env::var(key).ok();
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            let _ = key;
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                match &self.previous {
+                    Some(previous) => std::env::set_var("ANI_TEST_MODULE_NAME", previous),
+                    None => std::env::remove_var("ANI_TEST_MODULE_NAME"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn init_supports_no_arg_unit() {
@@ -1254,6 +1274,20 @@ mod tests {
             fn ctor() -> i64 { 1 }
         };
         assert!(validate_constructor_usage(&attrs, &func).is_err());
+    }
+
+    #[test]
+    fn constructor_accepts_custom_name_attr() {
+        let attrs = BindgenAttrs {
+            constructor: true,
+            class: Some("Person".to_string()),
+            name: Some("build".to_string()),
+            ..Default::default()
+        };
+        let func: ItemFn = parse_quote! {
+            fn ctor(name: String) {}
+        };
+        assert!(validate_constructor_usage(&attrs, &func).is_ok());
     }
 
     #[test]
@@ -1555,6 +1589,7 @@ mod tests {
         let attrs = BindgenAttrs {
             class: Some("Widget".to_string()),
             constructor: true,
+            name: Some("build".to_string()),
             ..Default::default()
         };
         let sig: Signature = parse_quote! {
@@ -1592,6 +1627,7 @@ mod tests {
 
     #[test]
     fn binding_plan_register_target_uses_member_scope() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let attrs = BindgenAttrs {
             class: Some("Widget".to_string()),
             getter: Some("value".to_string()),

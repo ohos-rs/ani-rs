@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed, Generics, Ident, ItemStruct, Lit,
-    Token, Variant, punctuated::Punctuated,
+    Data, DeriveInput, Expr, ExprLit, Field, Fields, GenericParam, Generics, Ident, Index,
+    ItemStruct, Lit, Member, Token, Variant, punctuated::Punctuated,
 };
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
@@ -30,11 +30,19 @@ enum ObjectAccessKind {
 
 #[derive(Clone)]
 struct ObjectFieldSpec {
-    rust_ident: Ident,
+    member: Member,
+    rust_name: String,
     arkts_name: String,
     ty: syn::Type,
     access: ObjectAccessKind,
     emit_private: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObjectStructKind {
+    Named,
+    Unnamed,
+    Unit,
 }
 
 #[derive(Default)]
@@ -57,17 +65,24 @@ pub fn expand_struct(
     struct_item: ItemStruct,
     prepare: TokenStream,
 ) -> TokenStream {
-    let fields = match validate_object_item_struct(&struct_item) {
-        Ok(fields) => fields,
-        Err(err) => return err.to_compile_error(),
-    };
+    if let Err(err) = validate_object_item_struct(&struct_item) {
+        return err.to_compile_error();
+    }
 
     let struct_name = &struct_item.ident;
     let class_name = attrs
         .class
         .clone()
         .unwrap_or_else(|| struct_name.to_string());
-    let object_impls = expand_object_type_impls(struct_name, &class_name, fields);
+    let object_impls = match expand_object_type_impls(
+        struct_name,
+        &class_name,
+        &struct_item.generics,
+        &struct_item.fields,
+    ) {
+        Ok(tokens) => tokens,
+        Err(err) => return err.to_compile_error(),
+    };
 
     quote! {
         #prepare
@@ -79,12 +94,28 @@ pub fn expand_struct(
 fn expand_object_type_impls(
     struct_name: &syn::Ident,
     class_name: &str,
-    fields: &FieldsNamed,
-) -> TokenStream {
-    let field_specs = match collect_object_field_specs(fields) {
-        Ok(specs) => specs,
-        Err(err) => return err.to_compile_error(),
-    };
+    generics: &Generics,
+    fields: &Fields,
+) -> syn::Result<TokenStream> {
+    let type_params = collect_struct_type_params(generics)?;
+    let (struct_kind, field_specs) = collect_object_field_specs(fields)?;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let env_generics = generics_with_env(generics);
+    let (env_impl_generics, _, env_where_clause) = env_generics.split_for_impl();
+    let field_bounds = object_field_bounds(&field_specs);
+    let method_where_clause = render_where_clause(None, &field_bounds);
+    let env_where_with_fields = render_where_clause(env_where_clause, &field_bounds);
+    let env_where_with_record_bounds = render_where_clause(
+        env_where_clause,
+        &[
+            quote! { Self: ani::conversions::ToAni<'env, Output = ani::sys::ani_object> },
+            quote! { Self: ani::conversions::FromAni<'env, Input = ani::sys::ani_object> },
+        ],
+    );
+    let env_where_with_to_ani = render_where_clause(
+        env_where_clause,
+        &[quote! { Self: ani::conversions::ToAni<'env, Output = ani::sys::ani_object> }],
+    );
 
     register_object_type_alias(&struct_name.to_string(), class_name);
     register_object_type_members(
@@ -92,7 +123,7 @@ fn expand_object_type_impls(
         &field_specs
             .iter()
             .map(|field| ObjectMemberDescriptor {
-                rust_name: field.rust_ident.to_string(),
+                rust_name: field.rust_name.clone(),
                 arkts_name: field.arkts_name.clone(),
                 access: match field.access {
                     ObjectAccessKind::Field => ObjectMemberAccessKind::Field,
@@ -101,7 +132,7 @@ fn expand_object_type_impls(
             })
             .collect::<Vec<_>>(),
     );
-    emit_object_decl(class_name, &field_specs);
+    emit_object_decl(class_name, &type_params, &field_specs);
 
     let module_name = current_module_name();
     let qualified_name = qualify_member_descriptor(class_name, &module_name);
@@ -109,12 +140,12 @@ fn expand_object_type_impls(
     let qualified_name_lit = syn::LitStr::new(&qualified_name, Span::call_site());
     let class_descriptor_lit = syn::LitStr::new(&class_descriptor, Span::call_site());
 
-    let field_reads = field_specs.iter().map(generate_field_read);
+    let field_reads = render_field_reads(struct_kind, &field_specs);
     let field_writes_to_new = field_specs.iter().map(generate_field_write_to_new);
     let field_writes_back = field_specs.iter().map(generate_field_write_back);
 
-    quote! {
-        impl #struct_name {
+    Ok(quote! {
+        impl #impl_generics #struct_name #ty_generics #where_clause {
             /// ANI class descriptor usable with `Env::find_class`.
             pub const fn class_descriptor() -> &'static str {
                 #class_descriptor_lit
@@ -129,7 +160,9 @@ fn expand_object_type_impls(
             pub fn __ani_from_bound_ani_object<'env>(
                 env: &ani::env::Env<'env>,
                 value: ani::sys::ani_object,
-            ) -> ani::error::Result<Self> {
+            ) -> ani::error::Result<Self>
+            #method_where_clause
+            {
                 if value.is_null() {
                     return Err(ani::error::Error::new(
                         ani::error::Status::InvalidArgs,
@@ -138,13 +171,11 @@ fn expand_object_type_impls(
                 }
 
                 let obj = unsafe { ani::types::AniObject::from_raw(value) };
-                Ok(Self {
-                    #(#field_reads,)*
-                })
+                Ok(#field_reads)
             }
         }
 
-        impl ani::conversions::TypeInfo for #struct_name {
+        impl #impl_generics ani::conversions::TypeInfo for #struct_name #ty_generics #where_clause {
             fn type_signature() -> &'static str {
                 Self::class_descriptor()
             }
@@ -154,7 +185,9 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::FromAni<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::FromAni<'env> for #struct_name #ty_generics
+        #env_where_with_fields
+        {
             type Input = ani::sys::ani_object;
 
             fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
@@ -181,7 +214,9 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::ToAni<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::ToAni<'env> for #struct_name #ty_generics
+        #env_where_with_fields
+        {
             type Output = ani::sys::ani_object;
 
             fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
@@ -193,7 +228,10 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::WriteBackToAniObject<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::WriteBackToAniObject<'env>
+            for #struct_name #ty_generics
+        #env_where_with_fields
+        {
             fn write_back_to_ani_object(
                 self,
                 env: &ani::env::Env<'env>,
@@ -204,7 +242,10 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::ValidateFromAni<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::ValidateFromAni<'env>
+            for #struct_name #ty_generics
+        #env_where_clause
+        {
             fn validate(env: &ani::env::Env<'env>, value: ani::sys::ani_object) -> bool {
                 if value.is_null() {
                     return false;
@@ -219,7 +260,10 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::FromAniObject<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::FromAniObject<'env>
+            for #struct_name #ty_generics
+        #env_where_with_record_bounds
+        {
             fn from_ani_object(
                 env: &ani::env::Env<'env>,
                 value: ani::sys::ani_object,
@@ -228,7 +272,10 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::RecordValue<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::RecordValue<'env>
+            for #struct_name #ty_generics
+        #env_where_with_record_bounds
+        {
             fn to_record_ref(self, env: &ani::env::Env<'env>) -> ani::error::Result<ani::types::AniRef<'env>> {
                 let raw = <Self as ani::conversions::ToAni<'env>>::to_ani(self, env)?;
                 Ok(unsafe { ani::types::AniRef::from_raw(raw as ani::sys::ani_ref) })
@@ -245,28 +292,30 @@ fn expand_object_type_impls(
             }
         }
 
-        impl<'env> ani::conversions::ToAniObject<'env> for #struct_name {
+        impl #env_impl_generics ani::conversions::ToAniObject<'env>
+            for #struct_name #ty_generics
+        #env_where_with_to_ani
+        {
             fn to_ani_object(self, env: &ani::env::Env<'env>) -> ani::error::Result<ani::sys::ani_object> {
                 <Self as ani::conversions::ToAni<'env>>::to_ani(self, env)
             }
         }
-    }
+    })
 }
 
-fn generate_field_read(field: &ObjectFieldSpec) -> TokenStream {
-    let field_name = &field.rust_ident;
+fn generate_field_read_expr(field: &ObjectFieldSpec) -> TokenStream {
     let field_ty = &field.ty;
-    let field_literal = syn::LitStr::new(&field.arkts_name, field_name.span());
+    let field_literal = syn::LitStr::new(&field.arkts_name, Span::call_site());
     match field.access {
         ObjectAccessKind::Field => quote! {
-            #field_name: <#field_ty as ani::conversions::ObjectField<'env>>::get_named_field(
+            <#field_ty as ani::conversions::ObjectField<'env>>::get_named_field(
                 env,
                 &obj,
                 #field_literal,
             )?
         },
         ObjectAccessKind::Property => quote! {
-            #field_name: <#field_ty as ani::conversions::ObjectProperty<'env>>::get_named_property(
+            <#field_ty as ani::conversions::ObjectProperty<'env>>::get_named_property(
                 env,
                 &obj,
                 #field_literal,
@@ -276,13 +325,13 @@ fn generate_field_read(field: &ObjectFieldSpec) -> TokenStream {
 }
 
 fn generate_field_write_to_new(field: &ObjectFieldSpec) -> TokenStream {
-    let field_name = &field.rust_ident;
+    let member = &field.member;
     let field_ty = &field.ty;
-    let field_literal = syn::LitStr::new(&field.arkts_name, field_name.span());
+    let field_literal = syn::LitStr::new(&field.arkts_name, Span::call_site());
     match field.access {
         ObjectAccessKind::Field => quote! {
             <#field_ty as ani::conversions::ObjectField<'env>>::set_named_field(
-                self.#field_name,
+                self.#member,
                 env,
                 &obj,
                 #field_literal,
@@ -290,7 +339,7 @@ fn generate_field_write_to_new(field: &ObjectFieldSpec) -> TokenStream {
         },
         ObjectAccessKind::Property => quote! {
             <#field_ty as ani::conversions::ObjectProperty<'env>>::set_named_property(
-                self.#field_name,
+                self.#member,
                 env,
                 &obj,
                 #field_literal,
@@ -300,13 +349,13 @@ fn generate_field_write_to_new(field: &ObjectFieldSpec) -> TokenStream {
 }
 
 fn generate_field_write_back(field: &ObjectFieldSpec) -> TokenStream {
-    let field_name = &field.rust_ident;
+    let member = &field.member;
     let field_ty = &field.ty;
-    let field_literal = syn::LitStr::new(&field.arkts_name, field_name.span());
+    let field_literal = syn::LitStr::new(&field.arkts_name, Span::call_site());
     match field.access {
         ObjectAccessKind::Field => quote! {
             <#field_ty as ani::conversions::ObjectField<'env>>::set_named_field(
-                self.#field_name,
+                self.#member,
                 env,
                 obj,
                 #field_literal,
@@ -314,7 +363,7 @@ fn generate_field_write_back(field: &ObjectFieldSpec) -> TokenStream {
         },
         ObjectAccessKind::Property => quote! {
             <#field_ty as ani::conversions::ObjectProperty<'env>>::set_named_property(
-                self.#field_name,
+                self.#member,
                 env,
                 obj,
                 #field_literal,
@@ -323,7 +372,35 @@ fn generate_field_write_back(field: &ObjectFieldSpec) -> TokenStream {
     }
 }
 
-fn emit_object_decl(class_name: &str, fields: &[ObjectFieldSpec]) {
+fn render_field_reads(kind: ObjectStructKind, fields: &[ObjectFieldSpec]) -> TokenStream {
+    match kind {
+        ObjectStructKind::Named => {
+            let initializers = fields.iter().map(|field| {
+                let Member::Named(field_name) = &field.member else {
+                    unreachable!("named struct field should use named member");
+                };
+                let value = generate_field_read_expr(field);
+                quote! { #field_name: #value }
+            });
+            quote! {
+                Self {
+                    #(#initializers,)*
+                }
+            }
+        }
+        ObjectStructKind::Unnamed => {
+            let values = fields.iter().map(generate_field_read_expr);
+            quote! {
+                Self(
+                    #(#values,)*
+                )
+            }
+        }
+        ObjectStructKind::Unit => quote! { Self },
+    }
+}
+
+fn emit_object_decl(class_name: &str, type_params: &[String], fields: &[ObjectFieldSpec]) {
     let object_field_decls = fields
         .iter()
         .map(|field| {
@@ -349,46 +426,73 @@ fn emit_object_decl(class_name: &str, fields: &[ObjectFieldSpec]) {
             }
         })
         .collect::<Vec<_>>();
-    emit_compile_ets_object(class_name, &object_field_decls);
+    emit_compile_ets_object(class_name, type_params, &object_field_decls);
 }
 
-fn collect_object_field_specs(fields: &FieldsNamed) -> syn::Result<Vec<ObjectFieldSpec>> {
-    let mut out = Vec::with_capacity(fields.named.len());
+fn collect_object_field_specs(
+    fields: &Fields,
+) -> syn::Result<(ObjectStructKind, Vec<ObjectFieldSpec>)> {
     let mut member_names = BTreeSet::new();
-
-    for field in &fields.named {
-        let Some(rust_ident) = field.ident.clone() else {
-            continue;
-        };
-        let attrs = parse_object_field_attrs(field)?;
-        let access = if attrs.property {
-            ObjectAccessKind::Property
-        } else {
-            ObjectAccessKind::Field
-        };
-        let arkts_name = attrs
-            .property_name
-            .or(attrs.name)
-            .unwrap_or_else(|| rust_ident.to_string());
-        if !member_names.insert(arkts_name.clone()) {
-            return Err(syn::Error::new_spanned(
-                &rust_ident,
-                format!("duplicate ArkTS object member name `{arkts_name}`"),
-            ));
-        }
-        let rust_name = rust_ident.to_string();
-        out.push(ObjectFieldSpec {
-            emit_private: matches!(access, ObjectAccessKind::Field)
+    let mut push_field =
+        |member: Member, rust_name: String, field: &Field, default_name: String| {
+            let attrs = parse_object_field_attrs(field)?;
+            let access = if attrs.property {
+                ObjectAccessKind::Property
+            } else {
+                ObjectAccessKind::Field
+            };
+            let arkts_name = attrs.property_name.or(attrs.name).unwrap_or(default_name);
+            if !member_names.insert(arkts_name.clone()) {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    format!("duplicate ArkTS object member name `{arkts_name}`"),
+                ));
+            }
+            let emit_private = matches!(access, ObjectAccessKind::Field)
                 && rust_name.starts_with('_')
-                && arkts_name == rust_name,
-            rust_ident,
-            arkts_name,
-            ty: field.ty.clone(),
-            access,
-        });
-    }
+                && arkts_name == rust_name;
+            Ok(ObjectFieldSpec {
+                member,
+                rust_name,
+                arkts_name,
+                ty: field.ty.clone(),
+                access,
+                emit_private,
+            })
+        };
 
-    Ok(out)
+    match fields {
+        Fields::Named(fields) => {
+            let mut out = Vec::with_capacity(fields.named.len());
+            for field in &fields.named {
+                let Some(rust_ident) = field.ident.clone() else {
+                    continue;
+                };
+                let rust_name = rust_ident.to_string();
+                out.push(push_field(
+                    Member::Named(rust_ident),
+                    rust_name.clone(),
+                    field,
+                    rust_name,
+                )?);
+            }
+            Ok((ObjectStructKind::Named, out))
+        }
+        Fields::Unnamed(fields) => {
+            let mut out = Vec::with_capacity(fields.unnamed.len());
+            for (index, field) in fields.unnamed.iter().enumerate() {
+                let rust_name = format!("field{index}");
+                out.push(push_field(
+                    Member::Unnamed(Index::from(index)),
+                    rust_name.clone(),
+                    field,
+                    rust_name,
+                )?);
+            }
+            Ok((ObjectStructKind::Unnamed, out))
+        }
+        Fields::Unit => Ok((ObjectStructKind::Unit, Vec::new())),
+    }
 }
 
 fn parse_object_field_attrs(field: &Field) -> syn::Result<ObjectFieldAttrs> {
@@ -442,29 +546,34 @@ fn parse_object_field_attrs(field: &Field) -> syn::Result<ObjectFieldAttrs> {
     Ok(out)
 }
 
-fn validate_object_struct_shape<'a>(
-    generics: &'a Generics,
-    fields: &'a Fields,
-    generic_error: &str,
-    fields_error: &str,
-) -> syn::Result<&'a FieldsNamed> {
-    if !generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(generics, generic_error));
+fn collect_struct_type_params(generics: &Generics) -> syn::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for param in &generics.params {
+        match param {
+            GenericParam::Type(ty) => out.push(ty.ident.to_string()),
+            GenericParam::Lifetime(lifetime) => {
+                return Err(syn::Error::new_spanned(
+                    lifetime,
+                    "ANI object/class derives support type parameters only; lifetime parameters are not supported",
+                ));
+            }
+            GenericParam::Const(const_param) => {
+                return Err(syn::Error::new_spanned(
+                    const_param,
+                    "ANI object/class derives support type parameters only; const generics are not supported",
+                ));
+            }
+        }
     }
-
-    match fields {
-        Fields::Named(fields) => Ok(fields),
-        Fields::Unnamed(_) | Fields::Unit => Err(syn::Error::new_spanned(fields, fields_error)),
-    }
+    Ok(out)
 }
 
-fn validate_object_item_struct(struct_item: &ItemStruct) -> syn::Result<&FieldsNamed> {
-    validate_object_struct_shape(
-        &struct_item.generics,
-        &struct_item.fields,
-        "#[ani(object)] does not support generic structs yet",
-        "#[ani(object)] currently only supports structs with named fields",
-    )
+fn validate_object_struct_shape(generics: &Generics) -> syn::Result<()> {
+    collect_struct_type_params(generics).map(|_| ())
+}
+
+fn validate_object_item_struct(struct_item: &ItemStruct) -> syn::Result<()> {
+    validate_object_struct_shape(&struct_item.generics)
 }
 
 fn object_descriptor_signature(qualified_name: &str) -> String {
@@ -496,7 +605,7 @@ fn derive_named_type_name(input: &DeriveInput) -> syn::Result<String> {
     Ok(input.ident.to_string())
 }
 
-fn validate_derive_input(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
+fn validate_derive_input(input: &DeriveInput) -> syn::Result<()> {
     let Data::Struct(data) = &input.data else {
         return Err(syn::Error::new_spanned(
             input,
@@ -504,19 +613,22 @@ fn validate_derive_input(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
         ));
     };
 
-    validate_object_struct_shape(
-        &input.generics,
-        &data.fields,
-        "#[derive(AniClass)] does not support generic structs yet",
-        "#[derive(AniClass)] currently only supports structs with named fields",
-    )
+    let _ = data;
+    validate_object_struct_shape(&input.generics)
 }
 
 /// Expand AniClass derive macro
 pub fn expand_class_derive(input: DeriveInput) -> TokenStream {
-    let fields = match validate_derive_input(&input) {
-        Ok(fields) => fields,
-        Err(err) => return err.to_compile_error(),
+    if let Err(err) = validate_derive_input(&input) {
+        return err.to_compile_error();
+    }
+
+    let Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(
+            &input,
+            "#[derive(AniClass)] can only be applied to structs",
+        )
+        .to_compile_error();
     };
 
     let class_name = match derive_named_type_name(&input) {
@@ -524,8 +636,53 @@ pub fn expand_class_derive(input: DeriveInput) -> TokenStream {
         Err(err) => return err.to_compile_error(),
     };
 
-    let name = &input.ident;
-    expand_object_type_impls(name, &class_name, fields)
+    match expand_object_type_impls(&input.ident, &class_name, &input.generics, &data.fields) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    }
+}
+
+fn generics_with_env(generics: &Generics) -> Generics {
+    let mut out = generics.clone();
+    out.params.insert(0, syn::parse_quote!('env));
+    out
+}
+
+fn render_where_clause(base: Option<&syn::WhereClause>, extra: &[TokenStream]) -> TokenStream {
+    if extra.is_empty() {
+        return base.map_or_else(TokenStream::new, |clause| quote! { #clause });
+    }
+
+    if let Some(base) = base {
+        let predicates = &base.predicates;
+        quote! {
+            where
+                #predicates,
+                #(#extra),*
+        }
+    } else {
+        quote! {
+            where
+                #(#extra),*
+        }
+    }
+}
+
+fn object_field_bounds(fields: &[ObjectFieldSpec]) -> Vec<TokenStream> {
+    fields
+        .iter()
+        .map(|field| {
+            let field_ty = &field.ty;
+            match field.access {
+                ObjectAccessKind::Field => {
+                    quote! { #field_ty: ani::conversions::ObjectField<'env> }
+                }
+                ObjectAccessKind::Property => {
+                    quote! { #field_ty: ani::conversions::ObjectProperty<'env> }
+                }
+            }
+        })
+        .collect()
 }
 
 fn validate_enum_derive_input(input: &DeriveInput) -> syn::Result<&syn::DataEnum> {
@@ -835,12 +992,42 @@ mod tests {
     }
 
     #[test]
-    fn derive_ani_class_rejects_tuple_structs() {
+    fn derive_ani_class_supports_generic_tuple_and_unit_structs() {
         let input: DeriveInput = parse_quote! {
-            struct TupleUser(i32, String);
+            #[derive(AniClass)]
+            struct TupleUser<T>(T, #[ani(property)] bool);
         };
         let expanded = expand_class_derive(input).to_string();
-        assert!(expanded.contains("currently only supports structs with named fields"));
+        assert!(expanded.contains("impl < T > ani :: conversions :: TypeInfo for TupleUser < T >"));
+        assert!(expanded.contains(
+            "impl < 'env , T > ani :: conversions :: ToAni < 'env > for TupleUser < T >"
+        ));
+        assert!(expanded.contains("T : ani :: conversions :: ObjectField < 'env >"));
+        assert!(expanded.contains("bool : ani :: conversions :: ObjectProperty < 'env >"));
+        assert!(expanded.contains("self . 0"));
+        assert!(expanded.contains("self . 1"));
+        assert!(expanded.contains("field0"));
+        assert!(expanded.contains("field1"));
+
+        let unit_input: DeriveInput = parse_quote! {
+            #[derive(AniClass)]
+            struct Marker;
+        };
+        let unit_expanded = expand_class_derive(unit_input).to_string();
+        assert!(unit_expanded.contains("impl ani :: conversions :: TypeInfo for Marker"));
+        assert!(unit_expanded.contains("Ok (Self)"));
+    }
+
+    #[test]
+    fn derive_ani_class_rejects_non_type_generics() {
+        let input: DeriveInput = parse_quote! {
+            #[derive(AniClass)]
+            struct Borrowed<'a> {
+                name: &'a str,
+            }
+        };
+        let expanded = expand_class_derive(input).to_string();
+        assert!(expanded.contains("lifetime parameters are not supported"));
     }
 
     #[test]

@@ -181,6 +181,13 @@ impl ClassDescriptorMember {
 }
 
 impl ClassCallableDescriptor {
+    pub fn new(metadata: ClassMemberMetadata, native_symbol_name: impl Into<String>) -> Self {
+        Self {
+            metadata,
+            native_symbol_name: native_symbol_name.into(),
+        }
+    }
+
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
         generate_fn_ets_binding(
             EtsDeclKind::Class,
@@ -193,6 +200,18 @@ impl ClassCallableDescriptor {
 }
 
 impl ClassOpDescriptor {
+    pub fn new(
+        metadata: ClassMemberMetadata,
+        native_symbol_name: impl Into<String>,
+        kind: ClassOpKind,
+    ) -> Self {
+        Self {
+            metadata,
+            native_symbol_name: native_symbol_name.into(),
+            kind,
+        }
+    }
+
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
         match &self.kind {
             ClassOpKind::IteratorNext { .. } => generate_iterator_next_ets_binding(sig, skip_first),
@@ -233,6 +252,32 @@ impl ClassOpKind {
 }
 
 impl ClassPropertyDescriptor {
+    pub fn with_getter(
+        metadata: ClassMemberMetadata,
+        native_symbol_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            metadata,
+            getter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: native_symbol_name.into(),
+            }),
+            setter: None,
+        }
+    }
+
+    pub fn with_setter(
+        metadata: ClassMemberMetadata,
+        native_symbol_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            metadata,
+            getter: None,
+            setter: Some(ClassPropertyAccessorDescriptor {
+                native_symbol_name: native_symbol_name.into(),
+            }),
+        }
+    }
+
     pub fn slot_key(&self) -> (ClassMemberScope, String) {
         (self.metadata.scope, self.metadata.public_name.clone())
     }

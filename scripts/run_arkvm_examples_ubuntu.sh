@@ -93,6 +93,8 @@ docker run --rm --platform linux/amd64 \
   -v "$host_cargo_home_cache":/root/.cargo \
   -e ANI_TEST_MODULE_NAME="$arkvm_test_module_name" \
   -e ANI_DEBUG_REGISTER="${ANI_DEBUG_REGISTER:-0}" \
+  -e ARKVM_RUSTUP_DIST_SERVER="${ARKVM_RUSTUP_DIST_SERVER:-}" \
+  -e ARKVM_RUSTUP_UPDATE_ROOT="${ARKVM_RUSTUP_UPDATE_ROOT:-}" \
   -e ARKVM_DIR_IN_CONTAINER=/arkvm \
   -w /work \
   "$image" \
@@ -112,20 +114,67 @@ apt-get install -y --no-install-recommends \
   ripgrep
 update-ca-certificates || true
 
-export RUSTUP_DIST_SERVER=https://rsproxy.cn
-export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+use_rustup_server() {
+  local dist_server="$1"
+  local update_root="$2"
+  if [[ -n "$dist_server" ]]; then
+    export RUSTUP_DIST_SERVER="$dist_server"
+    export RUSTUP_UPDATE_ROOT="$update_root"
+    echo "rustup source: $dist_server"
+  else
+    unset RUSTUP_DIST_SERVER
+    unset RUSTUP_UPDATE_ROOT
+    echo "rustup source: default"
+  fi
+}
+
+install_stable_toolchain() {
+  local mirrors=()
+  if [[ -n "${ARKVM_RUSTUP_DIST_SERVER:-}" ]]; then
+    mirrors+=("${ARKVM_RUSTUP_DIST_SERVER}|${ARKVM_RUSTUP_UPDATE_ROOT:-${ARKVM_RUSTUP_DIST_SERVER%/}/rustup}")
+  fi
+  mirrors+=("|")
+  mirrors+=("https://static.rust-lang.org|https://static.rust-lang.org/rustup")
+  mirrors+=("https://rsproxy.cn|https://rsproxy.cn/rustup")
+
+  local mirror
+  for mirror in "${mirrors[@]}"; do
+    local dist_server="${mirror%%|*}"
+    local update_root="${mirror#*|}"
+    use_rustup_server "$dist_server" "$update_root"
+    if rustup toolchain install stable --profile minimal --no-self-update; then
+      rustup default stable
+      return 0
+    fi
+  done
+
+  echo "failed to install rust stable from all configured sources" >&2
+  return 1
+}
 
 if [[ ! -x /root/.cargo/bin/rustup ]]; then
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+  unset RUSTUP_DIST_SERVER
+  unset RUSTUP_UPDATE_ROOT
+  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain none
 fi
 
 source /root/.cargo/env
+rustup set auto-self-update disable >/dev/null 2>&1 || true
 set -- $(rustc --version 2>/dev/null || true)
 installed_rustc_version="${2:-}"
+if [[ -z "$installed_rustc_version" ]]; then
+  set -- $(rustup run stable rustc --version 2>/dev/null || true)
+  installed_rustc_version="${2:-}"
+  if [[ -n "$installed_rustc_version" ]]; then
+    rustup default stable
+    source /root/.cargo/env
+  fi
+fi
 if [[ -z "$installed_rustc_version" ]] || [[ "$(printf '%s\n' "1.85.0" "$installed_rustc_version" | sort -V | head -n1)" != "1.85.0" ]]; then
-  rustup toolchain uninstall stable-x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
-  rustup toolchain install stable --profile minimal
-  rustup default stable
+  if rustup run stable rustc --version >/dev/null 2>&1; then
+    rustup toolchain uninstall stable-x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
+  fi
+  install_stable_toolchain
   source /root/.cargo/env
 fi
 

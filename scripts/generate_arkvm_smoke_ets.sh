@@ -179,8 +179,21 @@ function main(): void {
   __assert_eq_string("env_roundtrip", envText, "env:hello");
   let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_new_typed_resolve("hello"));
   __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
+  let envResolvedText: string = waitForCompletion(() => __ANI_GENERATED__.promise_env_resolved("hello"));
+  __assert_eq_string("promise_env_resolved", envResolvedText, "env:hello");
+  let envRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.promise_env_rejected("env boom");
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("promise_env_rejected", envRejected);
   let resolverPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_resolver_resolve_value("world"));
   __assert_eq_string("promise_resolver_resolve_value", resolverPromiseText, "resolver:world");
+  let deferredBridgeText: string = waitForCompletion(() => __ANI_GENERATED__.promise_resolver_into_deferred("bridge"));
+  __assert_eq_string("promise_resolver_into_deferred", deferredBridgeText, "bridge:bridge");
   let resolverRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await __ANI_GENERATED__.promise_resolver_reject_message("resolver boom");
@@ -208,6 +221,8 @@ function main(): void {
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
   let manualGlobalContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_global_ref_container_ready(refPayload));
   __assert_true("tokio_manual_global_ref_container_ready", manualGlobalContainerReady);
+  let manualTypedRefContainerReady: boolean = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_typed_ref_container_ready(refPayload));
+  __assert_true("tokio_manual_typed_ref_container_ready", manualTypedRefContainerReady);
   let manualFunctionContainerText: string = waitForCompletion(() => __ANI_GENERATED__.tokio_manual_function_ref_container_call(asyncStringCallback, "box"));
   __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
   let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));
@@ -250,6 +265,44 @@ __assert_eq_long("big_int_subtract", __ANI_GENERATED__.big_int_subtract(9, 4), 5
 __assert_eq_long("big_int_multiply", __ANI_GENERATED__.big_int_multiply(3, 4), 12);
 __assert_true("big_int_compare_lt", __ANI_GENERATED__.big_int_compare(2, 5) < 0);
 __assert_true("big_int_is_zero", __ANI_GENERATED__.big_int_is_zero(0));
+ETS
+      ;;
+    ani-example-derive-shapes)
+      cat <<'ETS'
+let deriveBox = __ANI_GENERATED__.make_derive_box("box");
+__assert_eq_string("derive_box_value", deriveBox.value, "box");
+__assert_eq_string("read_derive_box", __ANI_GENERATED__.read_derive_box(deriveBox), "box");
+
+let derivePair = __ANI_GENERATED__.make_derive_pair("ani", "ark");
+__assert_eq_string("derive_pair_field0", derivePair.field0, "ani");
+__assert_eq_string("derive_pair_field1", derivePair.field1, "ark");
+__assert_eq_string(
+  "describe_derive_pair",
+  __ANI_GENERATED__.describe_derive_pair(derivePair),
+  "ani:ark",
+);
+__assert_true("marker_identity", __ANI_GENERATED__.marker_identity(new DeriveMarker()));
+
+let objectBox = __ANI_GENERATED__.make_object_box("box");
+__assert_eq_string("object_box_value", objectBox.value, "box");
+__assert_eq_string(
+  "describe_object_box",
+  __ANI_GENERATED__.describe_object_box(objectBox),
+  "box:box",
+);
+
+let objectPair = __ANI_GENERATED__.make_object_pair("left", "ark");
+__assert_eq_string("object_pair_field0", objectPair.field0, "left");
+__assert_eq_string("object_pair_field1", objectPair.field1, "ark");
+__assert_eq_string(
+  "describe_object_pair",
+  __ANI_GENERATED__.describe_object_pair(objectPair),
+  "left:ark",
+);
+__assert_true(
+  "object_marker_identity",
+  __ANI_GENERATED__.object_marker_identity(new ObjectMarker()),
+);
 ETS
       ;;
     ani-example-call-method)
@@ -710,6 +763,7 @@ __assert_eq_int("Widget.count_after_set", widget.count, 5);
 __assert_eq_int("Widget.bump", widget.bump(3), 8);
 __assert_eq_int("Widget.count_after_bump", widget.count, 8);
 __assert_eq_string("Widget.describe", widget.describe(), "Widget(renamed, 8)");
+__assert_eq_string("Widget.consume", widget.consume(), "renamed#8");
 __assert_eq_string("Widget.index_get", widget.$_get(4.0), "renamed#4");
 widget.$_set(2.0, "slot");
 __assert_eq_string("Widget.index_set_text_name", widget.name, "slot@2");
@@ -1149,6 +1203,54 @@ let pair = __ANI_GENERATED__.create_pair("k", 9);
 __assert_eq_string("pair_get_key", __ANI_GENERATED__.pair_get_key(pair), "k");
 __assert_eq_int("pair_get_value", __ANI_GENERATED__.pair_get_value(pair), 9);
 __ANI_GENERATED__.destroy_pair(pair);
+ETS
+      ;;
+    ani-example-string-like-owned)
+      cat <<'ETS'
+__assert_eq_string(
+  "append_os_segment",
+  __ANI_GENERATED__.append_os_segment("root", "tail"),
+  "root/tail",
+);
+__assert_eq_string(
+  "append_boxed_segment",
+  __ANI_GENERATED__.append_boxed_segment("left", "right"),
+  "left/right",
+);
+__assert_eq_string(
+  "append_cow_segment",
+  __ANI_GENERATED__.append_cow_segment("cow", "leaf"),
+  "cow/leaf",
+);
+__assert_eq_string(
+  "append_borrowed_path_segment",
+  __ANI_GENERATED__.append_borrowed_path_segment("base", "tail"),
+  "base/tail",
+);
+__assert_true(
+  "borrowed_os_prefix",
+  __ANI_GENERATED__.borrowed_os_prefix("prefix-value", "prefix"),
+);
+__assert_eq_int(
+  "borrowed_c_str_len",
+  __ANI_GENERATED__.borrowed_c_str_len("ffi"),
+  3,
+);
+__assert_eq_string(
+  "borrowed_path_literal",
+  __ANI_GENERATED__.borrowed_path_literal(),
+  "borrowed/path",
+);
+__assert_eq_string(
+  "borrowed_os_str_literal",
+  __ANI_GENERATED__.borrowed_os_str_literal(),
+  "borrowed-os",
+);
+__assert_eq_string(
+  "borrowed_c_str_literal",
+  __ANI_GENERATED__.borrowed_c_str_literal(),
+  "borrowed-c",
+);
 ETS
       ;;
     ani-example-tuple-value-wrapper)

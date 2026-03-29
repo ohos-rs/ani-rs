@@ -115,12 +115,19 @@ fn generate_type_conversion(
 ) -> TokenStream {
     match ani_type {
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
-        AniType::String(s @ (StringType::String | StringType::Str)) => {
-            generate_string_type_conversion(param_name, converted_name, s, on_error_return)
-        }
-        AniType::String(_) => {
-            generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
-        }
+        AniType::String(
+            s @ (StringType::String
+            | StringType::Str
+            | StringType::CStr
+            | StringType::OsStr
+            | StringType::Path),
+        ) => generate_string_type_conversion(param_name, converted_name, s, on_error_return),
+        AniType::String(_) => generate_string_wrapper_from_ani_conversion(
+            param_name,
+            converted_name,
+            ty,
+            on_error_return,
+        ),
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
         }
@@ -137,22 +144,24 @@ fn generate_type_conversion_with_custom_error(
 ) -> TokenStream {
     match ani_type {
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
-        AniType::String(s @ (StringType::String | StringType::Str)) => {
-            generate_string_type_conversion_with_custom_error(
-                param_name,
-                converted_name,
-                s,
-                on_error,
-            )
-        }
-        AniType::String(_) => {
-            generate_generic_from_ani_conversion_with_custom_error(
-                param_name,
-                converted_name,
-                ty,
-                on_error,
-            )
-        }
+        AniType::String(
+            s @ (StringType::String
+            | StringType::Str
+            | StringType::CStr
+            | StringType::OsStr
+            | StringType::Path),
+        ) => generate_string_type_conversion_with_custom_error(
+            param_name,
+            converted_name,
+            s,
+            on_error,
+        ),
+        AniType::String(_) => generate_string_wrapper_from_ani_conversion_with_custom_error(
+            param_name,
+            converted_name,
+            ty,
+            on_error,
+        ),
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion_with_custom_error(
                 param_name,
@@ -195,9 +204,15 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::Wrapper(WrapperType::Vec(_))
             | AniType::Wrapper(WrapperType::Ref(_))
             | AniType::String(StringType::CString)
+            | AniType::String(StringType::CStr)
+            | AniType::String(StringType::OsStr)
+            | AniType::String(StringType::Path)
+            | AniType::String(StringType::OsString)
             | AniType::String(StringType::PathBuf)
             | AniType::String(StringType::BoxStr)
+            | AniType::String(StringType::BoxPath)
             | AniType::String(StringType::CowStr)
+            | AniType::String(StringType::CowPath)
     )
 }
 
@@ -255,7 +270,51 @@ fn generate_string_type_conversion(
             };
             let #converted_name = #converted_name.as_str();
         },
-        _ => unreachable!("generate_string_type_conversion only supports String and &str"),
+        StringType::OsStr => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::ffi::OsString = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_os_str();
+            }
+        }
+        StringType::Path => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::path::PathBuf = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_path();
+            }
+        }
+        StringType::CStr => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::ffi::CString = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_c_str();
+            }
+        }
+        _ => unreachable!(
+            "generate_string_type_conversion only supports String, &str, &OsStr, &Path, and &CStr"
+        ),
     }
 }
 
@@ -287,9 +346,88 @@ fn generate_string_type_conversion_with_custom_error(
             };
             let #converted_name = #converted_name.as_str();
         },
-        _ => {
-            unreachable!("generate_string_type_conversion_with_custom_error only supports String and &str")
+        StringType::OsStr => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::ffi::OsString = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_os_str();
+            }
         }
+        StringType::Path => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::path::PathBuf = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_path();
+            }
+        }
+        StringType::CStr => {
+            let owned_name = format_ident!("{}_owned", converted_name);
+            quote! {
+                let #owned_name: std::ffi::CString = {
+                    let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+                    let ani_str = ani::types::AniString::from_raw(#param_name);
+                    match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                        Ok(value) => value,
+                        Err(e) => { #on_error }
+                    }
+                };
+                let #converted_name = #owned_name.as_c_str();
+            }
+        }
+        _ => unreachable!(
+            "generate_string_type_conversion_with_custom_error only supports String, &str, &OsStr, &Path, and &CStr"
+        ),
+    }
+}
+
+fn generate_string_wrapper_from_ani_conversion(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+    on_error_return: &TokenStream,
+) -> TokenStream {
+    let on_error = generate_param_conversion_error(on_error_return);
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            let ani_str = unsafe { ani::types::AniString::from_raw(#param_name) };
+            match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
+        };
+    }
+}
+
+fn generate_string_wrapper_from_ani_conversion_with_custom_error(
+    param_name: &Ident,
+    converted_name: &Ident,
+    ty: &Type,
+    on_error: &TokenStream,
+) -> TokenStream {
+    quote! {
+        let #converted_name: #ty = {
+            let env_wrapper = ani::env::Env::from_raw_unchecked(env);
+            let ani_str = unsafe { ani::types::AniString::from_raw(#param_name) };
+            match ani::conversions::FromAni::from_ani(&env_wrapper, ani_str) {
+                Ok(v) => v,
+                Err(e) => { #on_error }
+            }
+        };
     }
 }
 
@@ -556,9 +694,15 @@ fn is_to_ani_raw_string_type(ani_type: &AniType) -> bool {
     matches!(
         ani_type,
         AniType::String(StringType::CString)
+            | AniType::String(StringType::CStr)
+            | AniType::String(StringType::OsStr)
+            | AniType::String(StringType::OsString)
+            | AniType::String(StringType::Path)
             | AniType::String(StringType::PathBuf)
             | AniType::String(StringType::BoxStr)
+            | AniType::String(StringType::BoxPath)
             | AniType::String(StringType::CowStr)
+            | AniType::String(StringType::CowPath)
     )
 }
 
@@ -701,8 +845,18 @@ mod tests {
         let arg: FnArg = parse_quote!(value: std::ffi::CString);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
-        assert!(code.contains("CString as ani :: conversions :: FromAni"));
-        assert!(code.contains(":: Input"));
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
+    }
+
+    #[test]
+    fn param_conversion_borrowed_cstr_uses_owned_cstring_buffer() {
+        let arg: FnArg = parse_quote!(value: &std::ffi::CStr);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("std :: ffi :: CString"));
+        assert!(code.contains("as_c_str"));
+        assert!(code.contains("FromAni :: from_ani"));
     }
 
     #[test]
@@ -710,8 +864,37 @@ mod tests {
         let arg: FnArg = parse_quote!(value: std::path::PathBuf);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
-        assert!(code.contains("PathBuf as ani :: conversions :: FromAni"));
-        assert!(code.contains(":: Input"));
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
+    }
+
+    #[test]
+    fn param_conversion_borrowed_path_uses_owned_pathbuf_buffer() {
+        let arg: FnArg = parse_quote!(value: &std::path::Path);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("std :: path :: PathBuf"));
+        assert!(code.contains("as_path"));
+        assert!(code.contains("FromAni :: from_ani"));
+    }
+
+    #[test]
+    fn param_conversion_os_string_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: std::ffi::OsString);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
+    }
+
+    #[test]
+    fn param_conversion_borrowed_os_str_uses_owned_os_string_buffer() {
+        let arg: FnArg = parse_quote!(value: &std::ffi::OsStr);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("std :: ffi :: OsString"));
+        assert!(code.contains("as_os_str"));
+        assert!(code.contains("FromAni :: from_ani"));
     }
 
     #[test]
@@ -719,8 +902,17 @@ mod tests {
         let arg: FnArg = parse_quote!(value: Box<str>);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
-        assert!(code.contains("Box < str > as ani :: conversions :: FromAni"));
-        assert!(code.contains(":: Input"));
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
+    }
+
+    #[test]
+    fn param_conversion_box_path_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: Box<std::path::Path>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
     }
 
     #[test]
@@ -728,8 +920,17 @@ mod tests {
         let arg: FnArg = parse_quote!(value: std::borrow::Cow<'static, str>);
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
-        assert!(code.contains("Cow < 'static , str > as ani :: conversions :: FromAni"));
-        assert!(code.contains(":: Input"));
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
+    }
+
+    #[test]
+    fn param_conversion_cow_path_uses_typed_from_ani() {
+        let arg: FnArg = parse_quote!(value: std::borrow::Cow<'static, std::path::Path>);
+        let on_error_return = quote! { return Default::default(); };
+        let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
+        assert!(code.contains("FromAni :: from_ani"));
+        assert!(code.contains("AniString :: from_raw"));
     }
 
     #[test]
@@ -995,6 +1196,24 @@ mod tests {
     }
 
     #[test]
+    fn return_conversion_os_string_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> std::ffi::OsString);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
+    fn return_conversion_borrowed_os_str_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> &std::ffi::OsStr);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
     fn return_conversion_box_str_uses_to_ani_into_raw() {
         let output: ReturnType = parse_quote!(-> Box<str>);
         let code = generate_return_conversion(&output).to_string();
@@ -1004,8 +1223,44 @@ mod tests {
     }
 
     #[test]
+    fn return_conversion_box_path_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> Box<std::path::Path>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
+    fn return_conversion_borrowed_path_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> &std::path::Path);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
     fn return_conversion_cow_str_uses_to_ani_into_raw() {
         let output: ReturnType = parse_quote!(-> std::borrow::Cow<'static, str>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
+    fn return_conversion_cow_path_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> std::borrow::Cow<'static, std::path::Path>);
+        let code = generate_return_conversion(&output).to_string();
+        assert!(code.contains("ToAni :: to_ani"));
+        assert!(code.contains("into_raw"));
+        assert!(!code.contains("create_string"));
+    }
+
+    #[test]
+    fn return_conversion_borrowed_cstr_uses_to_ani_into_raw() {
+        let output: ReturnType = parse_quote!(-> &std::ffi::CStr);
         let code = generate_return_conversion(&output).to_string();
         assert!(code.contains("ToAni :: to_ani"));
         assert!(code.contains("into_raw"));

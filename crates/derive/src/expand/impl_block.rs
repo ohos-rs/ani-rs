@@ -123,6 +123,7 @@ struct ProcessedMethod {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MethodReceiver {
     None,
+    Owned,
     Ref,
     RefMut,
 }
@@ -796,10 +797,7 @@ fn analyze_method_receiver(method: &syn::ImplItemFn) -> syn::Result<MethodReceiv
     };
 
     if receiver.reference.is_none() {
-        return Err(syn::Error::new_spanned(
-            receiver,
-            "#[ani] impl methods only support `&self` and `&mut self`; by-value `self` is not supported yet",
-        ));
+        return Ok(MethodReceiver::Owned);
     }
 
     if receiver.mutability.is_some() {
@@ -972,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_expansion_rejects_by_value_self_methods() {
+    fn impl_expansion_supports_owned_receiver_methods() {
         let attrs = BindgenAttrs {
             class: Some("Widget".to_string()),
             ..Default::default()
@@ -987,7 +985,9 @@ mod tests {
         };
 
         let expanded = expand_impl(attrs, impl_block, TokenStream::new()).to_string();
-        assert!(expanded.contains("only support `&self` and `&mut self`"));
+        assert!(expanded.contains("FromAni :: from_ani"));
+        assert!(expanded.contains("__ani_self . consume"));
+        assert!(!expanded.contains("write_back_to_ani_object"));
     }
 
     #[test]

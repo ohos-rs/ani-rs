@@ -7,7 +7,7 @@
 //! and `ANI_Constructor` collects and executes all registrations.
 
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::sync::RwLock;
 
@@ -70,14 +70,14 @@ impl BindingTarget {
 }
 
 /// Deferred binding entry collected during registration callbacks.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PendingBindingEntry {
     /// Binding destination.
     pub target: BindingTarget,
-    /// Pointer to static C string for function name.
-    pub name: usize,
-    /// Pointer to static C string for function signature.
-    pub signature: usize,
+    /// Static function name.
+    pub name: &'static str,
+    /// Static function signature.
+    pub signature: &'static str,
     /// Native callback function pointer.
     pub pointer: usize,
 }
@@ -136,8 +136,8 @@ pub fn queue_binding(
 ) -> sys::ani_status {
     let entry = PendingBindingEntry {
         target,
-        name: name.as_ptr() as usize,
-        signature: signature.as_ptr() as usize,
+        name,
+        signature,
         pointer: pointer as usize,
     };
     PENDING_BINDINGS
@@ -145,6 +145,45 @@ pub fn queue_binding(
         .expect("Failed to acquire write lock for PENDING_BINDINGS")
         .push(entry);
     sys::ani_status_ANI_OK
+}
+
+fn prepare_grouped_bindings(
+    pending: &[PendingBindingEntry],
+    debug: bool,
+) -> std::result::Result<BTreeMap<BindingTarget, Vec<PendingBindingEntry>>, sys::ani_status> {
+    let mut grouped: BTreeMap<BindingTarget, Vec<PendingBindingEntry>> = BTreeMap::new();
+    for entry in pending.iter().copied() {
+        grouped.entry(entry.target).or_default().push(entry);
+    }
+
+    for (target, entries) in grouped.iter_mut() {
+        entries.sort_by(|lhs, rhs| {
+            lhs.name
+                .cmp(rhs.name)
+                .then(lhs.signature.cmp(rhs.signature))
+                .then(lhs.pointer.cmp(&rhs.pointer))
+        });
+
+        for pair in entries.windows(2) {
+            let lhs = pair[0];
+            let rhs = pair[1];
+            if lhs.name == rhs.name && lhs.signature == rhs.signature {
+                eprintln!(
+                    "[ani] duplicate native binding target={target:?} name={} sig={} first_ptr={:p} second_ptr={:p}",
+                    lhs.name,
+                    lhs.signature,
+                    lhs.pointer as *const c_void,
+                    rhs.pointer as *const c_void
+                );
+                if debug {
+                    eprintln!("[ani] duplicate binding aborting registration");
+                }
+                return Err(sys::ani_status_ANI_ALREADY_BINDED);
+            }
+        }
+    }
+
+    Ok(grouped)
 }
 
 /// Queue a module-level native function binding.
@@ -432,17 +471,10 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         .read()
         .expect("Failed to acquire read lock for PENDING_BINDINGS");
 
-    let mut grouped: BTreeMap<BindingTarget, Vec<sys::ani_native_function>> = BTreeMap::new();
-    for entry in pending.iter() {
-        grouped
-            .entry(entry.target)
-            .or_default()
-            .push(sys::ani_native_function {
-                name: entry.name as *const c_char,
-                signature: entry.signature as *const c_char,
-                pointer: entry.pointer as *const c_void,
-            });
-    }
+    let grouped = match prepare_grouped_bindings(&pending, debug) {
+        Ok(grouped) => grouped,
+        Err(status) => return status,
+    };
     drop(pending);
 
     if grouped.is_empty() {
@@ -457,33 +489,27 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         // pointer to `ani_env`, whose first field points to API table.
         &*(*env)
     };
-    for (target, functions) in grouped {
+    for (target, entries) in grouped {
+        let functions = entries
+            .iter()
+            .map(|entry| sys::ani_native_function {
+                name: entry.name.as_ptr() as *const c_char,
+                signature: entry.signature.as_ptr() as *const c_char,
+                pointer: entry.pointer as *const c_void,
+            })
+            .collect::<Vec<_>>();
         if debug {
             eprintln!(
                 "[ani] bind target={target:?} descriptor={} count={}",
                 target.descriptor(),
                 functions.len()
             );
-            for (idx, f) in functions.iter().enumerate() {
-                let name = if f.name.is_null() {
-                    "<null>"
-                } else {
-                    // SAFETY: debug-only diagnostics for static C string literals.
-                    unsafe { CStr::from_ptr(f.name) }
-                        .to_str()
-                        .unwrap_or("<invalid>")
-                };
-                let sig = if f.signature.is_null() {
-                    "<null>"
-                } else {
-                    // SAFETY: debug-only diagnostics for static C string literals.
-                    unsafe { CStr::from_ptr(f.signature) }
-                        .to_str()
-                        .unwrap_or("<invalid>")
-                };
+            for (idx, (entry, f)) in entries.iter().zip(functions.iter()).enumerate() {
                 eprintln!(
                     "[ani]   fn[{idx}] name={name} sig={sig} ptr={:p}",
-                    f.pointer
+                    f.pointer,
+                    name = entry.name,
+                    sig = entry.signature
                 );
             }
         }
@@ -647,17 +673,38 @@ mod tests {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestEnvVarGuard {
+        key: String,
+        previous: Option<String>,
         _lock: MutexGuard<'static, ()>,
     }
 
     impl TestEnvVarGuard {
+        fn unset(key: &str) -> Self {
+            let lock = TEST_LOCK.lock().expect("lock test mutex");
+            let previous = std::env::var(key).ok();
+            // Safety: tests holding this guard serialize process-wide env mutation.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self {
+                key: key.to_string(),
+                previous,
+                _lock: lock,
+            }
+        }
+
         fn set(key: &str, value: &str) -> Self {
             let lock = TEST_LOCK.lock().expect("lock test mutex");
+            let previous = std::env::var(key).ok();
             // Safety: tests holding this guard serialize process-wide env mutation.
             unsafe {
                 std::env::set_var(key, value);
             }
-            Self { _lock: lock }
+            Self {
+                key: key.to_string(),
+                previous,
+                _lock: lock,
+            }
         }
     }
 
@@ -665,13 +712,17 @@ mod tests {
         fn drop(&mut self) {
             // Safety: tests holding this guard serialize process-wide env mutation.
             unsafe {
-                std::env::remove_var("ANI_TEST_MODULE_NAME");
+                match &self.previous {
+                    Some(previous) => std::env::set_var(&self.key, previous),
+                    None => std::env::remove_var(&self.key),
+                }
             }
         }
     }
 
     #[test]
     fn descriptor_candidates_non_builtin_has_defmodule_fallback() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let candidates = descriptor_candidates("a.b.C");
         assert_eq!(
             candidates,
@@ -681,6 +732,7 @@ mod tests {
 
     #[test]
     fn descriptor_candidates_builtin_has_no_defmodule_fallback() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let candidates = descriptor_candidates("std.core.String");
         assert_eq!(candidates, vec!["std.core.String".to_string()]);
     }
@@ -762,5 +814,66 @@ mod tests {
 
         drop(pending);
         clear_registrations();
+    }
+
+    #[test]
+    fn prepare_grouped_bindings_sorts_entries_deterministically() {
+        let _guard = TEST_LOCK.lock().expect("lock test mutex");
+        clear_registrations();
+
+        let target = BindingTarget::Module("demo.Entry");
+        let _ = queue_binding(target, "zeta", "I:I", 3usize as *const c_void);
+        let _ = queue_binding(target, "alpha", "J:J", 2usize as *const c_void);
+        let _ = queue_binding(target, "alpha", "I:I", 1usize as *const c_void);
+
+        let pending = PENDING_BINDINGS.read().expect("read pending");
+        let grouped = prepare_grouped_bindings(&pending, false).expect("grouping should succeed");
+        let functions = grouped.get(&target).expect("target must exist");
+        let order = functions
+            .iter()
+            .map(|entry| (entry.name, entry.signature, entry.pointer))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            vec![("alpha", "I:I", 1), ("alpha", "J:J", 2), ("zeta", "I:I", 3)]
+        );
+    }
+
+    #[test]
+    fn prepare_grouped_bindings_rejects_duplicate_name_and_signature_per_target() {
+        let _guard = TEST_LOCK.lock().expect("lock test mutex");
+        clear_registrations();
+
+        let target = BindingTarget::Namespace("demo.ns");
+        let _ = queue_binding(target, "dup", "I:I", 1usize as *const c_void);
+        let _ = queue_binding(target, "dup", "I:I", 2usize as *const c_void);
+
+        let pending = PENDING_BINDINGS.read().expect("read pending");
+        let status =
+            prepare_grouped_bindings(&pending, false).expect_err("duplicate should be rejected");
+        assert_eq!(status, sys::ani_status_ANI_ALREADY_BINDED);
+    }
+
+    #[test]
+    fn prepare_grouped_bindings_allows_same_name_and_signature_for_distinct_targets() {
+        let _guard = TEST_LOCK.lock().expect("lock test mutex");
+        clear_registrations();
+
+        let _ = queue_binding(
+            BindingTarget::Module("demo.Entry"),
+            "same",
+            "I:I",
+            1usize as *const c_void,
+        );
+        let _ = queue_binding(
+            BindingTarget::Namespace("demo.ns"),
+            "same",
+            "I:I",
+            2usize as *const c_void,
+        );
+
+        let pending = PENDING_BINDINGS.read().expect("read pending");
+        let grouped = prepare_grouped_bindings(&pending, false).expect("targets should coexist");
+        assert_eq!(grouped.len(), 2);
     }
 }

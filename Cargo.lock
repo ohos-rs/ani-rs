@@ -153,6 +153,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-example-derive-shapes"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
 name = "ani-example-enum-derive"
 version = "0.1.0"
 dependencies = [
@@ -363,6 +371,14 @@ dependencies = [
 
 [[package]]
 name = "ani-example-setfield"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-string-like-owned"
 version = "0.1.0"
 dependencies = [
  "ani",

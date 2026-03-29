@@ -53,6 +53,7 @@ pub struct EtsObjectMemberDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct EtsObjectDecl {
     target: String,
+    type_params: Vec<String>,
     members: Vec<EtsObjectMemberDecl>,
 }
 
@@ -171,6 +172,7 @@ struct RenderedPropertySlot {
 
 #[derive(Default)]
 struct ClassNode {
+    type_params: Vec<String>,
     object_members: Vec<EtsObjectMemberDecl>,
     callable_members: Vec<RenderedClassMember>,
     property_slots: BTreeMap<(ClassMemberScope, String), RenderedPropertySlot>,
@@ -224,7 +226,12 @@ impl NamespaceNode {
         });
     }
 
-    fn insert_object_class(&mut self, path: &str, members: &[EtsObjectMemberDecl]) {
+    fn insert_object_class(
+        &mut self,
+        path: &str,
+        type_params: &[String],
+        members: &[EtsObjectMemberDecl],
+    ) {
         let mut parts = path
             .split('.')
             .filter(|s| !s.is_empty())
@@ -237,6 +244,9 @@ impl NamespaceNode {
         }
 
         let class = node.classes.entry(class_name).or_default();
+        if class.type_params.is_empty() && !type_params.is_empty() {
+            class.type_params = type_params.to_vec();
+        }
         for member in members {
             if !class.object_members.contains(member) {
                 class.object_members.push(member.clone());
@@ -357,8 +367,13 @@ fn render_class_block(
     } else {
         String::new()
     };
+    let type_params = if class.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", class.type_params.join(", "))
+    };
     out.push_str(&format!(
-        "{pad}export class {class_name}{iterator_suffix} {{\n"
+        "{pad}export class {class_name}{type_params}{iterator_suffix} {{\n"
     ));
 
     let mut object_members = class.object_members.clone();
@@ -596,7 +611,7 @@ fn render_decls(
     let mut root = NamespaceNode::default();
 
     for object in objects {
-        root.insert_object_class(&object.target, &object.members);
+        root.insert_object_class(&object.target, &object.type_params, &object.members);
     }
 
     for class_member in class_members {
@@ -711,7 +726,11 @@ pub fn emit_compile_ets_class_member(
     write_ets_file(&path, file_state);
 }
 
-pub fn emit_compile_ets_object(target: &str, members: &[EtsObjectMemberDecl]) {
+pub fn emit_compile_ets_object(
+    target: &str,
+    type_params: &[String],
+    members: &[EtsObjectMemberDecl],
+) {
     let Some(path) = output_path() else {
         return;
     };
@@ -722,6 +741,7 @@ pub fn emit_compile_ets_object(target: &str, members: &[EtsObjectMemberDecl]) {
     let file_state = state.entry(path.clone()).or_default();
     let item = EtsObjectDecl {
         target: target.to_string(),
+        type_params: type_params.to_vec(),
         members: members.to_vec(),
     };
     if !file_state.objects.contains(&item) {
@@ -1004,9 +1024,7 @@ fn collect_surface_union_parts(ty: &AniType, context: EtsRenderContext) -> Optio
     let mut parts = UnionParts::default();
     match ty {
         AniType::Primitive(p) => parts.push_variant(primitive_to_ets(p).to_string()),
-        AniType::String(_) => {
-            parts.push_variant("string".to_string())
-        }
+        AniType::String(_) => parts.push_variant("string".to_string()),
         AniType::Null => parts.has_null = true,
         AniType::Undefined => parts.has_undefined = true,
         AniType::Wrapper(WrapperType::Option(inner)) => {
@@ -1837,6 +1855,7 @@ get age(): int {
         let objects = vec![
             EtsObjectDecl {
                 target: "UserProfile".to_string(),
+                type_params: Vec::new(),
                 members: vec![
                     EtsObjectMemberDecl {
                         name: "id".to_string(),
@@ -1854,6 +1873,7 @@ get age(): int {
             },
             EtsObjectDecl {
                 target: "example.Person".to_string(),
+                type_params: Vec::new(),
                 members: vec![EtsObjectMemberDecl {
                     name: "active".to_string(),
                     kind: EtsObjectMemberKind::Field,
@@ -1878,6 +1898,26 @@ get age(): int {
         assert!(rendered.contains("active: boolean = false;"));
         assert!(rendered.contains("native getName(): string;"));
         assert!(rendered.contains("static native create(name: string): long;"));
+    }
+
+    #[test]
+    fn test_render_decls_preserves_object_class_type_params() {
+        let objects = vec![EtsObjectDecl {
+            target: "models.GenericBox".to_string(),
+            type_params: vec!["T".to_string(), "U".to_string()],
+            members: vec![EtsObjectMemberDecl {
+                name: "value".to_string(),
+                kind: EtsObjectMemberKind::Field,
+                is_private: false,
+                rendered: "value: T = null as T;".to_string(),
+            }],
+        }];
+
+        let rendered = render_decls(&[], &objects, &[]);
+
+        assert!(rendered.contains("export namespace models {"));
+        assert!(rendered.contains("export class GenericBox<T, U> {"));
+        assert!(rendered.contains("value: T = null as T;"));
     }
 
     #[test]
@@ -2504,11 +2544,11 @@ set name(name: string | null | undefined) {
     #[test]
     fn test_generate_fn_ets_decl_maps_supported_non_object_fallback_types() {
         let sig: Signature = syn::parse_quote! {
-            fn normalize(path: std::ffi::CString, offset: isize, len: usize) -> usize
+            fn normalize(path: std::ffi::OsString, borrowed_os: &std::ffi::OsStr, boxed: Box<std::path::Path>, borrowed_path: &std::path::Path, borrowed_c: &std::ffi::CStr, borrowed: std::borrow::Cow<'static, std::path::Path>, offset: isize, len: usize) -> usize
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "normalize", false),
-            "normalize(path: string, offset: long, len: long): long"
+            "normalize(path: string, borrowed_os: string, boxed: string, borrowed_path: string, borrowed_c: string, borrowed: string, offset: long, len: long): long"
         );
     }
 
@@ -2559,6 +2599,9 @@ set name(name: string | null | undefined) {
         let resolver_ty: Type = syn::parse_quote!(AniResolver);
         assert_eq!(ets_public_type_for_syn_type(&resolver_ty), "AniResolver");
 
+        let deferred_ty: Type = syn::parse_quote!(Deferred<String>);
+        assert_eq!(ets_public_type_for_syn_type(&deferred_ty), "AniResolver");
+
         let global_ty: Type = syn::parse_quote!(GlobalRef);
         assert_eq!(ets_public_type_for_syn_type(&global_ty), "GlobalRef");
 
@@ -2596,6 +2639,17 @@ set name(name: string | null | undefined) {
         assert_eq!(
             generate_fn_ets_decl(&sig, "summarize", false),
             "summarize(input: Record<string, int>): Record<string, string>"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_ets_decl_maps_deferred_to_resolver_handle() {
+        let sig: Signature = syn::parse_quote! {
+            fn settle(deferred: Deferred<String>, value: String) -> Deferred<String>
+        };
+        assert_eq!(
+            generate_fn_ets_decl(&sig, "settle", false),
+            "settle(deferred: AniResolver, value: string): AniResolver"
         );
     }
 

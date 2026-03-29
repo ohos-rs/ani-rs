@@ -49,7 +49,7 @@ use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString};
 use crate::{ani_call, ani_call_2ret};
 
 use super::function::{Function, FunctionRef, ToAniArgs};
-use super::{FromAni, ToAni as ConversionToAni};
+use super::{FromAni, ToAni as ConversionToAni, TypeInfo};
 
 /// Raw Promise value in ANI
 ///
@@ -74,6 +74,16 @@ use super::{FromAni, ToAni as ConversionToAni};
 pub struct PromiseRaw<'env, T = ()> {
     inner: sys::ani_object,
     _marker: PhantomData<(&'env (), T)>,
+}
+
+impl<T> TypeInfo for PromiseRaw<'_, T> {
+    fn type_signature() -> &'static str {
+        "Lstd/core/Promise;"
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_object"
+    }
 }
 
 impl<'env, T> PromiseRaw<'env, T> {
@@ -312,6 +322,16 @@ pub struct Deferred<T = ()> {
     _marker: PhantomData<fn() -> T>,
 }
 
+impl<T> TypeInfo for Deferred<T> {
+    fn type_signature() -> &'static str {
+        "Lstd/core/Object;"
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_resolver"
+    }
+}
+
 /// Value that can resolve an ANI Promise.
 pub trait PromiseValue<'env>: Sized {
     /// Convert the Rust value into a reference value that ANI Promise APIs accept.
@@ -438,6 +458,12 @@ where
 }
 
 impl<T> Deferred<T> {
+    /// Create a new typed deferred/promise pair.
+    #[inline]
+    pub fn new<'env>(env: &Env<'env>) -> Result<(Self, PromiseRaw<'env, T>)> {
+        PromiseRaw::deferred(env)
+    }
+
     /// Build a typed deferred facade from an existing raw resolver.
     #[inline]
     pub fn from_resolver(resolver: AniResolver) -> Self {
@@ -561,6 +587,44 @@ impl<T> Deferred<T> {
 // Type Conversions
 // ============================================================================
 
+impl<'env, T> ConversionToAni<'env> for PromiseRaw<'env, T> {
+    type Output = sys::ani_object;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.into_raw())
+    }
+}
+
+impl<'env, T> FromAni<'env> for PromiseRaw<'env, T> {
+    type Input = sys::ani_object;
+
+    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(Status::InvalidArgs, "Null pointer: promise"));
+        }
+        Ok(unsafe { Self::from_raw(value) })
+    }
+}
+
+impl<'env, T> ConversionToAni<'env> for Deferred<T> {
+    type Output = sys::ani_resolver;
+
+    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
+        Ok(self.into_raw())
+    }
+}
+
+impl<'env, T> FromAni<'env> for Deferred<T> {
+    type Input = sys::ani_resolver;
+
+    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(Status::InvalidArgs, "Null pointer: resolver"));
+        }
+        Ok(Self::from_resolver(unsafe { AniResolver::from_raw(value) }))
+    }
+}
+
 impl<'env, T> From<PromiseRaw<'env, T>> for AniObject<'env> {
     fn from(promise: PromiseRaw<'env, T>) -> Self {
         unsafe { AniObject::from_raw(promise.inner) }
@@ -681,10 +745,22 @@ mod tests {
             let _ = deferred
                 .as_resolver()
                 .reject_with_error(env, Error::new(Status::InvalidArgs, "bad"));
+            let _ = env.promise_resolved("done".to_string());
+            let _ = env.promise_rejected::<String>("boom");
+            let _ = env
+                .promise_rejected_with_error::<String, _>(Error::new(Status::InvalidArgs, "boom"));
 
             let deferred = deferred.cast::<bool>();
             let resolver = deferred.into_resolver();
             let _: Deferred<bool> = resolver.into_deferred();
+            let _ = Deferred::<String>::new(env);
+            let _ = PromiseRaw::<String>::from_ani(
+                env,
+                PromiseRaw::<String>::resolve_string(env, "ok")
+                    .expect("promise should resolve")
+                    .into_raw(),
+            );
+            let _ = Deferred::<String>::from_ani(env, resolver.as_raw());
         }
 
         let _ = compile;

@@ -1,6 +1,6 @@
-# ani-rs vs napi-rs 设计差异梳理与对齐建议
+# ani-rs vs napi-rs 设计差异梳理与当前对齐结果
 
-本文档以 `napi-rs` 的抽象层次与工程化实践为参照，梳理当前 `ani-rs`（ArkTS 1.2 ANI 绑定库）在设计与能力面上的差异点，并给出在不违背 ArkTS/ANI 语义约束下可落地的优化方向。
+本文档以 `napi-rs` 的抽象层次与工程化实践为参照，梳理当前 `ani-rs`（ArkTS 1.2 ANI 绑定库）在设计与能力面上的差异点，并记录本轮已经完成的对齐项与保留下来的 runtime 边界。
 
 ## 1. 运行时与 ABI 约束差异
 
@@ -32,10 +32,11 @@
 - `ani`：Env/VM/type wrappers + conversions + module_register + tokio bridge
 - `ani-derive`：宏解析 + wrapper 生成 + ETS 导出
 
-对齐建议：
+当前结果：
 
-- 保持三层结构即可，但要把 “用户能直接用的高层模式” 尽量收敛到 `ani::prelude`（类似 `napi::bindgen_prelude`）
-- `ani-derive` 的 wrapper 生成应承担更多 “安全边界” 工作（panic 边界、async 语义、参数保活策略等）
+- 继续保持三层结构：`ani-sys` / `ani` / `ani-derive`
+- `ani::prelude` 已收敛为高层默认入口，覆盖 `Env`、错误类型、VM、主要 runtime handle、conversion traits/helpers
+- `ani-derive` 的 wrapper 现在已经承担 panic 边界、async Promise 包装、参数转换和一批 ref-backed 参数保活职责
 
 ## 3. 注册模型差异
 
@@ -50,10 +51,13 @@
 - `ANI_Constructor` 中先执行 init，再执行 registrations
 - 注册回调阶段只做 “enqueue”，真正 bind 阶段按目标分组后调用 `*_BindNativeFunctions/Methods`
 
-对齐建议：
+当前结果：
 
 - 当前 “enqueue + 分组 bind” 是合理的 ANI 适配方式
-- 持续保证注册的确定性（同 target 下排序、重复绑定诊断）可以进一步向 napi-rs 的稳定性靠拢
+- 注册确定性已进一步收口：
+  - 同 target 下的 pending bindings 会按 `name + signature + pointer` 稳定排序
+  - 同 target 下重复的 `name + signature` 组合会在 bind 前诊断并返回 `ANI_ALREADY_BINDED`
+  - 相关单测已覆盖排序稳定性、重复绑定拒绝、跨 target 同名共存
 
 ## 4. 类型系统与转换差异
 
@@ -70,10 +74,10 @@
   - primitive element 仍走 fixed-array signature
   - ref/object element 的 ArkTS public type 仍保持 `Array<string>` / `Array<User>`，但 bind signature 会收敛为 `std.core.Array`
 
-对齐建议：
+当前结果：
 
 - 继续把 “类型表达精确度” 当作一等公民（减少 `Unknown -> Object`）
-- 对运行时 handle（`AniModule/AniNamespace/AniVariable/...`）明确 “ETS public 表达” 与 “opaque handle 边界”，避免用户误用跨线程/跨 scope 的句柄
+- 运行时 handle（`AniModule/AniNamespace/AniVariable/...`）的 ETS public type model 已定型，object-backed handles 会导出为显式 opaque public type
 
 ## 5. Async / Promise 语义差异
 
@@ -91,10 +95,16 @@
 - `RefContainer` 现在也能统一接住 `GlobalRef` / `Ref<T>` / `FunctionRef<...>` 作为 async bridge source，manual tokio helper 与宏路径之间的心智模型更接近
 - Promise 路径开始收敛到同一套模型：`Deferred<T>` 已 typed 化，`Env::promise_new_typed<T>()` 和 `AniResolver` helper 能把 low-level resolver 流程桥回 `PromiseRaw<T> / Deferred<T>` 语义
 
-仍待对齐点：
+当前结果：
 
-- 自动托管仍未覆盖所有可能的 wrapper/handle 组合
-- 仍需继续把 `RefContainer`、`GlobalRef`、`WeakRef` 收敛成更统一的 async 使用模式
+- `#[ani(async)]` Promise 路径、manual `ani::tokio` helper、`Deferred<T>` / `AniResolver` helper 已形成统一模型
+- `RefContainer` 已覆盖 local ref、scoped `Function<'_, ...>`、注入的 `this/class`，并且 manual async helper 现在已有以下 ArkVM smoke：
+  - local object handle
+  - typed `Ref<AniObject<'static>>`
+  - `GlobalRef`
+  - `FunctionRef<...>`
+- `Ref<T>` / `FunctionRef<...>` 已具备 managed owning-handle 语义：`FromAni` 记录 VM，`Drop` 自动释放 global ref，返回 ArkTS 时重新 materialize local handle
+- 因而本轮不再把 async 使用模式作为继续推进的 TODO；剩余差异主要只在 ANI 自身没有 `ThreadsafeFunction` 等能力面时需要另做设计
 
 ## 6. panic 边界与异常模型
 
@@ -105,10 +115,11 @@
 - `#[ani]` 生成的同步 wrapper 已增加 `catch_unwind`，panic 会转为 ArkTS 异常（throw）
 - tokio async 任务的 panic 会转为 Promise rejection
 
-对齐建议：
+当前结果：
 
 - 保持 “panic 永不跨 ABI” 的硬约束
-- 后续可考虑提供可选开关（例如 `#[ani(catch_unwind = false)]`）但默认应安全
+- 默认安全策略已经落地：同步 wrapper `catch_unwind` 转 throw，tokio async panic 转 Promise rejection
+- `#[ani(catch_unwind = false)]` 一类开关当前不作为待办推进项
 
 ## 7. 声明生成差异（TS vs ETS）
 
@@ -121,30 +132,34 @@
 - 当前以 `.ets` 生成与 ArkVM smoke 验证为主
 - 尚未生成 `.d.ets` / `declare` 风格
 
-对齐建议：
+当前结果：
 
 - 先把 `.ets` 的 public signature 做到足够精确、稳定
-- 再评估是否需要 `.d.ets` 或 `declare` 风格作为发布形态（能力缺口文档已有追踪）
+- `.ets` public signature 已作为当前主发布面
+- `.d.ets` / `declare` 风格当前保留为 scope 选择，不再作为本轮待完成项
 
 ## 8. 能力缺口对照（精简版）
 
-可以直接对齐且高价值（P0/P1）：
+本轮已完成并完成回归覆盖的高价值对齐项：
 
-- `#[ani(async)]`（已落地，后续继续扩大自动托管参数/handle 范围）
+- `#[ani(async)]` Promise 导出、panic->rejection、manual/global/typed/function ref-container 路径
 - 继续收敛类型系统，减少 `Unknown -> Object`
-- 显式 `module = ...` 绑定 example 与 ArkVM smoke（已补齐，含 descriptor mismatch 场景）
-- `GlobalRef/WeakRef` 更完整的语义覆盖（含失效/GC 行为，已补基础 helper 与 ArkVM 回归）
+- 显式 `module = ...` 绑定 example 与 ArkVM smoke（含 descriptor mismatch 场景）
+- `GlobalRef/WeakRef` 更完整的语义覆盖（含失效/GC 行为、helper、ArkVM 回归）
+- 注册阶段的稳定排序与重复绑定诊断
 
 不一定能对齐或需要重设计：
 
 - 类似 `ThreadsafeFunction` 的跨线程回调：取决于 ANI 是否提供等价能力面（需要先确认 sys API）
 
-## 9. 推荐落地顺序
+## 9. 收口结论
 
-建议继续沿用 `docs/capability-gap.md` 的 P0 顺序推进：
+原先按 `docs/capability-gap.md` 列出的 P0 顺序项已经处理完成：
 
-1. 完善 `#[ani(async)]` 的可用模式与回归覆盖
-2. `Unknown -> Object` 继续收口
-3. `module = ...` example 与回归（已补齐 smoke，含复杂 descriptor 场景）
-4. `GlobalRef/WeakRef` example 与回归
-5. handle public type model 统一（`AniModule/AniNamespace/AniVariable/AniResolver` 等）
+1. `#[ani(async)]` 的可用模式与回归覆盖已补齐
+2. `Unknown -> Object` 已继续收口到少数兜底路径
+3. `module = ...` example 与复杂 descriptor 回归已补齐
+4. `GlobalRef/WeakRef` example 与生命周期/GC 回归已补齐
+5. handle public type model 已统一
+
+当前这份文档中不再保留可继续执行的任务列表；剩余内容仅是运行时边界或 public-API scope 决策。
