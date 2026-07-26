@@ -1,146 +1,150 @@
 ---
-title: 测试与 ArkVM 回归
-description: Rust、ETS、ArkVM Docker 与真实 OpenHarmony QEMU 的四层验证路径。
+title: 测试与调试
+description: 测试 Rust 逻辑、ETS 声明、ABC 和 OpenHarmony 设备侧加载。
 ---
 
-当前仓库的验证路径已经收敛成四层：
+Native 模块最好分层测试。先验证纯 Rust 逻辑，再检查生成声明，最后进入 ArkTS 与设备运行时。这样可以快速判断错误发生在哪一层。
 
-1. Rust 单测和 workspace 测试
-2. `.ets` 输出检查
-3. Docker + ArkVM example smoke
-4. OpenHarmony QEMU 系统镜像回归
+## Rust 单元测试
 
-这样区分的好处是：一旦失败，你能立刻判断是 Rust 逻辑、ETS 生成，还是 ArkVM 运行时链路出了问题。
+导出函数仍是普通 Rust 函数，可以直接测试：
 
-## 1. Rust 单测
+```rust
+#[ani]
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
 
-本地先跑 workspace 测试：
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-```bash
-cargo test --workspace -j 1
+    #[test]
+    fn adds_values() {
+        assert_eq!(add(20, 22), 42);
+    }
+}
 ```
 
-如果你在 Docker 环境里复现 example 测试链路，记得显式设置：
-
 ```bash
-export ANI_TEST_MODULE_NAME=arkvm_test
+cargo test
 ```
 
-这个变量是为了避免测试阶段的模块 descriptor 和 ArkVM smoke 环境互相污染。
+把不依赖 `Env` 的业务逻辑放在普通 Rust 函数中，native wrapper 只负责转换和调用，测试会更简单。
 
-## 2. ETS 输出检查
-
-仓库脚本会：
-
-- 清掉旧的 `.d.ets`
-- 构建所有 example
-- 检查每个 example 都产出了 `.ets`
-- 确认没有 `.d.ets`
-- 确认 `.ets` 里包含 `native` 和 `loadLibrary(...)`
-
-命令：
+## 检查 ETS 声明
 
 ```bash
-bash ./scripts/check_example_ets.sh
+cargo build
+sed -n '1,200p' target/ani-ets/my_ani_module.ets
 ```
 
-## 3. ArkVM Docker 回归
+至少检查：
 
-真实运行时回归走 `scripts/run_arkvm_examples_ubuntu.sh`。脚本会：
+- `loadLibrary(...)` 与实际 `.so` 名称一致。
+- 参数、返回值和 nullish 类型符合预期。
+- class、namespace 和 overload 出现在正确 target。
+- 没有残留旧构建生成的声明。
 
-- 启动 clean Ubuntu amd64 容器
-- 安装 Rust toolchain 与构建依赖
-- 构建所有 example
-- 生成 `arkvm_test.ets`
-- 用 `es2panda` 编译出 `.abc`
-- 用 `ark` 逐个运行 example
-- 输出 `examples/arkvm_report.txt` 和 `examples/arkvm_report.tsv`
-
-基本用法：
+可以把 `ANI_ETS_OUTPUT` 指到固定路径，并把生成文件纳入快照或 diff：
 
 ```bash
-ARKVM_DIR=/path/to/x64_linux_static \
-ARK_SRC_ROOT=/path/to/arkcompiler_runtime_core \
-ANI_TEST_MODULE_NAME=arkvm_test \
-./scripts/run_arkvm_examples_ubuntu.sh
+ANI_ETS_OUTPUT=tests/expected/module.ets cargo build
+git diff -- tests/expected/module.ets
 ```
 
-如果你手里只有打包好的 ArkVM tarball，也可以通过 `ARKVM_TARBALL` 让脚本自动解压。
+## ArkTS smoke test
 
-## 4. OpenHarmony QEMU 系统镜像回归
+为每个公开 API 写少量可观察断言：
 
-`scripts/run_arkvm_examples_ohos_qemu.sh` 用于验证 ARM64 OpenHarmony QEMU
-系统镜像，而不是 DevEco Studio 模拟器或宿主机 ArkVM。脚本会：
+```ts
+import { add, greet } from './native/my_ani_module'
 
-- 用 OpenHarmony SDK 交叉编译全部 ANI 动态库
-- 用与系统镜像同源的 `es2panda` 生成 `.abc`
-- 编译一个设备侧 ANI runner
-- 把 runner、launcher ABC、测试 ABC 和 `.so` 推送到 QEMU
-- 通过系统 `libarkruntime.so`、`etsstdlib.abc` 和
-  `std.core.AbcRuntimeLinker` 加载并执行测试 ABC
-- 把逐项结果写入 `target/ohos-qemu/report.tsv`
+function assertTrue(value: boolean, message: string): void {
+  if (!value) {
+    throw new Error(message)
+  }
+}
 
-系统镜像通常不会安装独立的 `ark` 和 `es2panda` 命令，因此这条路径不能简化成
-`hdc shell ark test.abc`。它验证的是系统 Ark Runtime 直接加载外部 ABC 的能力。
+assertTrue(add(20, 22) === 42, 'add failed')
+assertTrue(greet('ArkTS') === 'Hello, ArkTS!', 'greet failed')
+```
 
-基本用法：
+如果使用独立工具链，把 smoke `.ets` 编译成 ABC：
+
+```bash
+es2panda \
+  --extension=ets \
+  --arktsconfig /path/to/arktsconfig.json \
+  --output smoke.abc \
+  smoke.ets
+```
+
+`es2panda`、`arktsconfig.json` 和目标系统 Ark Runtime 应来自兼容的 OpenHarmony 构建。
+
+## 在真实 OpenHarmony QEMU 上测试
+
+先确认连接的 target：
+
+```bash
+hdc list targets
+hdc -t 127.0.0.1:5557 shell uname -m
+```
+
+不要仅根据端口号判断环境类型。应确认它运行的是需要验证的 OpenHarmony QEMU 系统镜像，而不是 DevEco 模拟器或其他设备。
+
+把 ARM64 动态库、ABC 和 runner 推送到设备：
+
+```bash
+hdc -t 127.0.0.1:5557 shell mkdir -p /data/local/tmp/my-ani
+hdc -t 127.0.0.1:5557 file send \
+  target/aarch64-unknown-linux-ohos/release/libmy_ani_module.so \
+  /data/local/tmp/my-ani/libmy_ani_module.so
+hdc -t 127.0.0.1:5557 file send \
+  smoke.abc \
+  /data/local/tmp/my-ani/smoke.abc
+```
+
+设备镜像通常没有可直接执行的 `ark` 命令。外部 ABC 需要 runner 通过系统 `libarkruntime.so` 加载；可以复用仓库的：
 
 ```bash
 HDC_TARGET=127.0.0.1:5557 \
 OHOS_SOURCE_ROOT=/path/to/openharmony \
 DEVECO_SDK_ROOT=/path/to/openharmony-sdk \
+OHOS_QEMU_PACKAGE_FILTER=my-package \
 ./scripts/run_arkvm_examples_ohos_qemu.sh
 ```
 
-可以用 `OHOS_QEMU_PACKAGE_FILTER` 只跑部分 package，或用
-`OHOS_QEMU_CASE_TIMEOUT` 调整单项超时。
+该脚本适合仓库 example。应用项目应把相同原则集成进自己的测试任务：同源工具链编译 ABC、目标架构 `.so`、系统 Runtime 执行和明确断言。
 
-这不是 HAP 安装测试。正式应用分发仍应建立 Stage 模型 HAP，把生成的 ABC
-和 `arm64-v8a` 动态库放入应用模块后，再走签名、`hdc install` 和 Ability
-拉起流程。
+## HAP 集成测试
 
-### QEMU HAP 安装验证
+最终仍要在应用形态测试：
 
-除了外部 ABC runner，API 26 的真实 QEMU 镜像也已验证静态 ArkTS HAP：
+1. 把 `.so` 放入目标 ABI 的 `libs` 目录。
+2. 让生成 `.ets` 进入静态 ArkTS 构建。
+3. 签名并安装 HAP。
+4. 启动 Ability，调用每个关键 native API。
+5. 同时检查 ArkTS 异常和 `hilog`。
 
-- `module.json` 的 module 和 Ability 均使用 `arkTSMode: "static"`
-- 合并后的 ABC 放在 `ets/modules_static.abc`
-- ANI 动态库放在 `libs/arm64-v8a`
-- HAP 完成签名校验后，可通过 `hdc install -r` 安装并用 `aa start` 拉起
-- Ability 内调用 Rust native 方法，设备日志得到
-  `[ANI_HAP_PASS] add=42;greet=Hello, QEMU!`
+```bash
+hdc -t 127.0.0.1:5557 install -r entry-default-signed.hap
+hdc -t 127.0.0.1:5557 shell aa start \
+  -b com.example.myani \
+  -a EntryAbility
+hdc -t 127.0.0.1:5557 shell hilog -x
+```
 
-HAP 中的 ArkTS `native` 声明必须和 Rust `ANI_Constructor` 一次绑定的函数表
-完整对应。只声明实际调用的两个方法、但绑定包含更多方法时，
-`Module_BindNativeFunctions` 会返回 `ANI_NOT_FOUND`，导致模块初始化失败。
+## 推荐顺序
 
-## 文档当前对齐到的验证基线
+| 失败位置 | 首先检查 |
+| --- | --- |
+| `cargo test` | Rust 业务逻辑 |
+| `cargo build` | 宏参数、trait bound、目标 linker |
+| ETS diff | 类型推导、名称与 target |
+| ABC 编译 | ArkTS 语法与工具链版本 |
+| 动态库加载 | ABI、库名、依赖库 |
+| native bind | descriptor、签名与声明完整性 |
+| 调用崩溃或异常 | 生命周期、错误转换、线程使用 |
 
-仓库现在记录的基线是：
-
-- `cargo test --workspace -j 1` 可在 Ubuntu Docker 内通过
-- `bash ./scripts/check_example_ets.sh` 通过
-- `./scripts/run_arkvm_examples_ubuntu.sh` 已跑通
-- `examples/arkvm_report.tsv` 中 52 个 example 均为 `build=OK / abc_compile=OK / runtime=OK`
-- OpenHarmony QEMU 中 52 个 example 均为
-  `cross_build=OK / abc_compile=OK / qemu_runtime=OK`，共 393 条断言通过、0 条失败
-- 静态 ArkTS HAP 已完成签名、安装、Ability 拉起和 ANI 调用验证
-
-## 常用定位顺序
-
-如果某个能力回归失败，通常按这个顺序查：
-
-1. 先看 Rust 构建日志，确认是不是 derive 展开或 trait bound 出错
-2. 再看生成的 `.ets`，确认 public type、native decl 和 `loadLibrary(...)` 是否符合预期
-3. 最后看 ArkVM `.log`，确认是 `es2panda` 编译问题还是 runtime 执行问题
-
-## 相关文件
-
-- `scripts/check_example_ets.sh`
-- `scripts/generate_arkvm_smoke_ets.sh`
-- `scripts/run_arkvm_examples_ubuntu.sh`
-- `scripts/run_arkvm_examples_ohos_qemu.sh`
-- `scripts/ohos_ani_abc_runner.cpp`
-- `scripts/ohos_qemu_abc_launcher.ets`
-- `examples/arkvm_report.txt`
-- `examples/arkvm_report.tsv`
+常见错误的具体处理方法见 [故障排查](/guide/troubleshooting/)。

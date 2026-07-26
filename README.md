@@ -186,15 +186,16 @@ Start with:
 
 Repository docs ship as an Astro + Starlight package in the pnpm workspace at [`website/`](website/):
 
-- [`website/src/content/docs/index.mdx`](website/src/content/docs/index.mdx) - Documentation home
-- [`website/src/content/docs/guide/getting-started.md`](website/src/content/docs/guide/getting-started.md) - Quick start
-- [`website/src/content/docs/guide/compatibility.md`](website/src/content/docs/guide/compatibility.md) - Usage notes and runtime boundaries
-- [`website/src/content/docs/guide/testing.md`](website/src/content/docs/guide/testing.md) - Docker, ArkVM, OpenHarmony QEMU, and HAP verification
-- [`website/src/content/docs/reference/capabilities.md`](website/src/content/docs/reference/capabilities.md) - Supported capability matrix
-- [`website/src/content/docs/reference/runtime-handles.md`](website/src/content/docs/reference/runtime-handles.md) - Runtime handles and ref lifecycle
-- [`website/src/content/docs/design.md`](website/src/content/docs/design.md) - Architecture and design decisions
-- [`website/src/content/docs/capability-gap.md`](website/src/content/docs/capability-gap.md) - Capability baseline and scope boundaries
-- [`website/src/content/docs/guide/website.md`](website/src/content/docs/guide/website.md) - Documentation development guide
+- [Quick start](website/src/content/docs/guide/getting-started.md)
+- [Build and load](website/src/content/docs/guide/build-and-load.md)
+- [Exports and naming](website/src/content/docs/guide/exports.md)
+- [Classes and objects](website/src/content/docs/guide/classes-and-objects.md)
+- [Type conversions](website/src/content/docs/guide/type-conversions.md)
+- [Async and Promise](website/src/content/docs/guide/async.md)
+- [Error handling](website/src/content/docs/guide/errors.md)
+- [References and lifetimes](website/src/content/docs/guide/references.md)
+- [Testing and debugging](website/src/content/docs/guide/testing.md)
+- [`#[ani]` attributes](website/src/content/docs/reference/macros.md)
 
 Run the docs locally:
 
@@ -207,7 +208,7 @@ pnpm docs:build
 
 ## Requirements
 
-- Rust 1.70+
+- Rust 1.85+
 - HarmonyOS SDK (for device/emulator testing)
 - ArkTS 1.2 compatible runtime
 

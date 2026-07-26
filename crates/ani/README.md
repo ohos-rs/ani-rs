@@ -1,196 +1,64 @@
 # ANI-RS
 
-A safe, ergonomic Rust library for ArkTS Native Interface (ANI), inspired by napi-rs.
+Safe, ergonomic Rust bindings for the ArkTS 1.2 Native Interface.
 
-## Quick Start
+## Quick start
+
+```toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ani = { git = "https://github.com/ohos-rs/ani-rs" }
+ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
+```
+
+```rust
+use ani_derive::ani;
+
+#[ani]
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[ani]
+pub fn greet(name: String) -> String {
+    format!("Hello, {name}!")
+}
+```
+
+The first `#[ani]` generates `ANI_Constructor`; exported items are registered automatically when ArkTS loads the native library.
+
+## Async functions
+
+```toml
+[dependencies]
+ani = {
+  git = "https://github.com/ohos-rs/ani-rs",
+  features = ["async", "tokio_time"]
+}
+ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
+tokio = { version = "1", default-features = false, features = ["time"] }
+```
 
 ```rust
 use ani::prelude::*;
 use ani_derive::ani;
 
-// Module-level function - automatically registered!
-#[ani]
-fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-
-// String handling
-#[ani]
-fn greet(name: String) -> String {
-    format!("Hello, {}!", name)
-}
-
-// That's it! No ani_module! needed.
-// ANI_Constructor is automatically generated on first #[ani] usage.
-// Module name is derived from CARGO_PKG_NAME.
-```
-
-## Crates Overview
-
-| Crate | Description |
-|-------|-------------|
-| `ani-sys` | Raw FFI bindings to ANI C API |
-| `ani-core` | Safe wrapper types and traits |
-| `ani_derive` | Procedural macros for code generation |
-| `ani-build` | Build script helpers |
-| `ani-ets-gen` | ETS code generation tool |
-| `ani-types` | Type definitions for ETS generation |
-
-## Features
-
-### 1. Simple Function Binding
-
-```rust
-// Module-level function (default)
-#[ani]
-fn calculate(x: f64, y: f64) -> f64 {
-    x * y + 1.0
-}
-
-// With explicit module name
-#[ani(module = "math")]
-fn sqrt(x: f64) -> f64 {
-    x.sqrt()
+#[ani(async)]
+pub async fn load_value(key: String) -> Result<String> {
+    Ok(format!("value:{key}"))
 }
 ```
 
-### 2. Namespace Functions
+## Crates
 
-```rust
-#[ani(namespace = "Utils")]
-fn format_date(year: i32, month: i32, day: i32) -> String {
-    format!("{:04}-{:02}-{:02}", year, month, day)
-}
-```
+| Crate | Purpose |
+| --- | --- |
+| `ani` | Runtime wrappers, conversions, errors, Promise bridge and references |
+| `ani-derive` | `#[ani]`, `AniClass` and `AniEnum` code generation |
+| `ani-sys` | Raw ANI C bindings |
 
-### 3. Class Methods
+For classes, type conversions, generated ETS, OpenHarmony builds and troubleshooting, see the [user documentation](../../website/src/content/docs/guide/getting-started.md).
 
-```rust
-// Instance method
-#[ani(class = "Calculator")]
-fn add(&self, a: i32, b: i32) -> i32 {
-    a + b
-}
-
-// Static method
-#[ani(class = "Calculator", static)]
-fn create() -> i64 {
-    0 // Return native pointer
-}
-
-// Constructor
-#[ani(class = "Calculator", constructor)]
-fn new(initial_value: i32) -> i64 {
-    0
-}
-```
-
-### 4. Typed Object Definition with Derive
-
-```rust
-#[derive(AniClass)]
-#[ani(class = "Person")]
-struct Person {
-    name: String,
-    age: i32,
-}
-
-#[ani]
-fn rename(person: Person, name: String) -> Person {
-    Person { name, ..person }
-}
-```
-
-> Note: method-level `#[ani(getter)]` / `#[ani(setter)]` bindings are implemented for class methods, including static accessors. `#[derive(AniClass)]` and `#[ani(object)]` fields also support `#[ani(property)]` for property-based object access.
-
-## Type Mappings
-
-| Rust Type | ANI Signature | ArkTS Type |
-|-----------|---------------|------------|
-| `bool` | `Z` | `boolean` |
-| `i8` | `B` | `byte` |
-| `i16` | `S` | `short` |
-| `i32` | `I` | `int` |
-| `i64` | `J` | `long` |
-| `f32` | `F` | `float` |
-| `f64` | `D` | `double` |
-| `String` | `Lstd/core/String;` | `String` |
-| `Vec<T>` | `[T` | `Array<T>` |
-| `Option<i32>` | `X{C{std.core.Int}C{std.core.Null}}` | `Int \| null` |
-| `Null` | `C{std.core.Null}` | `null` |
-| `Undefined` | `U` | `undefined` |
-| `Either<String, Undefined>` | `X{C{std.core.String}U}` | `String \| undefined` |
-| `Either3<String, Null, Undefined>` | `X{C{std.core.String}C{std.core.Null}U}` | `String \| null \| undefined` |
-
-## Nullish Semantics
-
-`ani-rs` now keeps `null` and `undefined` distinct:
-
-- `Option<T>` maps to `T | null`
-- `Either<T, Undefined>` maps to `T | undefined`
-- `Either3<T, Null, Undefined>` maps to `T | null | undefined`
-- ArkTS optional parameters or optional object properties are a separate language feature and are not inferred from `Option<T>`
-
-```rust,ignore
-use ani::conversions::{Either, Either3, Null, Undefined};
-
-#[ani]
-fn maybe_name(value: Either<String, Undefined>) -> String {
-    match value {
-        Either::A(name) => name,
-        Either::B(_) => "<missing>".to_string(),
-    }
-}
-
-#[ani]
-fn maybe_title(value: Either3<String, Null, Undefined>) -> String {
-    match value {
-        Either3::A(title) => title,
-        Either3::B(_) => "<null>".to_string(),
-        Either3::C(_) => "<undefined>".to_string(),
-    }
-}
-```
-
-## ETS Code Generation
-
-Generate corresponding ETS declaration files:
-
-```bash
-# Using CLI
-ani-ets-gen --input ani-types.json --output index.ets
-
-# In build.rs
-use ani_build::TypeInfoBuilder;
-
-fn main() {
-    let mut builder = TypeInfoBuilder::new("my_module", "libmy_module");
-    builder.add_function(/* ... */);
-    builder.write_ets(Path::new("ets/index.ets")).unwrap();
-}
-```
-
-Generated ETS:
-
-```typescript
-// Auto-generated by ani-ets-gen
-
-import { loadLibrary } from '@aspect-rs/ani-runtime';
-
-// Load native library
-loadLibrary("my_module");
-
-/**
- * Add two numbers
- */
-export native function add(a: int, b: int): int;
-
-/**
- * Greet someone
- */
-export native function greet(name: String): String;
-```
-
-## License
-
-MIT OR Apache-2.0
+Licensed under MIT OR Apache-2.0.

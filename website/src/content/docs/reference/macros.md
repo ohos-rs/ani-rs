@@ -1,109 +1,156 @@
 ---
-title: 宏与派生
-description: "#[ani]、#[ani(init)]、#[ani(async)] 与派生宏的使用参考。"
+title: "#[ani] 属性参考"
+description: 查询函数、impl、struct、初始化和字段可用的 ani-rs 属性。
 ---
 
-这一页只说“用户侧能写什么”，不重复底层 codegen 细节。
+## 导出目标
 
-:::note
-宏页回答的是“怎么写”，不是“当前能力覆盖到哪”。如果你在确认支持范围，先看 [支持能力总览](/reference/capabilities)。
-:::
+| 属性 | 适用位置 | 说明 |
+| --- | --- | --- |
+| `#[ani]` | 函数、impl、struct | 使用默认 module 或所属 class 导出 |
+| `module = "name"` | 函数、impl | 指定 module descriptor |
+| `namespace = "A.B"` | 函数、impl | 指定 namespace descriptor |
+| `class = "A.B.C"` | 函数、impl、struct | 指定 class descriptor |
 
-## `#[ani]`
+`namespace` 也可以写成 `ns`。通常应使用完整名称，避免不同模块中的同名 class 或 namespace 冲突。
 
-`#[ani]` 是统一导出入口。按目标不同，可以落到三类绑定面：
+## 名称与签名
 
-- Module
-- Namespace
-- Class
-
-常见属性：
-
-| 属性 | 作用 |
+| 属性 | 说明 |
 | --- | --- |
-| `module = "..."` | 显式指定运行时模块 descriptor |
-| `namespace = "..."` | 绑定到 namespace |
-| `class = "..."` | 绑定到 class |
-| `name = "..."` | 指定 ArkTS 侧导出名 |
-| `static` | class 静态成员 |
-| `constructor` | class 构造器 |
-| `getter` | class getter |
-| `setter` | class setter |
-| `signature = "..."` | 显式覆盖生成签名 |
+| `name = "publicName"` | 覆盖 ArkTS 导出名 |
+| `signature = "..."` | 覆盖自动生成的 ANI 签名 |
+| `skip` | 保留 Rust item，但跳过该项生成 |
 
-## `#[ani(init)]`
+`signature` 也可以写成 `sig`。优先依赖 Rust 类型推导，只有对接已有 descriptor 时再手写签名。
 
-用于模块初始化回调。
+```rust
+#[ani(namespace = "Math", name = "sum")]
+pub fn sum_two(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
 
-支持形态：
+## Class 成员
 
-- `#[ani(init)]`
-- `#[ani(init, before_bindings)]`
+| 属性 | 说明 |
+| --- | --- |
+| `static` | 静态方法或静态属性 |
+| `constructor` | 构造器 |
+| `getter` | getter，属性名从方法名推导 |
+| `getter = "name"` | 指定 getter 属性名 |
+| `setter` | setter，属性名从方法名推导 |
+| `setter = "name"` | 指定 setter 属性名 |
 
-适用场景：
+`static` 也可以写成 `is_static`，`constructor` 也可以写成 `ctor`。
 
-- 在绑定执行前准备运行时资源
-- 在绑定执行后做额外初始化
+```rust
+#[ani(class = "Counter")]
+impl Counter {
+    #[ani(constructor)]
+    pub fn new(
+        env: &Env<'_>,
+        this: &AniObject<'_>,
+    ) -> Result<()> {
+        Counter { value: 0 }.write_back_to_ani_object(env, this)
+    }
 
-完整用法见 `examples/init_lifecycle`。
+    #[ani(getter)]
+    pub fn get_value(&self) -> i32 {
+        self.value
+    }
 
-## `#[ani(async)]`
+    #[ani(static, name = "createDefault")]
+    pub fn create_default() -> i32 {
+        0
+    }
+}
+```
 
-用于把 Rust `async fn` 导出为 ArkTS `Promise<T>`。
+## 异步
 
-当前已支持组合：
+把 `async fn` 标记为 Promise API：
 
-- 普通 async 函数
-- class 绑定函数
-- Rust `self` receiver
-- `env` / `this` / `class` 注入
-- `signature = ...`
-- `constructor / getter / setter`
+```rust
+#[ani(async)]
+pub async fn load_value(key: String) -> Result<String> {
+    Ok(key)
+}
+```
 
-更完整的使用与边界说明见 [异步与 Tokio](/guide/async)。
+`async` 可以与 `class`、`static`、`constructor`、`getter`、`setter`、`name` 和 `signature` 组合。运行时配置见 [异步与 Promise](/guide/async/)。
 
-## `#[ani(object)]`
+## 初始化
 
-用于把 Rust struct 暴露为 object-backed public type。
+| 写法 | 执行时机 |
+| --- | --- |
+| `#[ani(init, before_bindings)]` | native bindings 注册前 |
+| `#[ani(init)]` | native bindings 注册后 |
 
-常见搭配：
+初始化函数可以不返回值，也可以返回 `Result<()>`。`Env<'_>` 参数会自动注入。
 
-- 命名 struct
-- tuple struct
-- unit struct
-- type-parameter generic struct
-- 字段级 `#[ani(property)]`
+## Object
 
-对照 example：
+```rust
+#[ani(object)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
 
-- `examples/derive_shapes`
-- `examples/object_model`
+#[ani(object = "PublicPoint")]
+pub struct NamedPoint {
+    pub x: f64,
+    pub y: f64,
+}
+```
 
-## `#[derive(AniClass)]`
+字段必须公开才能参与结构化转换。
 
-适用于需要 nominal class surface 的 Rust 类型。
+字段级属性：
 
-当前文档基线：
+| 属性 | 说明 |
+| --- | --- |
+| `#[ani(property)]` | 使用 property 方式读写字段 |
+| `#[ani(property = "name")]` | 同时设置公开 property 名 |
+| `#[ani(name = "name")]` | 覆盖字段公开名称 |
 
-- named / tuple / unit struct 已支持
-- generic struct 已支持 ETS public declaration
-- primitive generic instantiation 仍受 ArkVM runtime slot model 约束
+## 派生宏
 
-## `#[derive(AniEnum)]`
+### `AniClass`
 
-当前仅支持 unit variants。
+```rust
+#[derive(AniClass)]
+#[ani(class = "Profile")]
+pub struct Profile {
+    #[ani(property)]
+    pub name: String,
+}
+```
 
-这是刻意保留的语义边界，而不是暂时漏做：
+生成结构体的 ANI 转换、类型信息和 ETS class 声明。
 
-- ArkTS enum 语义天然更接近 unit variant
-- 非 unit variant 若继续支持，通常会演变成另一套 tagged-union / object model
+### `AniEnum`
 
-## 从哪里看真实写法
+```rust
+#[derive(AniEnum)]
+#[ani(name = "State")]
+pub enum State {
+    Idle,
+    Running,
+}
+```
 
-如果你准备直接照着改代码，而不是继续读说明，优先看这些 example：
+只适用于 unit variants。
 
-- `examples/new_basic`
-- `examples/new_class`
-- `examples/impl_block`
-- `examples/derive_shapes`
-- `examples/async_wrapper`
+## 自动注入参数
+
+以下参数不会进入 ArkTS 签名：
+
+| 参数 | 注入值 |
+| --- | --- |
+| `&Env<'_>` | 当前 ANI 环境 |
+| `&AniObject<'_>`，参数名为 `this` | 当前实例 |
+| `&AniClass<'_>`，参数名为 `class` | 当前 class |
+
+宏会根据类型和参数位置识别注入项。公开业务参数应避免复用这些特殊形态。

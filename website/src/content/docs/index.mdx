@@ -1,16 +1,16 @@
 ---
-title: ani-rs
+title: Rust bindings for ArkTS Native Interface
 description: 面向 ArkTS Native Interface 的安全、低样板 Rust 绑定层。
 template: splash
 hero:
-  title: Rust meets ArkTS Native Interface.
-  tagline: 用一套可测试、可生成、可在真实 OpenHarmony QEMU 环境验证的 Rust API，构建 ArkTS 1.2 原生扩展。
+  title: ANI-RS
+  tagline: 使用类型安全的 Rust API 和低样板宏，为 ArkTS 1.2 构建 OpenHarmony 原生模块。
   actions:
     - text: 快速开始
       link: ./guide/getting-started/
       icon: right-arrow
-    - text: 能力总览
-      link: ./reference/capabilities/
+    - text: 导出 API
+      link: ./guide/exports/
       variant: secondary
     - text: GitHub
       link: https://github.com/ohos-rs/ani-rs
@@ -20,20 +20,20 @@ hero:
 
 <div className="ani-proof-bar">
   <div className="ani-proof">
-    <strong>3 crates</strong>
-    <span>sys、runtime 与 derive 分层</span>
+    <strong>#[ani]</strong>
+    <span>自动生成 wrapper 与 native 注册</span>
   </div>
   <div className="ani-proof">
-    <strong>52 / 52</strong>
-    <span>example 全量纳入回归</span>
+    <strong>.ets</strong>
+    <span>从 Rust 签名生成 ArkTS 声明</span>
   </div>
   <div className="ani-proof">
-    <strong>393</strong>
-    <span>QEMU 运行时断言全部通过</span>
+    <strong>Promise&lt;T&gt;</strong>
+    <span>通过 Tokio 导出 Rust async fn</span>
   </div>
   <div className="ani-proof">
-    <strong>HAP PASS</strong>
-    <span>静态 ArkTS 应用链路验证</span>
+    <strong>cdylib</strong>
+    <span>面向 OpenHarmony ARM64 动态库</span>
   </div>
 </div>
 
@@ -45,38 +45,18 @@ hero:
 <div className="ani-feature-grid">
   <div className="ani-feature">
     <h3>低样板导出</h3>
-    <p><code>#[ani]</code> 自动生成 wrapper、签名与注册元数据，覆盖 Module、Namespace 和 Class。</p>
+    <p><code>#[ani]</code> 自动处理函数、Namespace、Class 与初始化回调的注册。</p>
   </div>
   <div className="ani-feature">
-    <h3>类型面一致</h3>
-    <p><code>ToAni</code>、<code>FromAni</code> 与 <code>AniType</code> 共同驱动运行时转换和 ETS public surface。</p>
+    <h3>类型驱动转换</h3>
+    <p>Rust 参数和返回值同时驱动 ANI 签名、运行时转换与 ETS 公共类型。</p>
   </div>
   <div className="ani-feature">
-    <h3>Promise 原生桥接</h3>
-    <p><code>#[ani(async)]</code>、Deferred、AniResolver 与 Tokio 已统一到可预测的 Promise 生命周期。</p>
+    <h3>异步与 Promise</h3>
+    <p><code>#[ani(async)]</code> 把 Rust Future 暴露为 ArkTS Promise，并支持 Result 错误传播。</p>
   </div>
   <div className="ani-feature">
-    <h3>真实环境验证</h3>
-    <p>不止检查编译结果：example 会生成 ABC，并在 OpenHarmony QEMU 镜像与 HAP 中执行断言。</p>
+    <h3>OpenHarmony 集成</h3>
+    <p>提供交叉编译、ETS/ABC、HAP 和真实 OpenHarmony QEMU 环境的使用指南。</p>
   </div>
-</div>
-
-<div className="ani-section-heading">
-  <p>Choose a path</p>
-  <h2>按你的当前任务开始。</h2>
-</div>
-
-<div className="ani-path-grid">
-  <a className="ani-path" href="./guide/getting-started/">
-    <h3>第一次接入</h3>
-    <p>配置 crate、写第一个导出，并理解生成的 ETS 文件。</p>
-  </a>
-  <a className="ani-path" href="./reference/capabilities/">
-    <h3>评估能力</h3>
-    <p>查看已支持、已验证以及明确保留的运行时边界。</p>
-  </a>
-  <a className="ani-path" href="./guide/testing/">
-    <h3>复现验证</h3>
-    <p>运行 Rust、ABC、ArkVM、QEMU 和 HAP 的分层测试链路。</p>
-  </a>
 </div>
