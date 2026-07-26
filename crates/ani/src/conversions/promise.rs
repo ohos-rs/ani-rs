@@ -694,6 +694,23 @@ pub(crate) fn create_promise_error<'a>(
     env: &Env<'a>,
     message: &str,
 ) -> Result<crate::types::AniError<'a>> {
+    if let Ok(err_cls) = env.find_class("std.core.Error")
+        && let Ok(err_ctor) =
+            env.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
+    {
+        let text = env.create_string(message)?;
+        let undefined = env.get_undefined_object()?;
+        let args = [
+            crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
+            crate::types::ani_value_ref(undefined as sys::ani_ref),
+        ];
+        let err_obj = env.new_object(&err_cls, &err_ctor, &args)?;
+        return Ok(unsafe {
+            crate::types::AniError::from_raw(err_obj.into_raw() as sys::ani_error)
+        });
+    }
+
+    // Compatibility fallback for older runtimes.
     let err_cls = env
         .find_class("escompat.Error")
         .or_else(|_| env.find_class("@ohos.base.BusinessError"))?;

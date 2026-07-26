@@ -14,11 +14,11 @@ export native function array_push_and_pop(value: AniRef): boolean;
 export native function array_set_and_get(value: AniRef): boolean;
 export native function join_string_array(values: Array<string>): string;
 export native function join_string_vecdeque(values: Array<string>): string;
-export native function make_i32_linked_list(): FixedArray<int>;
+export native function make_i32_linked_list(): ValueArray<int>;
 export native function make_string_array(): Array<string>;
 export native function make_string_vecdeque(): Array<string>;
 export native function make_user_array(): Array<ArrayUser>;
-export native function sum_i32_linked_list(values: FixedArray<int>): int;
+export native function sum_i32_linked_list(values: ValueArray<int>): int;
 export native function summarize_user_array(values: Array<ArrayUser>): string;
 
 

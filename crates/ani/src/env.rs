@@ -1337,7 +1337,7 @@ impl<'local> Env<'local> {
             String_NewUTF8,
             sys::ani_string,
             AniString,
-            bytes.as_ptr() as *const i8,
+            bytes.as_ptr() as *const std::ffi::c_char,
             bytes.len()
         )
     }
@@ -1355,7 +1355,7 @@ impl<'local> Env<'local> {
             sys::ani_size,
             0,
             string.as_raw(),
-            buffer.as_mut_ptr() as *mut i8,
+            buffer.as_mut_ptr() as *mut std::ffi::c_char,
             size + 1
         )?;
 
@@ -1432,7 +1432,7 @@ impl<'local> Env<'local> {
             string.as_raw(),
             offset,
             size,
-            buffer.as_mut_ptr() as *mut i8,
+            buffer.as_mut_ptr() as *mut std::ffi::c_char,
             buffer.len()
         )?;
         buffer.truncate(written);

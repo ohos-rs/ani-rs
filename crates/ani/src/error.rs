@@ -523,6 +523,28 @@ impl<S: AsRef<str>> BusinessError<S> {
             _ => 1,
         };
 
+        // Current OpenHarmony runtimes expose the ECMAScript-compatible
+        // throwable as `std.core.Error`. Its constructor takes the message and
+        // an optional ErrorOptions value; `undefined` is the canonical value
+        // when no options are supplied.
+        if let Ok(err_cls) = env_ref.find_class("std.core.Error")
+            && let Ok(err_ctor) =
+                env_ref.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
+            && let Ok(text) = env_ref.create_string(&message)
+            && let Ok(undefined) = env_ref.get_undefined_object()
+        {
+            let args = [
+                crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
+                crate::types::ani_value_ref(undefined as sys::ani_ref),
+            ];
+            if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
+                let _ = env_ref.set_property_by_name_int(&err_obj, "code", code);
+                return Some(err_obj.into_raw() as sys::ani_error);
+            }
+        }
+
+        // Keep compatibility with older runtimes that exposed only the
+        // no-argument BusinessError/escompat.Error constructors.
         for (class_name, error_name) in [
             ("@ohos.base.BusinessError", "BusinessError"),
             ("escompat.Error", "Error"),

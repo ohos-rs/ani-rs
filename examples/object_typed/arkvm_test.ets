@@ -87,12 +87,12 @@ function __assert_throws(name: string, fn: () => void): void {
 console.log("[arkvm] smoke start: ani-example-object-typed");
 class ObjTyped {
   counter: long = 0;
-  ratio: float = 0.0;
+  ratio: float = 0.0f;
 }
 class ObjTypedToken {}
 let objTyped = new ObjTyped();
 __assert_eq_long("field_by_name_roundtrip_long", field_by_name_roundtrip_long(objTyped, 99), 99);
-__assert_eq_double("property_roundtrip_float", property_roundtrip_float(objTyped, 1.25), 1.25);
+__assert_eq_double("property_roundtrip_float", property_roundtrip_float(objTyped, 1.25f), 1.25);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

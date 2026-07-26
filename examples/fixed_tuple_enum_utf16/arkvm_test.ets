@@ -8,7 +8,7 @@ export type TupleValue = Object;
 
 export native function enum_item_lookup_index(enm: AniEnum): int;
 export native function enum_item_lookup_value(enm: AniEnum): int;
-export native function fixed_array_region(): FixedArray<int>;
+export native function fixed_array_region(): ValueArray<int>;
 export native function tuple_roundtrip(tuple: TupleValue): int;
 export native function utf16_roundtrip(text: string): string;
 

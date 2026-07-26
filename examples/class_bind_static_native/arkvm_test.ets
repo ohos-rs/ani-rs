@@ -79,14 +79,11 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-class-bind-static-native");
-class StaticBindToken {}
-let bindStaticOk = true;
-try {
-  bind_static_natives(Class.of(new StaticBindToken()));
-} catch (_e) {
-  bindStaticOk = false;
+class StaticBindToken {
+  static native answer(): int;
 }
-__assert_bool("bind_static_natives_bool", bindStaticOk);
+bind_static_natives(Class.of(new StaticBindToken()));
+__assert_eq_int("bind_static_natives_answer", StaticBindToken.answer(), 43);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

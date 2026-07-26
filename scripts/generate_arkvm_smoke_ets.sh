@@ -331,14 +331,11 @@ ETS
       ;;
     ani-example-class-bind-static-native)
       cat <<'ETS'
-class StaticBindToken {}
-let bindStaticOk = true;
-try {
-  __ANI_GENERATED__.bind_static_natives(Class.of(new StaticBindToken()));
-} catch (_e) {
-  bindStaticOk = false;
+class StaticBindToken {
+  static native answer(): int;
 }
-__assert_bool("bind_static_natives_bool", bindStaticOk);
+__ANI_GENERATED__.bind_static_natives(Class.of(new StaticBindToken()));
+__assert_eq_int("bind_static_natives_answer", StaticBindToken.answer(), 43);
 ETS
       ;;
     ani-example-class-reflect)
@@ -457,16 +454,26 @@ ETS
       ;;
     ani-example-enum-item-wrapper)
       cat <<'ETS'
-class EnumToken {}
-let enumToken = new EnumToken();
-let enumNameOk = true;
-try {
-  let gotName = __ANI_GENERATED__.enum_item_name(enumToken, "Red");
-  __assert_true("enum_item_name_length", gotName.length >= 0);
-} catch (_e) {
-  enumNameOk = false;
+enum SmokeColor {
+  RED = 7,
+  GREEN = 11,
 }
-__assert_bool("enum_item_name_bool", enumNameOk);
+let smokeColorDescriptor = "arkvm_test.SmokeColor";
+__assert_eq_string(
+  "enum_item_name",
+  __ANI_GENERATED__.enum_item_name(smokeColorDescriptor, "RED"),
+  "RED",
+);
+__assert_eq_int(
+  "enum_item_value_int",
+  __ANI_GENERATED__.enum_item_value_int(smokeColorDescriptor, "GREEN"),
+  11,
+);
+__assert_eq_int(
+  "enum_item_index_by_name",
+  __ANI_GENERATED__.enum_item_index_by_name(smokeColorDescriptor, "RED"),
+  0,
+);
 ETS
       ;;
     ani-example-error)
@@ -806,12 +813,12 @@ ETS
       cat <<'ETS'
 class ObjTyped {
   counter: long = 0;
-  ratio: float = 0.0;
+  ratio: float = 0.0f;
 }
 class ObjTypedToken {}
 let objTyped = new ObjTyped();
 __assert_eq_long("field_by_name_roundtrip_long", __ANI_GENERATED__.field_by_name_roundtrip_long(objTyped, 99), 99);
-__assert_eq_double("property_roundtrip_float", __ANI_GENERATED__.property_roundtrip_float(objTyped, 1.25), 1.25);
+__assert_eq_double("property_roundtrip_float", __ANI_GENERATED__.property_roundtrip_float(objTyped, 1.25f), 1.25);
 ETS
       ;;
     ani-example-object-access)

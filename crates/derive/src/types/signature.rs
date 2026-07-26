@@ -23,6 +23,34 @@ pub fn rust_type_to_signature_with_type_params(ty: &Type, type_params: &HashSet<
     ani_type.to_signature()
 }
 
+fn rust_parameter_type_to_signature_with_type_params(
+    ty: &Type,
+    type_params: &HashSet<String>,
+) -> String {
+    let ani_type = AniType::from_syn_type_with_type_params(ty, type_params);
+    match ani_type {
+        // A standalone ArkTS `undefined` parameter is lowered to the `Any`
+        // slot by es2panda. `U` is reserved for an undefined member inside a
+        // union descriptor such as `X{C{std.core.String}U}`.
+        AniType::Undefined => "Y".to_string(),
+        _ => ani_type.to_signature(),
+    }
+}
+
+fn rust_return_type_to_signature_with_type_params(
+    ty: &Type,
+    type_params: &HashSet<String>,
+) -> String {
+    let ani_type = AniType::from_syn_type_with_type_params(ty, type_params);
+    match ani_type {
+        // The runtime represents a standalone ArkTS `undefined` return using
+        // the same empty return descriptor as `void`; the native ABI still
+        // returns the undefined reference value.
+        AniType::Undefined => String::new(),
+        _ => ani_type.to_signature(),
+    }
+}
+
 // ============================================================================
 // Function Signature Generation
 // ============================================================================
@@ -56,7 +84,7 @@ pub fn generate_ctor_signature(sig: &Signature, skip_first: bool) -> String {
 
     for input in params {
         if let FnArg::Typed(pat_type) = input {
-            ctor_sig.push_str(&rust_type_to_signature_with_type_params(
+            ctor_sig.push_str(&rust_parameter_type_to_signature_with_type_params(
                 &pat_type.ty,
                 &type_params,
             ));
@@ -98,7 +126,7 @@ fn generate_signature_from_inputs(
 
     for input in params {
         if let FnArg::Typed(pat_type) = input {
-            sig.push_str(&rust_type_to_signature_with_type_params(
+            sig.push_str(&rust_parameter_type_to_signature_with_type_params(
                 &pat_type.ty,
                 type_params,
             ));
@@ -110,7 +138,10 @@ fn generate_signature_from_inputs(
     match output {
         ReturnType::Default => sig.push('V'),
         ReturnType::Type(_, ty) => {
-            sig.push_str(&rust_type_to_signature_with_type_params(ty, type_params));
+            sig.push_str(&rust_return_type_to_signature_with_type_params(
+                ty,
+                type_params,
+            ));
         }
     }
 
@@ -358,6 +389,22 @@ mod tests {
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(Either3<String, Null, Undefined>)),
             "X{C{std.core.String}C{std.core.Null}U}"
+        );
+    }
+
+    #[test]
+    fn test_standalone_undefined_function_signature() {
+        let sig: Signature = syn::parse_quote! {
+            fn round_trip(value: Undefined) -> Undefined
+        };
+        assert_eq!(generate_fn_signature(&sig, false), "Y:");
+
+        let union_sig: Signature = syn::parse_quote! {
+            fn union_round_trip(value: Either<String, Undefined>) -> Either<String, Undefined>
+        };
+        assert_eq!(
+            generate_fn_signature(&union_sig, false),
+            "X{C{std.core.String}U}:X{C{std.core.String}U}"
         );
     }
 

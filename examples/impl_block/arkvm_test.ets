@@ -67,10 +67,10 @@ export class WidgetIndexIterator implements Iterator<int> {
   native __ani_native_next(): int | null;
   next(): IteratorResult<int> {
     let __ani_result = this.__ani_native_next();
-    return {
-      done: __ani_result == null,
-      value: __ani_result == null ? undefined : __ani_result
-    };
+    if (__ani_result == null) {
+      return new IteratorResult<int>();
+    }
+    return new IteratorResult<int>(__ani_result);
   }
 }
 

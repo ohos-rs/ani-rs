@@ -372,7 +372,7 @@ pub unsafe fn string_from_raw(env: *mut sys::ani_env, string: sys::ani_string) -
         usize,
         0,
         string,
-        buffer.as_mut_ptr() as *mut i8,
+        buffer.as_mut_ptr() as *mut std::ffi::c_char,
         len + 1
     )?;
     buffer.truncate(chars_copied);

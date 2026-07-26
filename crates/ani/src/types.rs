@@ -461,8 +461,8 @@ pub const fn native_function(
     pointer: *const std::ffi::c_void,
 ) -> sys::ani_native_function {
     sys::ani_native_function {
-        name: name.as_ptr() as *const i8,
-        signature: signature.as_ptr() as *const i8,
+        name: name.as_ptr() as *const std::ffi::c_char,
+        signature: signature.as_ptr() as *const std::ffi::c_char,
         pointer,
     }
 }

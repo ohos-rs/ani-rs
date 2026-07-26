@@ -716,7 +716,7 @@ mod tests {
         assert!(!member.is_constructor());
         assert_eq!(
             member.render_ets_binding(&sig, false),
-            "native __ani_native_next(): int | null;\nnext(): IteratorResult<int> {\n  let __ani_result = this.__ani_native_next();\n  return {\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  };\n}"
+            "native __ani_native_next(): int | null;\nnext(): IteratorResult<int> {\n  let __ani_result = this.__ani_native_next();\n  if (__ani_result == null) {\n    return new IteratorResult<int>();\n  }\n  return new IteratorResult<int>(__ani_result);\n}"
         );
     }
 

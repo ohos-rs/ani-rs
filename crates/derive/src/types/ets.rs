@@ -933,7 +933,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         AniType::EnumItem => "EnumItem".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
         AniType::NativePointer(_) => "long".to_string(),
-        AniType::FixedArray(p) => fixed_array_type_name(p).to_string(),
+        AniType::FixedArray(p) => value_array_type_name(p).to_string(),
         AniType::TypeParam(name) => name.clone(),
         AniType::CustomObject(type_path) => custom_object_path_to_ets(type_path.as_ref(), context)
             .unwrap_or_else(|| "Object".to_string()),
@@ -1050,7 +1050,7 @@ fn collect_surface_union_parts(ty: &AniType, context: EtsRenderContext) -> Optio
 
 fn vec_inner_to_ets(inner: &AniType) -> String {
     if let AniType::Primitive(p) = inner {
-        return fixed_array_type_name(p).to_string();
+        return value_array_type_name(p).to_string();
     }
     format!("Array<{}>", ani_type_to_ets(inner))
 }
@@ -1178,30 +1178,30 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "AniFnObject" | "AniFunction" => Some("Function"),
         "AniArray" | "AniArrayRef" => Some("Array<Object>"),
         "AniFixedArray" | "AniFixedArrayRef" => Some("FixedArray<Object>"),
-        "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("FixedArray<boolean>"),
-        "FixedByteArray" | "AniFixedArrayByte" => Some("FixedArray<byte>"),
-        "FixedShortArray" | "AniFixedArrayShort" => Some("FixedArray<short>"),
-        "FixedCharArray" | "AniFixedArrayChar" => Some("FixedArray<char>"),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("FixedArray<int>"),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("FixedArray<long>"),
-        "FixedFloatArray" | "AniFixedArrayFloat" => Some("FixedArray<float>"),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("FixedArray<double>"),
+        "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("ValueArray<boolean>"),
+        "FixedByteArray" | "AniFixedArrayByte" => Some("ValueArray<byte>"),
+        "FixedShortArray" | "AniFixedArrayShort" => Some("ValueArray<short>"),
+        "FixedCharArray" | "AniFixedArrayChar" => Some("ValueArray<char>"),
+        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("ValueArray<int>"),
+        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("ValueArray<long>"),
+        "FixedFloatArray" | "AniFixedArrayFloat" => Some("ValueArray<float>"),
+        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("ValueArray<double>"),
         _ => None,
     }
 }
 
-fn fixed_array_type_name(p: &PrimitiveType) -> &'static str {
+fn value_array_type_name(p: &PrimitiveType) -> &'static str {
     match p {
-        PrimitiveType::Bool => "FixedArray<boolean>",
-        PrimitiveType::I8 | PrimitiveType::U8 => "FixedArray<byte>",
-        PrimitiveType::I16 => "FixedArray<short>",
-        PrimitiveType::U16 | PrimitiveType::Char => "FixedArray<char>",
-        PrimitiveType::I32 | PrimitiveType::U32 => "FixedArray<int>",
+        PrimitiveType::Bool => "ValueArray<boolean>",
+        PrimitiveType::I8 | PrimitiveType::U8 => "ValueArray<byte>",
+        PrimitiveType::I16 => "ValueArray<short>",
+        PrimitiveType::U16 | PrimitiveType::Char => "ValueArray<char>",
+        PrimitiveType::I32 | PrimitiveType::U32 => "ValueArray<int>",
         PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => {
-            "FixedArray<long>"
+            "ValueArray<long>"
         }
-        PrimitiveType::F32 => "FixedArray<float>",
-        PrimitiveType::F64 => "FixedArray<double>",
+        PrimitiveType::F32 => "ValueArray<float>",
+        PrimitiveType::F64 => "ValueArray<double>",
     }
 }
 
@@ -1643,8 +1643,8 @@ pub fn generate_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> 
     let item_ty = ret_spec.surface.iterator_item_ty().to_string();
 
     format!(
-        "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  return {{\n    done: __ani_result == null,\n    value: __ani_result == null ? undefined : __ani_result\n  }};\n}}",
-        native_ty, item_ty,
+        "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  if (__ani_result == null) {{\n    return new IteratorResult<{}>();\n  }}\n  return new IteratorResult<{}>(__ani_result);\n}}",
+        native_ty, item_ty, item_ty, item_ty,
     )
 }
 
@@ -2338,8 +2338,8 @@ get age(): int {
 
         assert!(rendered.contains("export class WidgetIndexIterator implements Iterator<int> {"));
         assert!(rendered.contains("next(): IteratorResult<int> {"));
-        assert!(rendered.contains("done: __ani_result == null,"));
-        assert!(rendered.contains("value: __ani_result == null ? undefined : __ani_result"));
+        assert!(rendered.contains("return new IteratorResult<int>();"));
+        assert!(rendered.contains("return new IteratorResult<int>(__ani_result);"));
         assert!(!rendered.contains("next(): int | null | undefined {"));
     }
 
@@ -2570,7 +2570,7 @@ set name(name: string | null | undefined) {
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "roundtrip", false),
-            "roundtrip(values: FixedArray<int>, flags: FixedArray<boolean>): FixedArray<int>"
+            "roundtrip(values: ValueArray<int>, flags: ValueArray<boolean>): ValueArray<int>"
         );
     }
 
