@@ -184,23 +184,25 @@ Start with:
 
 ## Documentation
 
-Repository docs now ship as a VitePress site rooted at [`docs/`](docs/):
+Repository docs ship as an Astro + Starlight package in the pnpm workspace at [`website/`](website/):
 
-- [`docs/index.md`](docs/index.md) - Documentation home
-- [`docs/guide/getting-started.md`](docs/guide/getting-started.md) - Quick start
-- [`docs/guide/compatibility.md`](docs/guide/compatibility.md) - Usage notes and runtime boundaries
-- [`docs/guide/examples.md`](docs/guide/examples.md) - Example index
-- [`docs/reference/capabilities.md`](docs/reference/capabilities.md) - Supported capability matrix
-- [`docs/reference/runtime-handles.md`](docs/reference/runtime-handles.md) - Runtime handles and ref lifecycle
-- [`docs/design.md`](docs/design.md) - Architecture and design decisions
-- [`docs/capability-gap.md`](docs/capability-gap.md) - Capability baseline and scope boundaries
-- [`docs/napi-rs-diff.md`](docs/napi-rs-diff.md) - Design differences vs `napi-rs`
+- [`website/src/content/docs/index.mdx`](website/src/content/docs/index.mdx) - Documentation home
+- [`website/src/content/docs/guide/getting-started.md`](website/src/content/docs/guide/getting-started.md) - Quick start
+- [`website/src/content/docs/guide/compatibility.md`](website/src/content/docs/guide/compatibility.md) - Usage notes and runtime boundaries
+- [`website/src/content/docs/guide/testing.md`](website/src/content/docs/guide/testing.md) - Docker, ArkVM, OpenHarmony QEMU, and HAP verification
+- [`website/src/content/docs/reference/capabilities.md`](website/src/content/docs/reference/capabilities.md) - Supported capability matrix
+- [`website/src/content/docs/reference/runtime-handles.md`](website/src/content/docs/reference/runtime-handles.md) - Runtime handles and ref lifecycle
+- [`website/src/content/docs/design.md`](website/src/content/docs/design.md) - Architecture and design decisions
+- [`website/src/content/docs/capability-gap.md`](website/src/content/docs/capability-gap.md) - Capability baseline and scope boundaries
+- [`website/src/content/docs/guide/website.md`](website/src/content/docs/guide/website.md) - Documentation development guide
 
 Run the docs locally:
 
 ```bash
 pnpm install
 pnpm docs:dev
+pnpm docs:check
+pnpm docs:build
 ```
 
 ## Requirements
