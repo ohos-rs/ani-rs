@@ -743,12 +743,30 @@ where
 // ============================================================================
 
 fn function_type_signature_for_arity(arity: usize) -> &'static str {
-    let name = if arity <= 16 {
-        format!("Lstd/core/Function{arity};")
-    } else {
-        "Lstd/core/Function;".to_string()
-    };
-    Box::leak(name.into_boxed_str())
+    const SIGNATURES: [&str; 17] = [
+        "Lstd/core/Function0;",
+        "Lstd/core/Function1;",
+        "Lstd/core/Function2;",
+        "Lstd/core/Function3;",
+        "Lstd/core/Function4;",
+        "Lstd/core/Function5;",
+        "Lstd/core/Function6;",
+        "Lstd/core/Function7;",
+        "Lstd/core/Function8;",
+        "Lstd/core/Function9;",
+        "Lstd/core/Function10;",
+        "Lstd/core/Function11;",
+        "Lstd/core/Function12;",
+        "Lstd/core/Function13;",
+        "Lstd/core/Function14;",
+        "Lstd/core/Function15;",
+        "Lstd/core/Function16;",
+    ];
+
+    SIGNATURES
+        .get(arity)
+        .copied()
+        .unwrap_or("Lstd/core/Function;")
 }
 
 impl<Args, Return> TypeInfo for Function<'_, Args, Return>
@@ -957,6 +975,19 @@ mod tests {
     fn test_function_type_info() {
         assert_eq!(<Function<(), ()>>::type_signature(), "Lstd/core/Function0;");
         assert_eq!(<Function<(i32,), String>>::ani_c_type(), "ani_fn_object");
+    }
+
+    #[test]
+    fn test_function_type_signatures_are_static() {
+        assert_eq!(
+            function_type_signature_for_arity(16),
+            "Lstd/core/Function16;"
+        );
+        assert_eq!(function_type_signature_for_arity(17), "Lstd/core/Function;");
+        assert!(std::ptr::eq(
+            function_type_signature_for_arity(8),
+            function_type_signature_for_arity(8),
+        ));
     }
 
     #[test]

@@ -6,9 +6,8 @@ use std::time::Duration;
 use ani::prelude::*;
 use ani_derive::ani;
 
-const PRESSURE_OBJECTS_PER_ROUND: usize = 256;
-const PRESSURE_STRINGS_PER_ROUND: usize = 32;
-const PRESSURE_STRING_BYTES: usize = 512;
+const PRESSURE_STRINGS_PER_ROUND: usize = 64;
+const PRESSURE_STRING_BYTES: usize = 4096;
 
 fn fresh_object<'env>(env: &Env<'env>) -> Result<AniObject<'env>> {
     let class = env.find_class("std.core.Object")?;
@@ -33,13 +32,8 @@ fn fresh_weak_global_pair(env: &Env<'_>) -> Result<(WeakRef, GlobalRef)> {
 }
 
 fn allocation_pressure_round(env: &Env<'_>, round: usize) -> Result<()> {
-    let _scope =
-        env.create_local_scope(PRESSURE_OBJECTS_PER_ROUND + PRESSURE_STRINGS_PER_ROUND + 8)?;
+    let _scope = env.create_local_scope(PRESSURE_STRINGS_PER_ROUND + 8)?;
     let payload = "x".repeat(PRESSURE_STRING_BYTES);
-
-    for _ in 0..PRESSURE_OBJECTS_PER_ROUND {
-        let _ = fresh_object(env)?;
-    }
 
     for idx in 0..PRESSURE_STRINGS_PER_ROUND {
         let _ = env.create_string(&format!("{round}:{idx}:{payload}"))?;

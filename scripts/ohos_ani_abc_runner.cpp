@@ -8,14 +8,66 @@
 #include <ani.h>
 #include <dlfcn.h>
 
-#include <cstring>
+#include <cstdlib>
 #include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace {
 
 using AniCreateVm = ani_status (*)(const ani_options *, uint32_t, ani_vm **);
+
+size_t ParsePositiveEnv(const char *name, size_t fallback)
+{
+    const char *value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value || *end != '\0' || parsed == 0 ||
+        parsed > std::numeric_limits<size_t>::max()) {
+        std::fprintf(
+            stderr, "invalid %s=%s; expected a positive integer\n", name,
+            value);
+        std::exit(2);
+    }
+    return static_cast<size_t>(parsed);
+}
+
+bool EnvFlagEnabled(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+long ReadMemoryKb(const char *name)
+{
+    std::ifstream input("/proc/self/smaps_rollup");
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind(name, 0) == 0) {
+            long value = -1;
+            if (std::sscanf(line.c_str() + std::strlen(name), "%ld", &value) ==
+                1) {
+                return value;
+            }
+        }
+    }
+    return -1;
+}
+
+void PrintMemorySample(size_t iteration)
+{
+    std::printf(
+        "ANI_MEMORY_SAMPLE iteration=%zu rss_kb=%ld pss_kb=%ld\n",
+        iteration, ReadMemoryKb("Rss:"), ReadMemoryKb("Pss:"));
+    std::fflush(stdout);
+}
 
 int Fail(const char *operation, ani_status status)
 {
@@ -173,6 +225,17 @@ int main(int argc, char **argv)
     const char *class_descriptor = argv[3];
     const char *method_name = argc >= 5 ? argv[4] : "main";
     const char *native_library_path = argc >= 6 ? argv[5] : "/data/local/tmp";
+    const size_t iterations = ParsePositiveEnv("ANI_QEMU_ITERATIONS", 1);
+    if (iterations >
+        static_cast<size_t>(std::numeric_limits<ani_int>::max())) {
+        std::fprintf(
+            stderr, "ANI_QEMU_ITERATIONS exceeds the ANI int limit\n");
+        return 2;
+    }
+    const size_t sample_every =
+        std::getenv("ANI_QEMU_MEMORY_SAMPLE_EVERY") == nullptr
+            ? 0
+            : ParsePositiveEnv("ANI_QEMU_MEMORY_SAMPLE_EVERY", iterations);
 
     void *runtime = OpenArkRuntime();
     if (runtime == nullptr) {
@@ -196,6 +259,9 @@ int main(int argc, char **argv)
         {"--ext:verification-mode=ahead-of-time", nullptr},
         {"--ext:gc-type=g1-gc", nullptr},
     };
+    if (EnvFlagEnabled("ANI_QEMU_DISABLE_JIT")) {
+        option_values.push_back({"--ext:compiler-enable-jit=false", nullptr});
+    }
     ani_options options = {option_values.size(), option_values.data()};
 
     ani_vm *vm = nullptr;
@@ -233,13 +299,19 @@ int main(int argc, char **argv)
     }
 
     ani_method invoke = nullptr;
+    const bool repeated = iterations > 1;
     status = env->Class_FindMethod(
-        launcher_class, "invoke",
-        "C{std.core.String}C{std.core.String}C{std.core.String}:",
+        launcher_class, repeated ? "invokeRepeated" : "invoke",
+        repeated
+            ? "C{std.core.String}C{std.core.String}C{std.core.String}i:"
+            : "C{std.core.String}C{std.core.String}C{std.core.String}:",
         &invoke);
     if (status != ANI_OK) {
         vm->DestroyVM();
-        return Fail("Class_FindMethod(launcher.invoke)", status);
+        return Fail(
+            repeated ? "Class_FindMethod(launcher.invokeRepeated)"
+                     : "Class_FindMethod(launcher.invoke)",
+            status);
     }
 
     ani_string abc_path_string = nullptr;
@@ -261,13 +333,28 @@ int main(int argc, char **argv)
         return Fail("String_NewUTF8(launcher arguments)", status);
     }
 
-    status = env->Object_CallMethod_Void(
-        launcher, invoke, abc_path_string, class_descriptor_string,
-        method_name_string);
+    if (sample_every != 0) {
+        PrintMemorySample(0);
+    }
+    if (repeated) {
+        status = env->Object_CallMethod_Void(
+            launcher, invoke, abc_path_string, class_descriptor_string,
+            method_name_string, static_cast<ani_int>(iterations));
+    } else {
+        status = env->Object_CallMethod_Void(
+            launcher, invoke, abc_path_string, class_descriptor_string,
+            method_name_string);
+    }
     if (status != ANI_OK) {
         env->DescribeError();
         vm->DestroyVM();
-        return Fail("Object_CallMethod(launcher.invoke)", status);
+        return Fail(
+            repeated ? "Object_CallMethod(launcher.invokeRepeated)"
+                     : "Object_CallMethod(launcher.invoke)",
+            status);
+    }
+    if (sample_every != 0) {
+        PrintMemorySample(iterations);
     }
 
     status = vm->DestroyVM();

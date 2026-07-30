@@ -4,6 +4,15 @@ export class OhosQemuLauncher {
     className: string,
     methodName: string,
   ): void {
+    this.invokeRepeated(abcPath, className, methodName, 1);
+  }
+
+  public invokeRepeated(
+    abcPath: string,
+    className: string,
+    methodName: string,
+    iterations: int,
+  ): void {
     try {
       const linker = new AbcRuntimeLinker(Class.of(this).getLinker(), [abcPath]);
       const targetClass = linker.loadClass(className);
@@ -11,7 +20,9 @@ export class OhosQemuLauncher {
       if (targetMethod === undefined) {
         throw new Error("static ABC entry method not found: " + methodName);
       }
-      targetMethod.invoke();
+      for (let iteration: int = 0; iteration < iterations; iteration++) {
+        targetMethod.invoke();
+      }
     } catch (error) {
       console.log("[QEMU ERROR] " + error);
       throw error;

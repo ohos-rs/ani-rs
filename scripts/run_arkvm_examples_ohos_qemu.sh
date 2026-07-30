@@ -11,6 +11,11 @@ work_root="${OHOS_QEMU_WORK_ROOT:-$repo_root/target/ohos-qemu}"
 remote_root="${OHOS_QEMU_REMOTE_ROOT:-/data/local/tmp/ani-rs-qemu}"
 case_timeout="${OHOS_QEMU_CASE_TIMEOUT:-45}"
 package_filter="${OHOS_QEMU_PACKAGE_FILTER:-}"
+runner_asan="${OHOS_QEMU_RUNNER_ASAN:-0}"
+
+if [[ "$work_root" != /* ]]; then
+  work_root="$repo_root/$work_root"
+fi
 
 clang_bin="$deveco_sdk_root/native/llvm/bin"
 sysroot="$deveco_sdk_root/native/sysroot"
@@ -56,10 +61,17 @@ fi
 
 mkdir -p "$work_root"
 
+runner_cxxflags=(-O2)
+runner_runtime_env=""
+if [[ "$runner_asan" == "1" ]]; then
+  runner_cxxflags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address)
+  runner_runtime_env="ASAN_OPTIONS=detect_leaks=0:halt_on_error=1"
+fi
+
 "$clang_bin/aarch64-unknown-linux-ohos-clang++" \
   --sysroot="$sysroot" \
   -std=c++17 \
-  -O2 \
+  "${runner_cxxflags[@]}" \
   -I "$repo_root/include" \
   "$repo_root/scripts/ohos_ani_abc_runner.cpp" \
   -ldl \
@@ -142,7 +154,7 @@ while IFS= read -r cargo_toml; do
   "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null
 
   "$hdc_bin" -t "$hdc_target" shell \
-    "ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
+    "$runner_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
     >"$run_log" 2>&1 || true
   "$hdc_bin" -t "$hdc_target" shell \
     "hilog -x | grep -E '\\[arkvm\\]|\\[ASSERT PASS\\]|\\[ASSERT FAIL\\]|\\[QEMU ERROR\\]'" \
