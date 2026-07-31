@@ -6,6 +6,7 @@ target
 node_modules
 website/.astro
 website/dist
+fuzz/corpus
 
 *.abc
 *.log

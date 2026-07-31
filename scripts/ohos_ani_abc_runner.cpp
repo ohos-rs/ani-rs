@@ -19,6 +19,7 @@
 namespace {
 
 using AniCreateVm = ani_status (*)(const ani_options *, uint32_t, ani_vm **);
+using AniDestructor = ani_status (*)(ani_vm *);
 
 size_t ParsePositiveEnv(const char *name, size_t fallback)
 {
@@ -91,6 +92,36 @@ void *OpenArkRuntime()
 
     std::fprintf(stderr, "unable to load libarkruntime.so: %s\n", dlerror());
     return nullptr;
+}
+
+ani_status InvokeAniDestructor(ani_vm *vm, const char *library_path)
+{
+    void *module = nullptr;
+#ifdef RTLD_NOLOAD
+    module = dlopen(library_path, RTLD_NOW | RTLD_NOLOAD);
+#endif
+    if (module == nullptr) {
+        module = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
+    }
+    if (module == nullptr) {
+        std::fprintf(
+            stderr, "unable to open ANI module for destructor check: %s\n",
+            dlerror());
+        return ANI_ERROR;
+    }
+
+    dlerror();
+    auto destructor = reinterpret_cast<AniDestructor>(
+        dlsym(module, "ANI_Destructor"));
+    const char *error = dlerror();
+    if (error != nullptr) {
+        std::fprintf(stderr, "unable to resolve ANI_Destructor: %s\n", error);
+        dlclose(module);
+        return ANI_ERROR;
+    }
+    ani_status status = destructor(vm);
+    dlclose(module);
+    return status;
 }
 
 ani_status LoadApplicationClassObject(
@@ -232,10 +263,8 @@ int main(int argc, char **argv)
             stderr, "ANI_QEMU_ITERATIONS exceeds the ANI int limit\n");
         return 2;
     }
-    const size_t sample_every =
-        std::getenv("ANI_QEMU_MEMORY_SAMPLE_EVERY") == nullptr
-            ? 0
-            : ParsePositiveEnv("ANI_QEMU_MEMORY_SAMPLE_EVERY", iterations);
+    const bool sample_memory = EnvFlagEnabled("ANI_QEMU_MEMORY_SAMPLE") ||
+        std::getenv("ANI_QEMU_MEMORY_SAMPLE_EVERY") != nullptr;
 
     void *runtime = OpenArkRuntime();
     if (runtime == nullptr) {
@@ -333,7 +362,7 @@ int main(int argc, char **argv)
         return Fail("String_NewUTF8(launcher arguments)", status);
     }
 
-    if (sample_every != 0) {
+    if (sample_memory) {
         PrintMemorySample(0);
     }
     if (repeated) {
@@ -353,7 +382,16 @@ int main(int argc, char **argv)
                      : "Object_CallMethod(launcher.invoke)",
             status);
     }
-    if (sample_every != 0) {
+    if (const char *destructor_library =
+            std::getenv("ANI_QEMU_DESTRUCTOR_LIBRARY");
+        destructor_library != nullptr && *destructor_library != '\0') {
+        status = InvokeAniDestructor(vm, destructor_library);
+        if (status != ANI_OK) {
+            vm->DestroyVM();
+            return Fail("ANI_Destructor", status);
+        }
+    }
+    if (sample_memory) {
         PrintMemorySample(iterations);
     }
 

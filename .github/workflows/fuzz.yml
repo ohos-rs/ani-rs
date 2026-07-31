@@ -9,11 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  bigint:
+  fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - run: cargo install cargo-fuzz --locked
-      - name: Fuzz decimal BigInt conversion
-        run: cargo fuzz run bigint_decimal --fuzz-dir fuzz -- -max_total_time=60
+      - name: Fuzz conversion boundaries
+        run: |
+          for target in bigint_decimal integer_boundaries typed_array_bytes; do
+            cargo fuzz run "$target" --fuzz-dir fuzz -- -max_total_time=60
+          done

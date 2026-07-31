@@ -4,16 +4,37 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-hdc_target="${HDC_TARGET:-127.0.0.1:5557}"
+hdc_target="${HDC_TARGET:-127.0.0.1:5558}"
 guest_arch="${OHOS_QEMU_GUEST_ARCH:-arm64}"
 ohos_source_root="${OHOS_SOURCE_ROOT:-/tmp/openharmony}"
 deveco_sdk_root="${DEVECO_SDK_ROOT:-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony}"
+qemu_packages_root="${QEMU_PACKAGES_ROOT:-}"
+require_package_process="${OHOS_QEMU_REQUIRE_PACKAGE_PROCESS:-0}"
+hap_input="${OHOS_QEMU_HAP:-}"
 work_root="${OHOS_QEMU_WORK_ROOT:-$repo_root/target/ohos-qemu}"
 remote_root="${OHOS_QEMU_REMOTE_ROOT:-/data/local/tmp/ani-rs-qemu}"
 case_timeout="${OHOS_QEMU_CASE_TIMEOUT:-45}"
 case_attempts="${OHOS_QEMU_CASE_ATTEMPTS:-3}"
 package_filter="${OHOS_QEMU_PACKAGE_FILTER:-}"
 runner_asan="${OHOS_QEMU_RUNNER_ASAN:-0}"
+runner_iterations="${OHOS_QEMU_ITERATIONS:-1}"
+memory_sample="${OHOS_QEMU_MEMORY_SAMPLE:-${OHOS_QEMU_MEMORY_SAMPLE_EVERY:-0}}"
+max_pss_growth_kb="${OHOS_QEMU_MAX_PSS_GROWTH_KB:-}"
+
+for numeric in "$runner_iterations" "$memory_sample"; do
+  if [[ ! "$numeric" =~ ^[0-9]+$ ]]; then
+    echo "QEMU iteration and memory-sample values must be non-negative integers" >&2
+    exit 2
+  fi
+done
+if [[ -n "$max_pss_growth_kb" && ! "$max_pss_growth_kb" =~ ^[0-9]+$ ]]; then
+  echo "OHOS_QEMU_MAX_PSS_GROWTH_KB must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ "$runner_iterations" == "0" ]]; then
+  echo "OHOS_QEMU_ITERATIONS must be greater than zero" >&2
+  exit 2
+fi
 
 case "$guest_arch" in
   arm64)
@@ -21,18 +42,24 @@ case "$guest_arch" in
     clang_triple="aarch64-unknown-linux-ohos"
     expected_uname='aarch64|arm64'
     expected_elf_machine='AArch64'
+    qemu_package='openharmony-qemu-arm64-arm64_virt'
+    hap_abi='arm64-v8a'
     ;;
   x86_64)
     rust_target="x86_64-unknown-linux-ohos"
     clang_triple="x86_64-unknown-linux-ohos"
     expected_uname='x86_64'
     expected_elf_machine='Advanced Micro Devices X86-64'
+    qemu_package='openharmony-qemu-x86_64-x86_64_virt'
+    hap_abi='x86_64'
     ;;
   armv7a)
     rust_target="armv7-unknown-linux-ohos"
     clang_triple="armv7-unknown-linux-ohos"
     expected_uname='armv7l|armv7|arm'
     expected_elf_machine='ARM'
+    qemu_package='openharmony-qemu-armv7a-armv7a_virt'
+    hap_abi='armeabi-v7a'
     ;;
   *)
     echo "unsupported OHOS_QEMU_GUEST_ARCH: $guest_arch (expected arm64, x86_64, or armv7a)" >&2
@@ -58,6 +85,23 @@ arktsconfig="$es2panda_dir/arktsconfig.json"
 runner="$work_root/ani_abc_runner"
 launcher_abc="$work_root/ohos_qemu_abc_launcher.abc"
 report="$work_root/report.tsv"
+memory_report="$work_root/memory.tsv"
+
+if [[ -n "$qemu_packages_root" ]]; then
+  package_root="$qemu_packages_root/$qemu_package"
+  manifest="$package_root/manifest.json"
+  if [[ ! -f "$manifest" ]] ||
+    ! grep -q "\"guest_arch\": \"$guest_arch\"" "$manifest"; then
+    echo "QEMU package does not match $guest_arch: $package_root" >&2
+    exit 1
+  fi
+  if [[ "$require_package_process" == "1" ]] &&
+    ! ps -ax -o command= | grep -F "$package_root/images/" | grep -v grep >/dev/null; then
+    echo "the requested QEMU package is not running: $package_root" >&2
+    exit 1
+  fi
+  echo "QEMU_PACKAGE: $package_root"
+fi
 
 for required in \
   "$clang_bin/$clang_triple-clang" \
@@ -88,6 +132,9 @@ if [[ ! -x "$hdc_bin" ]]; then
 fi
 
 if ! "$hdc_bin" -t "$hdc_target" shell true >/dev/null 2>&1; then
+  "$hdc_bin" tconn "$hdc_target" >/dev/null 2>&1 || true
+fi
+if ! "$hdc_bin" -t "$hdc_target" shell true >/dev/null 2>&1; then
   echo "HDC target is not connected: $hdc_target" >&2
   exit 1
 fi
@@ -100,11 +147,33 @@ fi
 
 mkdir -p "$work_root"
 
+hap_extract_root="$work_root/hap"
+if [[ -n "$hap_input" ]]; then
+  if [[ ! -f "$hap_input" ]]; then
+    echo "HAP does not exist: $hap_input" >&2
+    exit 1
+  fi
+  "$repo_root/scripts/verify_hap.sh" "$hap_input" "$guest_arch"
+  package_filter='^ani-example-new-basic$'
+  mkdir -p "$hap_extract_root"
+  unzip -p "$hap_input" resources/rawfile/ani_rs_smoke.abc \
+    >"$hap_extract_root/arkvm_test.abc"
+  unzip -p "$hap_input" "libs/$hap_abi/libani_example_new_basic.so" \
+    >"$hap_extract_root/libani_example_new_basic.so"
+  echo "HAP_INPUT: $hap_input"
+fi
+
 runner_cxxflags=(-O2)
-runner_runtime_env=""
+runner_runtime_env="ANI_QEMU_ITERATIONS=$runner_iterations"
+if [[ "$memory_sample" != "0" ]]; then
+  runner_runtime_env+=" ANI_QEMU_MEMORY_SAMPLE=1"
+fi
+if [[ "${OHOS_QEMU_DISABLE_JIT:-0}" == "1" ]]; then
+  runner_runtime_env+=" ANI_QEMU_DISABLE_JIT=1"
+fi
 if [[ "$runner_asan" == "1" ]]; then
   runner_cxxflags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address)
-  runner_runtime_env="ASAN_OPTIONS=detect_leaks=0:halt_on_error=1"
+  runner_runtime_env+=" ASAN_OPTIONS=detect_leaks=0:halt_on_error=1"
 fi
 
 "$clang_bin/$clang_triple-clang++" \
@@ -127,7 +196,7 @@ docker run --rm --platform linux/amd64 \
   --output /work/ohos_qemu_abc_launcher.abc \
   /repo/scripts/ohos_qemu_abc_launcher.ets
 
-if [[ "${OHOS_QEMU_SKIP_BUILD:-0}" != "1" ]]; then
+if [[ -z "$hap_input" && "${OHOS_QEMU_SKIP_BUILD:-0}" != "1" ]]; then
   env \
     ANI_TEST_MODULE_NAME=arkvm_test \
     "$rust_target_env=$clang_bin/$clang_triple-clang" \
@@ -143,6 +212,7 @@ fi
 "$hdc_bin" -t "$hdc_target" shell chmod 755 "$remote_root/ani_abc_runner"
 
 printf 'arch\tpackage\tcross_build\telf_abi\tabc_compile\tqemu_runtime\tassert_pass\tassert_fail\tstatus\n' > "$report"
+printf 'arch\tpackage\titerations\tstart_pss_kb\tend_pss_kb\tgrowth_pss_kb\tlimit_pss_kb\tstatus\n' > "$memory_report"
 
 total=0
 passed=0
@@ -166,6 +236,11 @@ while IFS= read -r cargo_toml; do
 
   mkdir -p "$case_dir"
 
+  if [[ -n "$hap_input" ]]; then
+    native_lib="$hap_extract_root/libani_example_new_basic.so"
+    cp "$hap_extract_root/arkvm_test.abc" "$abc_file"
+  fi
+
   if [[ ! -f "$native_lib" ]]; then
     printf '%s\t%s\tFAIL\tSKIP\tSKIP\tSKIP\t0\t0\tFAIL\n' \
       "$guest_arch" "$package" >> "$report"
@@ -181,21 +256,23 @@ while IFS= read -r cargo_toml; do
     continue
   fi
 
-  if ! docker run --rm --platform linux/amd64 \
-    -v "$ohos_source_root:$ohos_source_root:ro" \
-    -v "$repo_root:/repo:ro" \
-    -v "$work_root:/work" \
-    ubuntu:22.04 \
-    "$es2panda" \
-    --extension=ets \
-    --arktsconfig "$arktsconfig" \
-    --output "/work/cases/$base/arkvm_test.abc" \
-    "/repo/$test_ets" \
-    >"$case_dir/es2panda.log" 2>&1; then
-    printf '%s\t%s\tOK\tOK\tFAIL\tSKIP\t0\t0\tFAIL\n' \
-      "$guest_arch" "$package" >> "$report"
-    echo "FAIL $package: ABC compile"
-    continue
+  if [[ -z "$hap_input" ]]; then
+    if ! docker run --rm --platform linux/amd64 \
+      -v "$ohos_source_root:$ohos_source_root:ro" \
+      -v "$repo_root:/repo:ro" \
+      -v "$work_root:/work" \
+      ubuntu:22.04 \
+      "$es2panda" \
+      --extension=ets \
+      --arktsconfig "$arktsconfig" \
+      --output "/work/cases/$base/arkvm_test.abc" \
+      "/repo/$test_ets" \
+      >"$case_dir/es2panda.log" 2>&1; then
+      printf '%s\t%s\tOK\tOK\tFAIL\tSKIP\t0\t0\tFAIL\n' \
+        "$guest_arch" "$package" >> "$report"
+      echo "FAIL $package: ABC compile"
+      continue
+    fi
   fi
 
   "$hdc_bin" -t "$hdc_target" file send "$native_lib" "$remote_root/lib${base}.so" >/dev/null
@@ -203,20 +280,50 @@ while IFS= read -r cargo_toml; do
   runtime_ok=0
   assert_pass=0
   assert_fail=0
+  start_pss=-1
+  end_pss=-1
+  growth_pss=0
+  memory_status=SKIP
   for ((attempt = 1; attempt <= case_attempts; attempt += 1)); do
     "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null
+    case_runtime_env="$runner_runtime_env ANI_QEMU_DESTRUCTOR_LIBRARY=$remote_root/lib${base}.so"
+    set +e
     "$hdc_bin" -t "$hdc_target" shell \
-      "$runner_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
-      >"$run_log" 2>&1 || true
+      "$case_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
+      >"$run_log" 2>&1
+    device_exit=$?
+    set -e
+    printf 'ANI_HDC_SHELL_EXIT=%s\n' "$device_exit" >>"$run_log"
     "$hdc_bin" -t "$hdc_target" shell \
       "hilog -x | grep -E '\\[arkvm\\]|\\[ASSERT PASS\\]|\\[ASSERT FAIL\\]|\\[QEMU ERROR\\]'" \
       >"$hilog_file" 2>&1 || true
+    cp "$run_log" "$case_dir/runtime.attempt-$attempt.log"
+    cp "$hilog_file" "$case_dir/hilog.attempt-$attempt.log"
 
     assert_pass="$(awk '/\[ASSERT PASS\]/{count += 1} END{print count + 0}' "$hilog_file")"
     assert_fail="$(awk '/\[ASSERT FAIL\]/{count += 1} END{print count + 0}' "$hilog_file")"
+    if [[ "$memory_sample" != "0" ]]; then
+      sample_count="$(awk '/ANI_MEMORY_SAMPLE/{count += 1} END{print count + 0}' "$run_log")"
+      start_pss="$(awk -F'pss_kb=' '/ANI_MEMORY_SAMPLE/{split($2, v, " "); print v[1]; exit}' "$run_log")"
+      end_pss="$(awk -F'pss_kb=' '/ANI_MEMORY_SAMPLE/{split($2, v, " "); value=v[1]} END{if (value != "") print value}' "$run_log")"
+      start_pss="${start_pss:--1}"
+      end_pss="${end_pss:--1}"
+      if ((sample_count >= 2 && start_pss >= 0 && end_pss >= 0)); then
+        growth_pss=$((end_pss - start_pss))
+        memory_status=PASS
+        if [[ -n "$max_pss_growth_kb" ]] && ((growth_pss > max_pss_growth_kb)); then
+          memory_status=FAIL
+        fi
+      else
+        memory_status=FAIL
+      fi
+    fi
     if grep -q 'ANI_ABC_RUNNER_OK' "$run_log" &&
       grep -q '\[arkvm\] smoke done:' "$hilog_file" &&
-      [[ "$assert_fail" == "0" ]]; then
+      [[ "$assert_fail" == "0" ]] &&
+      { [[ "$package" != "ani-example-init-lifecycle" ]] ||
+        grep -q 'ANI_FINALIZER_OK count=1' "$run_log"; } &&
+      [[ "$memory_status" != "FAIL" ]]; then
       runtime_ok=1
       break
     fi
@@ -236,9 +343,13 @@ while IFS= read -r cargo_toml; do
       "$guest_arch" "$package" "$assert_pass" "$assert_fail" >> "$report"
     echo "FAIL $package: QEMU runtime ($assert_pass pass, $assert_fail fail)"
   fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$guest_arch" "$package" "$runner_iterations" "$start_pss" "$end_pss" \
+    "$growth_pss" "${max_pss_growth_kb:-none}" "$memory_status" >> "$memory_report"
 done < <(find examples -maxdepth 2 -name Cargo.toml | sort)
 
 echo "QEMU_RESULT: $passed/$total"
 echo "REPORT: $report"
+echo "MEMORY_REPORT: $memory_report"
 
 [[ "$passed" == "$total" ]]

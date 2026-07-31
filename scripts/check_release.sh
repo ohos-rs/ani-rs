@@ -15,7 +15,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc \
   --all-features --no-deps
 
 for package in ani-sys ani-derive ani ani-cli; do
-  cargo package -p "$package" --no-verify
+  # This script is intentionally run before committing release candidates, so
+  # package the current workspace while still exercising Cargo's file list.
+  cargo package -p "$package" --no-verify --allow-dirty
 done
 
 pnpm --dir website check

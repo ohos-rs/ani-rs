@@ -104,12 +104,24 @@ jobs:
           test "$api_level" -ge 24
       - name: Run cross-build, ETS/ABC and QEMU runtime suite
         run: scripts/run_arkvm_examples_ohos_qemu.sh
+      - name: Build and verify HAP smoke artifact
+        run: scripts/build_hap_smoke.sh "$OHOS_QEMU_GUEST_ARCH"
+      - name: Execute ABC and ANI library extracted from HAP
+        run: scripts/run_hap_abc_ohos_qemu.sh
+      - name: Run bounded memory-growth stress suite
+        run: scripts/check_qemu_memory.sh
       - name: Upload QEMU report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ohos-qemu-${{ inputs.guest_arch }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/report.tsv
+          path: |
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-hap-${{ inputs.guest_arch }}/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-hap-${{ inputs.guest_arch }}/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-memory/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-memory/memory.tsv
           if-no-files-found: warn
       - name: Clean device test directory
         if: always()

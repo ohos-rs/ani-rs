@@ -17,3 +17,17 @@ path = "fuzz_targets/bigint_decimal.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "integer_boundaries"
+path = "fuzz_targets/integer_boundaries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed_array_bytes"
+path = "fuzz_targets/typed_array_bytes.rs"
+test = false
+doc = false
+bench = false

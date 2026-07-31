@@ -75,3 +75,39 @@ jobs:
         run: cargo package -p ani --no-verify
       - name: Package ani-cli
         run: cargo package -p ani-cli --no-verify
+
+  security:
+    name: Dependency policy and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  msrv:
+    name: Rust 1.88 minimum version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install 1.88 --profile minimal
+      - run: cargo +1.88 check -p ani-sys -p ani-derive -p ani -p ani-cli --all-features
+
+  miri:
+    name: Miri conversion tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install nightly --profile minimal --component miri
+          cargo +nightly miri setup
+      - name: Check pure conversion and registry logic
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: |
+          for module in arraybuffer bigint primitives resource task typed_array; do
+            cargo +nightly miri test -p ani --lib "conversions::$module::tests"
+          done

@@ -133,6 +133,10 @@ __assert_eq_int("buffer_length", __ANI_GENERATED__.buffer_length(bufA), 8);
 let merged = __ANI_GENERATED__.concat_buffers(bufA, bufB);
 __assert_eq_int("concat_buffers_length", __ANI_GENERATED__.buffer_length(merged), 12);
 __assert_true("process_buffer_non_negative", __ANI_GENERATED__.process_buffer(merged) >= 0);
+let mutated = __ANI_GENERATED__.replace_first_byte(bufA, 255 as short);
+__assert_eq_int("arraybuffer_copy_on_write", __ANI_GENERATED__.first_byte(mutated), 255);
+let typed = __ANI_GENERATED__.make_u16_array();
+__assert_eq_long("typed_array_roundtrip", __ANI_GENERATED__.sum_u16_array(typed), 65794);
 ETS
       ;;
     ani-example-async-wrapper)
@@ -227,6 +231,8 @@ function main(): void {
   __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
   let signatureText: string = waitForCompletion(() => __ANI_GENERATED__.signature_override_echo("value"));
   __assert_eq_string("signature_override_echo", signatureText, "sig:value");
+  let backgroundSquare: int = waitForCompletion(() => __ANI_GENERATED__.background_square(9));
+  __assert_eq_int("background_square", backgroundSquare, 81);
 
   let ctorBox = new AsyncCtorBox("demo", 4);
   __assert_eq_int("async_constructor_total", ctorBox.total, 4);
@@ -260,11 +266,22 @@ ETS
       ;;
     ani-example-bigint)
       cat <<'ETS'
-__assert_eq_long("big_int_add", __ANI_GENERATED__.big_int_add(7, 5), 12);
-__assert_eq_long("big_int_subtract", __ANI_GENERATED__.big_int_subtract(9, 4), 5);
-__assert_eq_long("big_int_multiply", __ANI_GENERATED__.big_int_multiply(3, 4), 12);
-__assert_true("big_int_compare_lt", __ANI_GENERATED__.big_int_compare(2, 5) < 0);
-__assert_true("big_int_is_zero", __ANI_GENERATED__.big_int_is_zero(0));
+let huge: bigint = new BigInt("1234567890123456789012345678901234567890");
+__assert_eq_string("big_int_to_decimal", __ANI_GENERATED__.big_int_to_decimal(huge), "1234567890123456789012345678901234567890");
+__assert_eq_string("big_int_identity", __ANI_GENERATED__.big_int_identity(huge).toString(), huge.toString());
+__assert_eq_string("big_int_from_decimal", __ANI_GENERATED__.big_int_from_decimal("-999999999999999999999999").toString(), "-999999999999999999999999");
+__assert_eq_int("big_int_decimal_digits", __ANI_GENERATED__.big_int_decimal_digits(huge), 40);
+__assert_true("big_int_is_negative", __ANI_GENERATED__.big_int_is_negative(new BigInt("-1")));
+__assert_eq_long("big_int_to_i64_lossless", __ANI_GENERATED__.big_int_to_i64_lossless(new BigInt("9223372036854775807")), 9223372036854775807);
+__assert_throws("big_int_to_i64_overflow", (): void => {
+  __ANI_GENERATED__.big_int_to_i64_lossless(huge);
+});
+let maxU64 = new BigInt("18446744073709551615");
+__assert_eq_string("u64_max_lossless", __ANI_GENERATED__.u64_identity(maxU64).toString(), maxU64.toString());
+let minI128 = new BigInt("-170141183460469231731687303715884105728");
+__assert_eq_string("i128_min_lossless", __ANI_GENERATED__.i128_identity(minI128).toString(), minI128.toString());
+let maxU128 = new BigInt("340282366920938463463374607431768211455");
+__assert_eq_string("u128_max_lossless", __ANI_GENERATED__.u128_identity(maxU128).toString(), maxU128.toString());
 ETS
       ;;
     ani-example-derive-shapes)
@@ -303,6 +320,16 @@ __assert_true(
   "object_marker_identity",
   __ANI_GENERATED__.object_marker_identity(new ObjectMarker()),
 );
+__assert_eq_long("transparent_newtype", __ANI_GENERATED__.next_user_id(41), 42);
+__assert_eq_int("array_newtype", __ANI_GENERATED__.score_total([2, 3, 4]), 9);
+ETS
+      ;;
+    ani-example-enum-derive)
+      cat <<'ETS'
+__assert_true("enum_status_terminal", __ANI_GENERATED__.is_terminal(Status.Stopped));
+__assert_eq_string("enum_status_name", __ANI_GENERATED__.status_name(Status.Running), "running");
+let pointJson: string = "{\"Point\":{\"x\":3,\"y\":4}}";
+__assert_eq_string("structured_enum_json", __ANI_GENERATED__.message_identity(pointJson), pointJson);
 ETS
       ;;
     ani-example-call-method)
@@ -599,6 +626,7 @@ __assert_eq_int("init_state_runs_all_registered_init_callbacks", before, 111);
 __ANI_GENERATED__.reset_init_state();
 let after = __ANI_GENERATED__.init_state();
 __assert_eq_int("init_state_reset_clears_runtime_flags", after, 0);
+__assert_eq_int("finalizer_not_run_before_vm_destroy", __ANI_GENERATED__.finalize_count(), 0);
 ETS
       ;;
     ani-example-interface)
@@ -1258,6 +1286,7 @@ __assert_eq_string(
   __ANI_GENERATED__.borrowed_c_str_literal(),
   "borrowed-c",
 );
+__assert_eq_string("unicode_scalar_char", __ANI_GENERATED__.char_identity("🦀"), "🦀");
 ETS
       ;;
     ani-example-tuple-value-wrapper)

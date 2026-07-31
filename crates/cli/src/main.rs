@@ -43,6 +43,9 @@ struct Options {
     sdk_root: PathBuf,
     release: bool,
     cargo_args: Vec<String>,
+    module_descriptor: Option<String>,
+    ets_output: Option<PathBuf>,
+    ets_library: Option<String>,
 }
 
 fn default_sdk_root() -> PathBuf {
@@ -57,6 +60,9 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, Stri
     let mut sdk_root = default_sdk_root();
     let mut release = false;
     let mut cargo_args = Vec::new();
+    let mut module_descriptor = None;
+    let mut ets_output = None;
+    let mut ets_library = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -74,6 +80,24 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, Stri
                 );
             }
             "--release" => release = true,
+            "--module-descriptor" => {
+                module_descriptor = Some(
+                    args.next()
+                        .ok_or_else(|| "--module-descriptor requires a value".to_string())?,
+                );
+            }
+            "--ets-output" => {
+                ets_output = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--ets-output requires a path".to_string())?,
+                ));
+            }
+            "--library" => {
+                ets_library = Some(
+                    args.next()
+                        .ok_or_else(|| "--library requires a value".to_string())?,
+                );
+            }
             "--" => {
                 cargo_args.extend(args);
                 break;
@@ -87,6 +111,9 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, Stri
         sdk_root,
         release,
         cargo_args,
+        module_descriptor,
+        ets_output,
+        ets_library,
     })
 }
 
@@ -175,6 +202,15 @@ fn build(options: &Options) -> Result<(), String> {
         .env(cargo_linker, &clang)
         .env(cc, &clang)
         .env(cxx, &clangxx);
+    if let Some(descriptor) = &options.module_descriptor {
+        command.env("ANI_MODULE_DESCRIPTOR", descriptor);
+    }
+    if let Some(output) = &options.ets_output {
+        command.env("ANI_ETS_OUTPUT", output);
+    }
+    if let Some(library) = &options.ets_library {
+        command.env("ANI_ETS_LIBRARY", library);
+    }
     let status = command
         .status()
         .map_err(|error| format!("failed to execute cargo: {error}"))?;
@@ -185,13 +221,53 @@ fn build(options: &Options) -> Result<(), String> {
     }
 }
 
+fn run_repo_script(name: &str, args: &[String], options: &Options) -> Result<(), String> {
+    let script = env::current_dir()
+        .map_err(|error| format!("failed to resolve current directory: {error}"))?
+        .join("scripts")
+        .join(name);
+    if !script.is_file() {
+        return Err(format!(
+            "{} must be run from an ani-rs checkout (missing {})",
+            name,
+            script.display()
+        ));
+    }
+    let guest_arch = match options.arch {
+        Arch::Arm64 => "arm64",
+        Arch::X86_64 => "x86_64",
+        Arch::Armv7a => "armv7a",
+    };
+    let mut command = Command::new(script);
+    command
+        .args(args)
+        .env("DEVECO_SDK_ROOT", &options.sdk_root)
+        .env("OHOS_QEMU_GUEST_ARCH", guest_arch);
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to run {name}: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} failed with {status}"))
+    }
+}
+
 fn usage() -> String {
     "\
 ani-rs - OpenHarmony ANI build helper
 
 Usage:
   ani-rs doctor [--arch arm64|x86_64|armv7a] [--sdk PATH]
-  ani-rs build  [--arch arm64|x86_64|armv7a] [--sdk PATH] [--release] [-- CARGO_ARGS...]
+  ani-rs build  [--arch ARCH] [--sdk PATH] [--release]
+                [--module-descriptor NAME] [--ets-output PATH] [--library NAME]
+                [-- CARGO_ARGS...]
+  ani-rs hap    [--arch ARCH] [--sdk PATH]
+  ani-rs hap-repro [--arch ARCH] [--sdk PATH]
+  ani-rs qemu   [--arch ARCH] [--sdk PATH]
+  ani-rs qemu-memory [--arch ARCH] [--sdk PATH]
+  ani-rs hap-qemu [--arch ARCH] [--sdk PATH] [-- HAP_PATH]
+  ani-rs verify-hap [--arch ARCH] [--sdk PATH] -- HAP_PATH
 "
     .to_string()
 }
@@ -203,6 +279,56 @@ fn run() -> Result<(), String> {
     match command.as_str() {
         "doctor" => doctor(&options),
         "build" => build(&options),
+        "hap" => run_repo_script(
+            "build_hap_smoke.sh",
+            &[match options.arch {
+                Arch::Arm64 => "arm64",
+                Arch::X86_64 => "x86_64",
+                Arch::Armv7a => "armv7a",
+            }
+            .to_string()],
+            &options,
+        ),
+        "hap-repro" => run_repo_script(
+            "check_hap_reproducible.sh",
+            &[match options.arch {
+                Arch::Arm64 => "arm64",
+                Arch::X86_64 => "x86_64",
+                Arch::Armv7a => "armv7a",
+            }
+            .to_string()],
+            &options,
+        ),
+        "qemu" => {
+            // The runtime script intentionally consumes its configuration via
+            // environment variables so CI and local runs share one path.
+            run_repo_script("run_arkvm_examples_ohos_qemu.sh", &[], &options)
+        }
+        "qemu-memory" => run_repo_script("check_qemu_memory.sh", &[], &options),
+        "hap-qemu" => {
+            let arch = match options.arch {
+                Arch::Arm64 => "arm64",
+                Arch::X86_64 => "x86_64",
+                Arch::Armv7a => "armv7a",
+            };
+            let mut script_args = options.cargo_args.clone();
+            if script_args.is_empty() {
+                script_args.push(String::new());
+            }
+            script_args.push(arch.to_string());
+            run_repo_script("run_hap_abc_ohos_qemu.sh", &script_args, &options)
+        }
+        "verify-hap" => {
+            let Some(hap) = options.cargo_args.first() else {
+                return Err("verify-hap requires a HAP path after --".to_string());
+            };
+            let arch = match options.arch {
+                Arch::Arm64 => "arm64",
+                Arch::X86_64 => "x86_64",
+                Arch::Armv7a => "armv7a",
+            };
+            run_repo_script("verify_hap.sh", &[hap.clone(), arch.to_string()], &options)
+        }
         "-h" | "--help" | "help" => Err(usage()),
         _ => Err(format!("unknown command {command:?}\n\n{}", usage())),
     }
@@ -249,5 +375,31 @@ mod tests {
         assert_eq!(options.arch, Arch::X86_64);
         assert!(options.release);
         assert_eq!(options.cargo_args, ["-p", "my-module"]);
+    }
+
+    #[test]
+    fn options_capture_reproducible_binding_inputs() {
+        let options = parse_options(
+            [
+                "--module-descriptor",
+                "entry.src.main.ets.native",
+                "--ets-output",
+                "generated/native.ets",
+                "--library",
+                "native",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(
+            options.module_descriptor.as_deref(),
+            Some("entry.src.main.ets.native")
+        );
+        assert_eq!(
+            options.ets_output,
+            Some(PathBuf::from("generated/native.ets"))
+        );
+        assert_eq!(options.ets_library.as_deref(), Some("native"));
     }
 }

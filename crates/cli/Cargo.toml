@@ -2,6 +2,7 @@
 name = "ani-cli"
 version = "0.0.1-alpha.1"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Build and environment diagnostics for ani-rs OpenHarmony modules"

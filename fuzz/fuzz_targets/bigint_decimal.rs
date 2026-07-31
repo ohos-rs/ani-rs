@@ -1,5 +1,7 @@
 #![no_main]
 
+mod ani_host_stubs;
+
 use ani::conversions::BigInt;
 use libfuzzer_sys::fuzz_target;
 

@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "version": "1.0.0"
+  },
+  "data": {
+    "apiVersion": "24",
+    "displayName": "OpenHarmony API 24",
+    "path": "OpenHarmony-API-24",
+    "platformVersion": "6.1.1",
+    "releaseType": "Release",
+    "version": "6.1.1.125",
+    "stage": "Release"
+  }
+}

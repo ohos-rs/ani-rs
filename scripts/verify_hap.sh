@@ -64,6 +64,10 @@ if ! grep -Eq '(^|/).+\.abc$' <<<"$entries"; then
   echo "HAP contains no .abc bytecode: $hap_file" >&2
   exit 1
 fi
+if ! grep -Eq '(^|/)resources/rawfile/ani_rs_smoke\.abc$' <<<"$entries"; then
+  echo "HAP does not contain the executable ArkTS 1.2 smoke ABC" >&2
+  exit 1
+fi
 
 libraries=()
 while IFS= read -r entry; do
@@ -108,6 +112,10 @@ for entry in "${libraries[@]}"; do
   dynamic_symbols="$("$llvm_bin/llvm-nm" -D --defined-only "$extracted")"
   if ! grep -Eq '[[:space:]]ANI_Constructor$' <<<"$dynamic_symbols"; then
     echo "ANI_Constructor is not exported by $entry" >&2
+    exit 1
+  fi
+  if ! grep -Eq '[[:space:]]ANI_Destructor$' <<<"$dynamic_symbols"; then
+    echo "ANI_Destructor is not exported by $entry" >&2
     exit 1
   fi
   ((checked += 1))
