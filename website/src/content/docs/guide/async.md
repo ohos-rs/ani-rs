@@ -3,6 +3,23 @@ title: 异步与 Promise
 description: 使用 #[ani(async)] 和 Tokio 把 Rust Future 暴露为 ArkTS Promise。
 ---
 
+## 等待 ArkTS Promise
+
+`PromiseRaw<T>::into_future` 把 ArkTS `Promise<T>` 提升为可跨线程轮询的 Rust `PromiseFuture<T>`：
+
+```rust
+#[ani]
+pub fn await_arkts(
+    env: &Env<'_>,
+    promise: PromiseRaw<'_, String>,
+) -> Result<PromiseRaw<'static, String>> {
+    let future = promise.into_future(env)?;
+    ani::tokio::spawn_future(env, future).map(PromiseRaw::into_static)
+}
+```
+
+Future 持有全局 ANI 引用，并在实际轮询线程自动 attach。`cancel()` 和 Drop 都会释放该引用；ANI 没有 Promise 取消原语，因此取消停止的是 Rust 侧等待，不会强制终止 ArkTS 操作。
+
 异步 I/O 或需要等待的 Rust API，优先写成 `#[ani(async)] async fn`。生成的 ArkTS 返回类型是 `Promise<T>`。
 
 ## 开启异步运行时

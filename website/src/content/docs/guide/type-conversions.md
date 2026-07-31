@@ -24,8 +24,29 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 | `f32` | `F` | `float` |
 | `f64` | `D` | `double` |
 | `String` | string reference | `string` |
+| `BigInt` | `Lstd/core/BigInt;` | `bigint` |
 
 选择整数类型时要考虑 ArkTS 的数值范围。不要仅为了方便把指针或句柄暴露成普通 `long`；优先使用 class 或引用 wrapper。
+
+`BigInt` 使用规范化十进制字符串在 Rust 侧无损持有任意精度值：
+
+```rust
+use ani::conversions::BigInt;
+use ani::error::Result;
+use ani_derive::ani;
+
+#[ani]
+pub fn bigint_roundtrip(value: BigInt) -> BigInt {
+    value
+}
+
+#[ani]
+pub fn bigint_from_text(value: String) -> Result<BigInt> {
+    BigInt::from_decimal(value)
+}
+```
+
+只有显式调用 `BigInt::to_i64()` 时才会缩窄；超出范围会返回 `OutOfRange`，不会截断。
 
 ## Null 与 Undefined
 
@@ -122,7 +143,17 @@ pub fn apply(
 }
 ```
 
-需要保存回调供后续 ANI 调用时，使用 `FunctionRef<Args, Return>`。它仍然需要有效的 `Env` 才能真正调用 ArkTS 函数。
+需要保存回调供后续 ANI 调用时，使用 `FunctionRef<Args, Return>`。工作线程优先使用语义别名 `ThreadsafeFunction` 和 `call_attached`，它会为当前线程自动 attach/detach：
+
+```rust
+use ani::prelude::*;
+
+fn run_on_worker(callback: ThreadsafeFunction<(String,), String>) -> Result<String> {
+    callback.call_attached(("ready".to_string(),))
+}
+```
+
+需要把 Rust 对象交给 ArkTS 保存时，优先使用 `ManagedResource<T>`，不要传裸指针。它使用不复用的整数句柄、运行时类型检查和串行可变访问；ArkTS 的显式 `close` 或 `FinalizationRegistry` 回调应调用 Rust 导出的释放函数。
 
 ## 自定义转换
 
