@@ -190,10 +190,9 @@ fn process_method(
     if let Some(property_name) = class_member_plan
         .as_ref()
         .and_then(|plan| plan.property_name())
+        && !binding_input.is_static()
     {
-        if !binding_input.is_static() {
-            validate_accessor_backing_field_conflict(struct_name, property_name, method)?;
-        }
+        validate_accessor_backing_field_conflict(struct_name, property_name, method)?;
     }
 
     let signature_for_binding = signature_for_export(&merged_attrs, &method.sig)?;
@@ -632,11 +631,11 @@ fn build_receiver_call_args(func: &ItemFn) -> Vec<TokenStream> {
         match classify_receiver_arg(arg) {
             ReceiverArgKind::Receiver => {}
             ReceiverArgKind::InjectedEnv => {
-                if let FnArg::Typed(pat_type) = arg {
-                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                        let ident = format_ident!("__ani_injected_{}", pat_ident.ident);
-                        args.push(quote! { #ident });
-                    }
+                if let FnArg::Typed(pat_type) = arg
+                    && let Pat::Ident(pat_ident) = &*pat_type.pat
+                {
+                    let ident = format_ident!("__ani_injected_{}", pat_ident.ident);
+                    args.push(quote! { #ident });
                 }
             }
             ReceiverArgKind::Regular => {
@@ -808,10 +807,10 @@ fn analyze_method_receiver(method: &syn::ImplItemFn) -> syn::Result<MethodReceiv
 }
 
 fn extract_struct_name(impl_block: &ItemImpl) -> Result<String, TokenStream> {
-    if let syn::Type::Path(type_path) = &*impl_block.self_ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return Ok(segment.ident.to_string());
-        }
+    if let syn::Type::Path(type_path) = &*impl_block.self_ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return Ok(segment.ident.to_string());
     }
     Err(syn::Error::new_spanned(&impl_block.self_ty, "Expected type path").to_compile_error())
 }
@@ -875,10 +874,10 @@ fn to_item_fn(method: &syn::ImplItemFn) -> ItemFn {
 }
 
 fn get_param_name(arg: &FnArg) -> Option<String> {
-    if let FnArg::Typed(pat_type) = arg {
-        if let Pat::Ident(pat_ident) = &*pat_type.pat {
-            return Some(pat_ident.ident.to_string());
-        }
+    if let FnArg::Typed(pat_type) = arg
+        && let Pat::Ident(pat_ident) = &*pat_type.pat
+    {
+        return Some(pat_ident.ident.to_string());
     }
     None
 }

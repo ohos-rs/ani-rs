@@ -54,7 +54,7 @@ pub fn borrowed_os_str_literal() -> &'static OsStr {
 
 #[ani]
 pub fn borrowed_c_str_literal() -> &'static CStr {
-    unsafe { CStr::from_bytes_with_nul_unchecked(b"borrowed-c\0") }
+    c"borrowed-c"
 }
 
 #[cfg(test)]
@@ -77,10 +77,7 @@ mod tests {
             Path::new("base").join("tail").to_string_lossy()
         );
         assert!(borrowed_os_prefix(OsStr::new("prefix-value"), "prefix"));
-        assert_eq!(
-            borrowed_c_str_len(unsafe { CStr::from_bytes_with_nul_unchecked(b"ffi\0") }),
-            3
-        );
+        assert_eq!(borrowed_c_str_len(c"ffi"), 3);
         assert_eq!(borrowed_path_literal(), Path::new("borrowed/path"));
         assert_eq!(borrowed_os_str_literal(), OsStr::new("borrowed-os"));
         assert_eq!(borrowed_c_str_literal().to_str().unwrap(), "borrowed-c");

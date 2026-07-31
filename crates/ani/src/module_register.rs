@@ -824,7 +824,7 @@ mod tests {
         let target = BindingTarget::Module("demo.Entry");
         let _ = queue_binding(target, "zeta", "I:I", 3usize as *const c_void);
         let _ = queue_binding(target, "alpha", "J:J", 2usize as *const c_void);
-        let _ = queue_binding(target, "alpha", "I:I", 1usize as *const c_void);
+        let _ = queue_binding(target, "alpha", "I:I", std::ptr::dangling::<c_void>());
 
         let pending = PENDING_BINDINGS.read().expect("read pending");
         let grouped = prepare_grouped_bindings(&pending, false).expect("grouping should succeed");
@@ -845,7 +845,7 @@ mod tests {
         clear_registrations();
 
         let target = BindingTarget::Namespace("demo.ns");
-        let _ = queue_binding(target, "dup", "I:I", 1usize as *const c_void);
+        let _ = queue_binding(target, "dup", "I:I", std::ptr::dangling::<c_void>());
         let _ = queue_binding(target, "dup", "I:I", 2usize as *const c_void);
 
         let pending = PENDING_BINDINGS.read().expect("read pending");
@@ -863,7 +863,7 @@ mod tests {
             BindingTarget::Module("demo.Entry"),
             "same",
             "I:I",
-            1usize as *const c_void,
+            std::ptr::dangling::<c_void>(),
         );
         let _ = queue_binding(
             BindingTarget::Namespace("demo.ns"),

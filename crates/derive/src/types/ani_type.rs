@@ -175,6 +175,8 @@ pub enum AniType {
     Primitive(PrimitiveType),
     /// String types (String, &str)
     String(StringType),
+    /// Arbitrary-precision ArkTS bigint.
+    BigInt,
     /// Unit type ()
     Unit,
     /// Null literal type
@@ -355,10 +357,10 @@ impl AniType {
             Type::Path(type_path) => Self::parse_type_path_with_type_params(type_path, type_params),
             Type::Reference(type_ref) => {
                 // Handle &str specially, otherwise preserve the referenced surface type.
-                if let Type::Path(inner_path) = type_ref.elem.as_ref() {
-                    if is_path_ident(inner_path, "str") {
-                        return AniType::String(StringType::Str);
-                    }
+                if let Type::Path(inner_path) = type_ref.elem.as_ref()
+                    && is_path_ident(inner_path, "str")
+                {
+                    return AniType::String(StringType::Str);
                 }
                 AniType::from_syn_type_with_type_params(type_ref.elem.as_ref(), type_params)
             }
@@ -471,6 +473,10 @@ impl AniType {
             return AniType::AnyValue;
         }
 
+        if ident == "BigInt" {
+            return AniType::BigInt;
+        }
+
         if ident == "TupleValue" || ident == "AniTupleValue" {
             return AniType::TupleValue;
         }
@@ -493,7 +499,7 @@ impl AniType {
             return AniType::Either(either);
         }
 
-        if ident == "NativePointer" {
+        if ident == "NativePointer" || ident == "ManagedResource" {
             let inner = extract_first_generic_type(&segment.arguments)
                 .unwrap_or_else(|| syn::parse_quote!(()));
             return AniType::NativePointer(Box::new(inner));
@@ -503,25 +509,25 @@ impl AniType {
             return AniType::FixedArray(elem);
         }
 
-        if ident == "Box" {
-            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
-                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
-                    return AniType::String(StringType::BoxStr);
-                }
-                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
-                    return AniType::String(StringType::BoxPath);
-                }
+        if ident == "Box"
+            && let Some(inner) = extract_first_generic_type(&segment.arguments)
+        {
+            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                return AniType::String(StringType::BoxStr);
+            }
+            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                return AniType::String(StringType::BoxPath);
             }
         }
 
-        if ident == "Cow" {
-            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
-                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
-                    return AniType::String(StringType::CowStr);
-                }
-                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
-                    return AniType::String(StringType::CowPath);
-                }
+        if ident == "Cow"
+            && let Some(inner) = extract_first_generic_type(&segment.arguments)
+        {
+            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                return AniType::String(StringType::CowStr);
+            }
+            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                return AniType::String(StringType::CowPath);
             }
         }
 
@@ -542,24 +548,24 @@ impl AniType {
         }
 
         // HashMap<String, V> maps to ArkTS Record<string, V>
-        if ident == "HashMap" {
-            if let Some(record) = parse_record_type(&segment.arguments, type_params) {
-                return AniType::Record(record);
-            }
+        if ident == "HashMap"
+            && let Some(record) = parse_record_type(&segment.arguments, type_params)
+        {
+            return AniType::Record(record);
         }
 
         // HashSet<T> and BTreeSet<T> map to ArkTS Set<T>
-        if ident == "HashSet" || ident == "BTreeSet" {
-            if let Some(set) = parse_set_type(&segment.arguments, type_params) {
-                return AniType::Set(set);
-            }
+        if (ident == "HashSet" || ident == "BTreeSet")
+            && let Some(set) = parse_set_type(&segment.arguments, type_params)
+        {
+            return AniType::Set(set);
         }
 
         // BTreeMap<K, V> maps to ArkTS Map<K, V>
-        if ident == "BTreeMap" {
-            if let Some(map) = parse_map_type(&segment.arguments, type_params) {
-                return AniType::Map(map);
-            }
+        if ident == "BTreeMap"
+            && let Some(map) = parse_map_type(&segment.arguments, type_params)
+        {
+            return AniType::Map(map);
         }
 
         // Check for generic wrapper types
@@ -597,7 +603,7 @@ impl AniType {
                 let (args, ret, arity) = parse_function_generics(&segment.arguments, type_params);
                 AniType::Function(FunctionType::Function { args, ret, arity })
             }
-            "FunctionRef" => {
+            "FunctionRef" | "ThreadsafeFunction" => {
                 let (args, ret, arity) = parse_function_generics(&segment.arguments, type_params);
                 AniType::Function(FunctionType::FunctionRef { args, ret, arity })
             }
@@ -715,6 +721,7 @@ impl AniType {
         match self {
             AniType::Primitive(p) => p.to_ani_c_type(),
             AniType::String(_) => quote! { ani::sys::ani_string },
+            AniType::BigInt => quote! { ani::sys::ani_object },
             AniType::Unit => quote! { () },
             AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
@@ -746,7 +753,7 @@ impl AniType {
 }
 
 impl ArrayHandleType {
-    fn to_ani_c_type(&self) -> TokenStream {
+    fn to_ani_c_type(self) -> TokenStream {
         match self {
             Self::Array | Self::ArrayRef => quote! { ani::sys::ani_array },
             Self::FixedArray => quote! { ani::sys::ani_fixedarray },
@@ -896,6 +903,7 @@ impl AniType {
         match self {
             AniType::Primitive(p) => p.to_signature(),
             AniType::String(_) => "Lstd/core/String;".to_string(),
+            AniType::BigInt => "Lstd/core/BigInt;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -960,6 +968,7 @@ impl AniType {
         match self {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
             AniType::String(_) => "C{std.core.String}".to_string(),
+            AniType::BigInt => "C{std.core.BigInt}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
@@ -1298,10 +1307,13 @@ pub(crate) fn is_custom_object_name(ident: &str) -> bool {
             | "PathBuf"
             | "Function"
             | "FunctionRef"
+            | "ThreadsafeFunction"
             | "FnArgs"
+            | "BigInt"
             | "PromiseRaw"
             | "Deferred"
             | "NativePointer"
+            | "ManagedResource"
     )
 }
 
@@ -1884,6 +1896,14 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "J");
 
+        let ty: Type = syn::parse_quote!(ani::conversions::ManagedResource<crate::NativeResource>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "J");
+
+        let ty: Type = syn::parse_quote!(ani::conversions::BigInt);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "Lstd/core/BigInt;");
+
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
@@ -2019,6 +2039,17 @@ mod tests {
             assert_eq!(quote!(#inner).to_string(), "crate :: NativeResource");
         } else {
             panic!("Expected NativePointer type");
+        }
+    }
+
+    #[test]
+    fn test_parse_managed_resource() {
+        let ty: Type = syn::parse_quote!(ani::conversions::ManagedResource<crate::NativeResource>);
+        let ani_type = AniType::from_syn_type(&ty);
+        if let AniType::NativePointer(inner) = ani_type {
+            assert_eq!(quote!(#inner).to_string(), "crate :: NativeResource");
+        } else {
+            panic!("Expected managed resource to use the native handle ABI");
         }
     }
 

@@ -1047,7 +1047,7 @@ struct InitSignature {
 fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
     if func.sig.asyncness.is_some() {
         return Err(syn::Error::new_spanned(
-            &func.sig.asyncness,
+            func.sig.asyncness,
             "#[ani(init)] does not support async functions",
         ));
     }

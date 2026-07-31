@@ -41,9 +41,7 @@ macro_rules! define_ref_type {
             /// Convert to raw pointer, giving up ownership
             #[inline]
             pub fn into_raw(self) -> $raw_type {
-                let raw = self.raw;
-                std::mem::forget(self);
-                raw
+                self.raw
             }
 
             /// Check if null

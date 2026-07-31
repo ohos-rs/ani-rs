@@ -31,6 +31,7 @@ pub fn sum3(a: i32, b: i32, c: i32) -> i32 {
 #[ani(class = "example.Person")]
 impl Person {
     #[ani(constructor)]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(env: &Env<'_>, this: &AniObject<'_>, name: String, score: i32) -> Result<()> {
         Person {
             _name: name,

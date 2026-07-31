@@ -3,7 +3,7 @@
 //! Implements conversion between Rust string types and ANI string types
 //! - String <-> ani_string
 //! - &str -> ani_string
-//! - Cow<str> <-> ani_string
+//! - `Cow<str>` <-> ani_string
 //! - PathBuf <-> ani_string (lossy conversion)
 
 use std::borrow::Cow;
@@ -42,7 +42,7 @@ impl<'env> ToAni<'env> for String {
 impl<'env> FromAni<'env> for String {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         env.get_string(&value)
     }
 }
@@ -60,7 +60,7 @@ impl TypeInfo for &str {
     }
 }
 
-impl<'env, 'a> ToAni<'env> for &'a str {
+impl<'env> ToAni<'env> for &str {
     type Output = AniString<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
@@ -81,7 +81,7 @@ impl TypeInfo for OsStr {
     }
 }
 
-impl<'env, 'a> ToAni<'env> for &'a OsStr {
+impl<'env> ToAni<'env> for &OsStr {
     type Output = AniString<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
@@ -102,7 +102,7 @@ impl TypeInfo for Path {
     }
 }
 
-impl<'env, 'a> ToAni<'env> for &'a Path {
+impl<'env> ToAni<'env> for &Path {
     type Output = AniString<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
@@ -134,7 +134,7 @@ impl<'env, 'a> ToAni<'env> for Cow<'a, str> {
 impl<'env> FromAni<'env> for Cow<'static, str> {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(Cow::Owned(s))
     }
@@ -164,7 +164,7 @@ impl<'env> ToAni<'env> for Box<str> {
 impl<'env> FromAni<'env> for Box<str> {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(s.into_boxed_str())
     }
@@ -195,7 +195,7 @@ impl<'env> ToAni<'env> for CString {
 impl<'env> FromAni<'env> for CString {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         CString::new(s).map_err(|_| {
             Error::new(
@@ -219,7 +219,7 @@ impl TypeInfo for CStr {
     }
 }
 
-impl<'env, 'a> ToAni<'env> for &'a CStr {
+impl<'env> ToAni<'env> for &CStr {
     type Output = AniString<'env>;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
@@ -251,7 +251,7 @@ impl<'env> ToAni<'env> for PathBuf {
 impl<'env> FromAni<'env> for PathBuf {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(PathBuf::from(s))
     }
@@ -281,7 +281,7 @@ impl<'env> ToAni<'env> for OsString {
 impl<'env> FromAni<'env> for OsString {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(OsString::from(s))
     }
@@ -311,7 +311,7 @@ impl<'env> ToAni<'env> for Box<Path> {
 impl<'env> FromAni<'env> for Box<Path> {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(PathBuf::from(s).into_boxed_path())
     }
@@ -341,7 +341,7 @@ impl<'env, 'a> ToAni<'env> for Cow<'a, Path> {
 impl<'env> FromAni<'env> for Cow<'static, Path> {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let s = env.get_string(&value)?;
         Ok(Cow::Owned(PathBuf::from(s)))
     }

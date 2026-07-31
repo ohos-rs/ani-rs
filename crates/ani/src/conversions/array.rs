@@ -1,9 +1,9 @@
 //! Array Type Conversion
 //!
 //! Implements conversion between Rust array/vector types and ANI array types
-//! - Vec<T> <-> ani_array
-//! - VecDeque<T> <-> ani_array
-//! - LinkedList<T> <-> ani_array
+//! - `Vec<T>` <-> ani_array
+//! - `VecDeque<T>` <-> ani_array
+//! - `LinkedList<T>` <-> ani_array
 //! - [T; N] -> ani_array
 //! - &[T] -> ani_array
 
@@ -135,7 +135,7 @@ where
 {
     type Input = sys::ani_array;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Null pointer: array"));
         }
@@ -146,10 +146,12 @@ where
 
         for index in 0..len {
             let element = env.get_array_element(&array, index)?;
-            let value = T::from_ani(
-                env,
-                <<T as FromAni<'env>>::Input as FromArrayElementInput<'env>>::from_array_element_ref(element),
-            )?;
+            let value = unsafe {
+                T::from_ani(
+                    env,
+                    <<T as FromAni<'env>>::Input as FromArrayElementInput<'env>>::from_array_element_ref(element),
+                )
+            }?;
             out.push(value);
         }
 
@@ -184,8 +186,8 @@ where
 {
     type Input = <Vec<T> as FromAni<'env>>::Input;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(Vec::<T>::from_ani(env, value)?.into())
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        Ok(unsafe { Vec::<T>::from_ani(env, value) }?.into())
     }
 }
 
@@ -216,8 +218,10 @@ where
 {
     type Input = <Vec<T> as FromAni<'env>>::Input;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(Vec::<T>::from_ani(env, value)?.into_iter().collect())
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        Ok(unsafe { Vec::<T>::from_ani(env, value) }?
+            .into_iter()
+            .collect())
     }
 }
 
@@ -250,7 +254,7 @@ impl<'env> ToAni<'env> for Vec<i32> {
 impl<'env> FromAni<'env> for Vec<i32> {
     type Input = sys::ani_fixedarray_int;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,
@@ -302,7 +306,7 @@ impl<'env> ToAni<'env> for Vec<i64> {
 impl<'env> FromAni<'env> for Vec<i64> {
     type Input = sys::ani_fixedarray_long;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,
@@ -354,7 +358,7 @@ impl<'env> ToAni<'env> for Vec<f64> {
 impl<'env> FromAni<'env> for Vec<f64> {
     type Input = sys::ani_fixedarray_double;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,
@@ -406,7 +410,7 @@ impl<'env> ToAni<'env> for Vec<f32> {
 impl<'env> FromAni<'env> for Vec<f32> {
     type Input = sys::ani_fixedarray_float;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,
@@ -460,7 +464,7 @@ impl<'env> ToAni<'env> for Vec<bool> {
 impl<'env> FromAni<'env> for Vec<bool> {
     type Input = sys::ani_fixedarray_boolean;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,
@@ -512,7 +516,7 @@ impl<'env> ToAni<'env> for Vec<u8> {
 impl<'env> FromAni<'env> for Vec<u8> {
     type Input = sys::ani_fixedarray_byte;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         let len = ani_call_ret!(
             env,
             FixedArray_GetLength,

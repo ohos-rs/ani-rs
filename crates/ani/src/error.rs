@@ -72,6 +72,7 @@ use crate::sys;
 /// Standard status codes returned by ANI API calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
+#[derive(Default)]
 pub enum Status {
     /// Success
     Ok = 0,
@@ -104,6 +105,7 @@ pub enum Status {
     /// Ambiguous
     Ambiguous = 14,
     /// Generic failure for custom errors
+    #[default]
     GenericFailure = 100,
 }
 
@@ -133,12 +135,6 @@ impl AsRef<str> for Status {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_ref())
-    }
-}
-
-impl Default for Status {
-    fn default() -> Self {
-        Status::GenericFailure
     }
 }
 

@@ -207,6 +207,7 @@ fn reject_with_error_handle(
 pub type AuthResult<T> = std::result::Result<T, Error<AuthError>>;
 
 /// Using the type alias for cleaner function signatures
+#[cfg(test)]
 fn verify_token(token: &str) -> AuthResult<bool> {
     if token.is_empty() {
         return Err(Error::new(AuthError::InvalidCredentials, "Token is empty"));

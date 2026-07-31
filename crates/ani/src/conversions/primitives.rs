@@ -51,7 +51,7 @@ impl ToAniDirect for bool {
 impl<'env> FromAni<'env> for bool {
     type Input = sys::ani_boolean;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value != 0)
     }
 }
@@ -99,7 +99,7 @@ impl ToAniDirect for i8 {
 impl<'env> FromAni<'env> for i8 {
     type Input = sys::ani_byte;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -147,7 +147,7 @@ impl ToAniDirect for u8 {
 impl<'env> FromAni<'env> for u8 {
     type Input = sys::ani_byte;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value as u8)
     }
 }
@@ -195,7 +195,7 @@ impl ToAniDirect for i16 {
 impl<'env> FromAni<'env> for i16 {
     type Input = sys::ani_short;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -243,7 +243,7 @@ impl ToAniDirect for u16 {
 impl<'env> FromAni<'env> for u16 {
     type Input = sys::ani_char;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -291,7 +291,7 @@ impl ToAniDirect for char {
 impl<'env> FromAni<'env> for char {
     type Input = sys::ani_char;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(char::from_u32(value as u32).unwrap_or('\0'))
     }
 }
@@ -331,7 +331,7 @@ impl ToAniDirect for i32 {
 impl<'env> FromAni<'env> for i32 {
     type Input = sys::ani_int;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -379,7 +379,7 @@ impl ToAniDirect for u32 {
 impl<'env> FromAni<'env> for u32 {
     type Input = sys::ani_int;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value as u32)
     }
 }
@@ -427,7 +427,7 @@ impl ToAniDirect for i64 {
 impl<'env> FromAni<'env> for i64 {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -475,7 +475,7 @@ impl ToAniDirect for u64 {
 impl<'env> FromAni<'env> for u64 {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value as u64)
     }
 }
@@ -523,7 +523,7 @@ impl ToAniDirect for isize {
 impl<'env> FromAni<'env> for isize {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value as isize)
     }
 }
@@ -559,7 +559,7 @@ impl ToAniDirect for usize {
 impl<'env> FromAni<'env> for usize {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value as usize)
     }
 }
@@ -599,7 +599,7 @@ impl ToAniDirect for f32 {
 impl<'env> FromAni<'env> for f32 {
     type Input = sys::ani_float;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -647,7 +647,7 @@ impl ToAniDirect for f64 {
 impl<'env> FromAni<'env> for f64 {
     type Input = sys::ani_double;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -687,7 +687,7 @@ impl<'env> ToAni<'env> for () {
 impl<'env> FromAni<'env> for () {
     type Input = ();
 
-    fn from_ani(_env: &Env<'env>, _value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, _value: Self::Input) -> Result<Self> {
         Ok(())
     }
 }
@@ -715,8 +715,8 @@ mod tests {
 
     #[test]
     fn test_float_conversion() {
-        assert!((3.14f32.to_ani_direct() - 3.14f32).abs() < f32::EPSILON);
-        assert!((f64::from_ani_direct(2.718) - 2.718).abs() < f64::EPSILON);
+        assert!((3.25f32.to_ani_direct() - 3.25f32).abs() < f32::EPSILON);
+        assert!((f64::from_ani_direct(2.5) - 2.5).abs() < f64::EPSILON);
     }
 
     #[test]

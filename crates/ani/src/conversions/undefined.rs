@@ -40,7 +40,7 @@ impl TypeInfo for Undefined {
 }
 
 impl<'env> ValidateFromAni<'env> for Undefined {
-    fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
+    unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
         if value.is_null() {
             return false;
         }
@@ -50,7 +50,7 @@ impl<'env> ValidateFromAni<'env> for Undefined {
 }
 
 impl<'env> FromAniObject<'env> for Undefined {
-    fn from_ani_object(_env: &Env<'env>, _value: sys::ani_object) -> Result<Self> {
+    unsafe fn from_ani_object(_env: &Env<'env>, _value: sys::ani_object) -> Result<Self> {
         Ok(Undefined)
     }
 }
@@ -64,14 +64,14 @@ impl<'env> ToAniObject<'env> for Undefined {
 impl<'env> FromAni<'env> for Undefined {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 Status::InvalidArgs,
                 "Expected undefined, got null",
             ));
         }
-        if Self::validate(env, value) {
+        if unsafe { Self::validate(env, value) } {
             Ok(Undefined)
         } else {
             Err(Error::new(Status::InvalidType, "Expected undefined"))

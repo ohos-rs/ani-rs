@@ -1,0 +1,3 @@
+# Preserve the vendored OpenHarmony header byte-for-byte, including upstream
+# whitespace, so its pinned checksum remains meaningful.
+include/ani.h -text whitespace=-trailing-space

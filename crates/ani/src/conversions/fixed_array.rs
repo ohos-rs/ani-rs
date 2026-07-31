@@ -164,7 +164,7 @@ macro_rules! impl_fixed_array_conversion {
         impl<'env> FromAni<'env> for $wrapper {
             type Input = $ani_raw;
 
-            fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+            unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
                 let len = fixed_array_len(env, value as sys::ani_fixedarray)?;
                 let handle = unsafe { $ani_handle::from_raw(value) };
                 let data: Vec<$elem> = env.$get_region(&handle, 0, len)?;

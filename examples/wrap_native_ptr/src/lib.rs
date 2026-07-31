@@ -3,7 +3,8 @@
 //! Demonstrates how to store and manage Rust object pointers in ArkTS objects
 //! This is the core technique for implementing class bindings
 
-use ani::conversions::NativePointer;
+use ani::conversions::{ManagedResource, NativePointer};
+use ani::error::Result;
 use ani_derive::ani;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -65,6 +66,40 @@ pub fn destroy_native_resource_handle(ptr: NativePointer<NativeResource>) {
     unsafe {
         let _ = ptr.into_box();
     }
+}
+
+// ============================================================================
+// Managed Resource Wrapping (recommended)
+// ============================================================================
+
+/// Creates an opaque, checked handle without exposing a native address.
+#[ani]
+pub fn create_managed_native_resource(
+    id: i32,
+    name: String,
+) -> Result<ManagedResource<NativeResource>> {
+    ManagedResource::new(NativeResource::new(id, name))
+}
+
+/// Reads a managed resource, rejecting closed, forged, or mistyped handles.
+#[ani]
+pub fn get_managed_native_resource_id(resource: ManagedResource<NativeResource>) -> Result<i32> {
+    resource.with(|value| value.id)
+}
+
+/// Mutates a managed resource with serialized access.
+#[ani]
+pub fn set_managed_native_resource_name(
+    resource: ManagedResource<NativeResource>,
+    name: String,
+) -> Result<()> {
+    resource.with_mut(|value| value.name = name)
+}
+
+/// Releases a managed resource. Repeated calls safely return `false`.
+#[ani]
+pub fn close_managed_native_resource(resource: ManagedResource<NativeResource>) -> Result<bool> {
+    resource.close()
 }
 
 #[ani]

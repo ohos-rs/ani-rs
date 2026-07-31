@@ -23,12 +23,6 @@ impl<'env> AnyValue<'env> {
         Self(unsafe { AniRef::from_raw(value.as_raw()) })
     }
 
-    /// Borrow underlying `AniRef`.
-    #[inline]
-    pub fn as_ref(&self) -> &AniRef<'env> {
-        &self.0
-    }
-
     /// Consume and return underlying `AniRef`.
     #[inline]
     pub fn into_ref(self) -> AniRef<'env> {
@@ -157,6 +151,13 @@ impl<'env> AnyValue<'env> {
     }
 }
 
+impl<'env> AsRef<AniRef<'env>> for AnyValue<'env> {
+    #[inline]
+    fn as_ref(&self) -> &AniRef<'env> {
+        &self.0
+    }
+}
+
 impl<'env> From<AniRef<'env>> for AnyValue<'env> {
     #[inline]
     fn from(value: AniRef<'env>) -> Self {
@@ -194,7 +195,7 @@ impl<'env> FromAni<'env> for AnyValue<'env> {
     type Input = sys::ani_ref;
 
     #[inline]
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(Self(unsafe { AniRef::from_raw(value) }))
     }
 }

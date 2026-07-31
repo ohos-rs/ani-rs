@@ -280,14 +280,19 @@ pub trait FromAni<'env>: Sized {
     type Input;
 
     /// Perform conversion
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self>;
+    ///
+    /// # Safety
+    ///
+    /// `value` must originate from the ANI VM associated with `env`, have the
+    /// expected runtime type, and remain valid while the conversion runs.
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self>;
 }
 
 // Primitive type implementations
 impl<'env> FromAni<'env> for bool {
     type Input = sys::ani_boolean;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value != 0)
     }
 }
@@ -295,7 +300,7 @@ impl<'env> FromAni<'env> for bool {
 impl<'env> FromAni<'env> for i8 {
     type Input = sys::ani_byte;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -303,7 +308,7 @@ impl<'env> FromAni<'env> for i8 {
 impl<'env> FromAni<'env> for i16 {
     type Input = sys::ani_short;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -311,7 +316,7 @@ impl<'env> FromAni<'env> for i16 {
 impl<'env> FromAni<'env> for u16 {
     type Input = sys::ani_char;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -319,7 +324,7 @@ impl<'env> FromAni<'env> for u16 {
 impl<'env> FromAni<'env> for i32 {
     type Input = sys::ani_int;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -327,7 +332,7 @@ impl<'env> FromAni<'env> for i32 {
 impl<'env> FromAni<'env> for i64 {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -335,7 +340,7 @@ impl<'env> FromAni<'env> for i64 {
 impl<'env> FromAni<'env> for f32 {
     type Input = sys::ani_float;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -343,7 +348,7 @@ impl<'env> FromAni<'env> for f32 {
 impl<'env> FromAni<'env> for f64 {
     type Input = sys::ani_double;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(value)
     }
 }
@@ -351,7 +356,7 @@ impl<'env> FromAni<'env> for f64 {
 impl<'env> FromAni<'env> for String {
     type Input = AniString<'env>;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         env.get_string(&value)
     }
 }

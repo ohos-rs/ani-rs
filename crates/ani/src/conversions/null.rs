@@ -41,7 +41,7 @@ impl TypeInfo for Null {
 }
 
 impl<'env> ValidateFromAni<'env> for Null {
-    fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
+    unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
         if value.is_null() {
             return true;
         }
@@ -51,7 +51,7 @@ impl<'env> ValidateFromAni<'env> for Null {
 }
 
 impl<'env> FromAniObject<'env> for Null {
-    fn from_ani_object(_env: &Env<'env>, _value: sys::ani_object) -> Result<Self> {
+    unsafe fn from_ani_object(_env: &Env<'env>, _value: sys::ani_object) -> Result<Self> {
         Ok(Null)
     }
 }
@@ -65,8 +65,8 @@ impl<'env> ToAniObject<'env> for Null {
 impl<'env> FromAni<'env> for Null {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        if Self::validate(env, value) {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if unsafe { Self::validate(env, value) } {
             Ok(Null)
         } else {
             Err(Error::new(Status::InvalidType, "Expected null"))

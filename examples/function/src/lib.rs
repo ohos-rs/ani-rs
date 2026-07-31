@@ -497,8 +497,8 @@ pub fn call_mixed_args(
 /// Store and invoke a callback with multiple arguments using FunctionRef
 ///
 /// This demonstrates storing a FunctionRef with FnArgs for later use.
-static MULTI_ARG_CALLBACK: Mutex<Option<FunctionRef<FnArgs<(i32, i32, i32)>, i32>>> =
-    Mutex::new(None);
+type MultiArgCallback = FunctionRef<FnArgs<(i32, i32, i32)>, i32>;
+static MULTI_ARG_CALLBACK: Mutex<Option<MultiArgCallback>> = Mutex::new(None);
 
 /// Register a callback with three arguments
 ///

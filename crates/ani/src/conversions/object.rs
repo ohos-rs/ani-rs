@@ -32,7 +32,7 @@ macro_rules! impl_ref_handle_conversion {
         impl<'env> FromAni<'env> for $ty<'env> {
             type Input = $raw;
 
-            fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+            unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
                 if value.is_null() {
                     return Err(Error::new(
                         crate::error::Status::InvalidArgs,
@@ -68,7 +68,7 @@ macro_rules! impl_opaque_handle_conversion {
         impl<'env> FromAni<'env> for $ty {
             type Input = $raw;
 
-            fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+            unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
                 if value.is_null() {
                     return Err(Error::new(
                         crate::error::Status::InvalidArgs,
@@ -363,10 +363,12 @@ where
 {
     fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
         let value = env.get_field_by_name_ref(obj, name)?;
-        T::from_ani(
-            env,
-            <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
-        )
+        unsafe {
+            T::from_ani(
+                env,
+                <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
+            )
+        }
     }
 
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
@@ -383,10 +385,12 @@ where
 {
     fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
         let value = env.get_property_by_name_ref(obj, name)?;
-        T::from_ani(
-            env,
-            <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
-        )
+        unsafe {
+            T::from_ani(
+                env,
+                <<T as FromAni<'env>>::Input as FromFieldRefInput<'env>>::from_field_ref(value),
+            )
+        }
     }
 
     fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
@@ -419,7 +423,7 @@ impl<'env> ToAni<'env> for AniObject<'env> {
 impl<'env> FromAni<'env> for AniObject<'env> {
     type Input = sys::ani_object;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -456,7 +460,7 @@ impl<'env> ToAni<'env> for AniClass<'env> {
 impl<'env> FromAni<'env> for AniClass<'env> {
     type Input = sys::ani_class;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -515,7 +519,7 @@ impl<'env> ToAni<'env> for AniString<'env> {
 impl<'env> FromAni<'env> for AniString<'env> {
     type Input = sys::ani_string;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -819,7 +823,7 @@ impl<'env, T> ToAni<'env> for NativePointer<T> {
 impl<'env, T> FromAni<'env> for NativePointer<T> {
     type Input = sys::ani_long;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         Ok(unsafe { NativePointer::from_raw(value) })
     }
 }

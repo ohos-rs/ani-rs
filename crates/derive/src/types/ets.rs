@@ -4,8 +4,10 @@
 //! registration/writing is required.
 
 use std::collections::{BTreeMap, HashSet, btree_map::Entry};
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use syn::{FnArg, GenericParam, Pat, ReturnType, Signature, Type};
@@ -72,6 +74,7 @@ struct EtsFileState {
 }
 
 static ETS_STATE: OnceLock<Mutex<BTreeMap<PathBuf, EtsFileState>>> = OnceLock::new();
+static ETS_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn state() -> &'static Mutex<BTreeMap<PathBuf, EtsFileState>> {
     ETS_STATE.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -539,12 +542,8 @@ fn contains_type_token(haystack: &str, token: &str) -> bool {
         let end = start + token.len();
         let prev = haystack[..start].chars().next_back();
         let next = haystack[end..].chars().next();
-        let prev_ok = prev.map_or(true, |ch| {
-            !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
-        });
-        let next_ok = next.map_or(true, |ch| {
-            !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
-        });
+        let prev_ok = prev.is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'));
+        let next_ok = next.is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'));
         if prev_ok && next_ok {
             return true;
         }
@@ -670,16 +669,61 @@ fn render_decls(
     out
 }
 
-fn write_ets_file(path: &PathBuf, file_state: &EtsFileState) {
+fn write_ets_file(path: &Path, file_state: &EtsFileState) -> io::Result<()> {
     let content = render_decls(
         &file_state.decls,
         &file_state.objects,
         &file_state.class_members,
     );
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+
+    if fs::read(path)
+        .ok()
+        .is_some_and(|existing| existing == content.as_bytes())
+    {
+        return Ok(());
     }
-    let _ = fs::write(path, content);
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("ani.ets");
+    let sequence = ETS_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary_path = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
+
+    let result = (|| {
+        let mut temporary = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.sync_all()?;
+        drop(temporary);
+        fs::rename(&temporary_path, path)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+fn persist_ets_file(path: &Path, file_state: &EtsFileState) {
+    write_ets_file(path, file_state).unwrap_or_else(|error| {
+        panic!(
+            "failed to atomically write generated ETS file `{}`: {error}",
+            path.display()
+        )
+    });
 }
 
 pub fn emit_compile_ets_rendered_decl(kind: EtsDeclKind, target: &str, rendered: &str) {
@@ -699,7 +743,7 @@ pub fn emit_compile_ets_rendered_decl(kind: EtsDeclKind, target: &str, rendered:
     if !file_state.decls.contains(&item) {
         file_state.decls.push(item);
     }
-    write_ets_file(&path, file_state);
+    persist_ets_file(&path, file_state);
 }
 
 pub fn emit_compile_ets_class_member(
@@ -723,7 +767,7 @@ pub fn emit_compile_ets_class_member(
     if !file_state.class_members.contains(&item) {
         file_state.class_members.push(item);
     }
-    write_ets_file(&path, file_state);
+    persist_ets_file(&path, file_state);
 }
 
 pub fn emit_compile_ets_object(
@@ -747,7 +791,7 @@ pub fn emit_compile_ets_object(
     if !file_state.objects.contains(&item) {
         file_state.objects.push(item);
     }
-    write_ets_file(&path, file_state);
+    persist_ets_file(&path, file_state);
 }
 
 pub fn generate_object_field_ets_decl(name: &str, ty: &Type, is_private: bool) -> String {
@@ -796,6 +840,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => "0.0".to_string(),
         AniType::Primitive(_) => "0".to_string(),
         AniType::String(_) => "\"\"".to_string(),
+        AniType::BigInt => "0n".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
@@ -924,6 +969,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
             )
         }
         AniType::AniObject => "Object".to_string(),
+        AniType::BigInt => "bigint".to_string(),
         AniType::GlobalRef => builtin_ets_public_type("GlobalRef").unwrap().to_string(),
         AniType::WeakRef => builtin_ets_public_type("WeakRef").unwrap().to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
@@ -1806,6 +1852,15 @@ mod tests {
     use super::super::ani_type::register_object_type_alias;
     use super::*;
     use crate::codegen::ClassMemberMetadata;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_test_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ani-rs-ets-{label}-{}-{nonce}", std::process::id()))
+    }
 
     fn class_member_metadata(
         owner: &str,
@@ -1817,6 +1872,91 @@ mod tests {
             public_name: public_name.to_string(),
             scope,
         }
+    }
+
+    #[test]
+    fn test_render_decls_is_independent_of_declaration_order() {
+        let mut decls = vec![
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function zebra(): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function alpha(): int;".to_string(),
+            },
+            EtsDecl {
+                kind: EtsDeclKind::Namespace,
+                target: "demo.tools".to_string(),
+                rendered: "native function middle(): int;".to_string(),
+            },
+        ];
+        let forward = render_decls(&decls, &[], &[]);
+        decls.reverse();
+        let reverse = render_decls(&decls, &[], &[]);
+
+        assert_eq!(forward, reverse);
+    }
+
+    #[test]
+    fn test_write_ets_file_is_atomic_and_skips_identical_content() {
+        let root = temporary_test_dir("atomic");
+        let output = root.join("nested").join("bindings.ets");
+        let file_state = EtsFileState {
+            decls: vec![EtsDecl {
+                kind: EtsDeclKind::Global,
+                target: String::new(),
+                rendered: "native function answer(): int;".to_string(),
+            }],
+            ..EtsFileState::default()
+        };
+
+        write_ets_file(&output, &file_state).expect("first atomic ETS write should succeed");
+        let first = fs::read(&output).expect("generated ETS file should be readable");
+        write_ets_file(&output, &file_state).expect("identical ETS write should succeed");
+        let second = fs::read(&output).expect("generated ETS file should remain readable");
+
+        assert_eq!(first, second);
+        assert!(
+            String::from_utf8(second)
+                .expect("generated ETS should be UTF-8")
+                .contains("export native function answer(): int;")
+        );
+        assert!(
+            fs::read_dir(output.parent().expect("output should have a parent"))
+                .expect("output directory should be readable")
+                .all(|entry| !entry
+                    .expect("directory entry should be readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp"))
+        );
+
+        fs::remove_dir_all(&root).expect("temporary ETS test directory should be removable");
+    }
+
+    #[test]
+    fn test_write_ets_file_reports_directory_errors() {
+        let root = temporary_test_dir("error");
+        fs::create_dir_all(&root).expect("temporary root should be created");
+        let blocking_file = root.join("not-a-directory");
+        fs::write(&blocking_file, b"blocking file").expect("blocking file should be written");
+        let output = blocking_file.join("bindings.ets");
+
+        let error = write_ets_file(&output, &EtsFileState::default())
+            .expect_err("writing below a regular file should fail");
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotADirectory
+            ),
+            "unexpected error kind: {:?}",
+            error.kind()
+        );
+
+        fs::remove_dir_all(&root).expect("temporary ETS test directory should be removable");
     }
 
     #[test]
@@ -2876,6 +3016,14 @@ function maybe_user(flag: boolean): models.UserInfo | null | undefined {
             generate_object_field_ets_decl("name", &ty, false),
             "name: string = \"\";"
         );
+    }
+
+    #[test]
+    fn bigint_uses_the_real_ets_surface() {
+        let ty: Type = syn::parse_quote!(ani::conversions::BigInt);
+        let surface = EtsTypeSurface::from_syn_type(&ty);
+        assert_eq!(surface.public_ty, "bigint");
+        assert_eq!(surface.object_default_value, "0n");
     }
 
     #[test]

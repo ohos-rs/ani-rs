@@ -9,10 +9,12 @@
 //! - `array` - Array type conversions
 //! - `object` - Object type conversions
 //! - `boxed` - Boxed type conversions (Int, Long, Double, etc.)
+//! - `bigint` - Arbitrary-precision ArkTS bigint conversion
 //! - `optional` - Optional type conversions
 //! - `either` - Union/Either type conversions
 //! - `null` / `undefined` - Null and Undefined type conversions
 //! - `promise` - Promise and Deferred types
+//! - `resource` - Managed native resource handles
 //! - `result` - Result type conversions
 //! - `collections` - Collection type conversions
 //! - `fixed_array` - Fixed array wrapper conversions
@@ -24,6 +26,7 @@
 mod any_value;
 mod array;
 mod arraybuffer;
+mod bigint;
 mod boxed;
 mod collections;
 mod either;
@@ -36,6 +39,7 @@ mod optional;
 mod primitives;
 mod promise;
 mod reference;
+mod resource;
 mod result;
 mod string;
 mod traits;
@@ -45,6 +49,7 @@ mod undefined;
 // Re-export all public items
 pub use any_value::*;
 pub use arraybuffer::*;
+pub use bigint::*;
 pub use boxed::*;
 pub use collections::*;
 pub use either::*;
@@ -56,6 +61,7 @@ pub use object::*;
 pub use optional::*;
 pub use promise::*;
 pub use reference::*;
+pub use resource::*;
 pub use result::*;
 pub use string::*;
 pub use traits::*;

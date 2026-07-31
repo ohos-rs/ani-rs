@@ -29,6 +29,7 @@ static WIDGET_REVISION: AtomicI32 = AtomicI32::new(1);
 #[ani(class = "Widget")]
 impl Widget {
     #[ani(constructor, name = "build")]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(env: &Env<'_>, this: &AniObject<'_>, name: String, count: i32) -> Result<()> {
         Widget {
             _name: name,
@@ -197,6 +198,7 @@ impl Widget {
 #[ani(class = "WidgetIndexIterator")]
 impl WidgetIndexIterator {
     #[ani]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<i32> {
         if self.current >= self.end {
             None

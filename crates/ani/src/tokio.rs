@@ -290,6 +290,7 @@ mod imp {
     const MISSING_TOKIO_RT: &str =
         "async bindings require enabling `ani` feature `async` (or `tokio_rt`)";
 
+    /// Return a rejected Promise explaining that Tokio integration is disabled.
     pub fn spawn_future<'env, T, F>(env: &Env<'env>, _future: F) -> Result<PromiseRaw<'env, T>>
     where
         T: Send + 'static + for<'vm> PromiseValue<'vm>,
@@ -300,6 +301,7 @@ mod imp {
         Ok(promise)
     }
 
+    /// Return a rejected Promise explaining that Tokio integration is disabled.
     pub fn spawn_future_result<'env, T, F, E>(
         env: &Env<'env>,
         _future: F,
@@ -314,6 +316,7 @@ mod imp {
         Ok(promise)
     }
 
+    /// Return a rejected Promise instead of starting a disabled future factory.
     pub fn spawn_future_factory<'env, T, Build, F>(
         env: &Env<'env>,
         _build: Build,
@@ -328,6 +331,7 @@ mod imp {
         Ok(promise)
     }
 
+    /// Return a rejected Promise instead of starting a disabled result factory.
     pub fn spawn_future_result_factory<'env, T, Build, F, E>(
         env: &Env<'env>,
         _build: Build,
@@ -343,6 +347,7 @@ mod imp {
         Ok(promise)
     }
 
+    /// Return an error because blocking async execution requires Tokio support.
     pub fn block_on_future_result<F, T, E>(_future: F) -> Result<std::result::Result<T, E>>
     where
         F: Future<Output = std::result::Result<T, E>>,

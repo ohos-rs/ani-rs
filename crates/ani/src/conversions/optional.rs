@@ -1,7 +1,7 @@
 //! Option Type Conversion
 //!
 //! Implements conversion between Rust Option types and ANI nullish types
-//! - Option<T> <-> nullish T (null | undefined | T)
+//! - `Option<T>` <-> nullish T (null | undefined | T)
 //!
 //! In ANI, nullable values are represented as union object references at the
 //! ABI boundary. Even `Option<String>` and boxed primitive options flow through
@@ -63,7 +63,7 @@ macro_rules! impl_option_for_boxed_primitive {
         impl<'env> FromAni<'env> for Option<$ty> {
             type Input = sys::ani_object;
 
-            fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+            unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
                 if is_option_none_ref(env, value) {
                     Ok(None)
                 } else {
@@ -106,7 +106,7 @@ impl<'env> ToAni<'env> for Option<String> {
 impl<'env> FromAni<'env> for Option<String> {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if is_option_none_ref(env, value) {
             Ok(None)
         } else {
@@ -152,11 +152,11 @@ where
 {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if is_option_none_ref(env, value) {
             Ok(None)
         } else {
-            Ok(Some(T::from_ani(env, value)?))
+            Ok(Some(unsafe { T::from_ani(env, value) }?))
         }
     }
 }
@@ -192,7 +192,7 @@ impl OptionHelper {
 // Macro for extending Option support to custom types
 // ============================================================================
 
-/// Macro to implement Option<T> support for reference types
+/// Macro to implement `Option<T>` support for reference types
 ///
 /// Use this macro to add Option support for custom types that implement
 /// ToAni and FromAni with reference-based outputs.
@@ -225,7 +225,7 @@ macro_rules! impl_option_for_ref_type {
         {
             type Input = $ani_ty;
 
-            fn from_ani(
+            unsafe fn from_ani(
                 env: &$crate::env::Env<'env>,
                 value: Self::Input,
             ) -> $crate::error::Result<Self> {
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_option_to_nullable() {
-        let some_ptr: Option<*mut i32> = Some(1 as *mut i32);
+        let some_ptr: Option<*mut i32> = Some(std::ptr::dangling_mut::<i32>());
         let none_ptr: Option<*mut i32> = None;
 
         assert!(!OptionHelper::option_to_nullable(some_ptr).is_null());

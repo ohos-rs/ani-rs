@@ -9,7 +9,10 @@ keywords = ["ani", "arkts", "ohos", "harmonyos", "ffi"]
 categories = ["api-bindings", "development-tools::ffi"]
 
 [features]
-default = []
+default = ["api24"]
+# Use ANI primitive boxing/unboxing APIs introduced in OpenHarmony API 24.
+# Disable default features to retain the legacy wrapper-class implementation.
+api24 = []
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
 # Ergonomic alias matching napi-rs async exports.
@@ -30,7 +33,7 @@ tokio_test_util = ["tokio/test-util"]
 tokio_time = ["tokio/time"]
 
 [dependencies]
-ani-sys = { path = "../sys" }
+ani-sys = { path = "../sys", version = "0.0.1-alpha.1" }
 ctor = "0.6"
 
 # Optional dependencies

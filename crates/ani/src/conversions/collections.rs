@@ -2,7 +2,7 @@
 //!
 //! Implements conversion between Rust collection types and ANI types
 //! - HashMap<K, V> <-> Record<K, V>
-//! - HashSet<T> <-> Set<T>
+//! - `HashSet<T>` <-> `Set<T>`
 //! - BTreeMap<K, V> <-> Map<K, V>
 //! - Tuple types
 
@@ -174,7 +174,7 @@ where
 {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -256,7 +256,7 @@ where
 {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -332,7 +332,7 @@ where
 {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -415,7 +415,7 @@ where
 {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 crate::error::Status::InvalidArgs,
@@ -510,8 +510,8 @@ impl<'env> ToAni<'env> for (i32, i32) {
 impl<'env> FromAni<'env> for (i32, i32) {
     type Input = sys::ani_fixedarray_int;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let vec: Vec<i32> = Vec::from_ani(env, value)?;
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let vec: Vec<i32> = unsafe { Vec::from_ani(env, value) }?;
         if vec.len() != 2 {
             return Err(Error::new(
                 crate::error::Status::InvalidType,

@@ -59,6 +59,7 @@ export native function async_object_strict_equals(lhs: Object, rhs: Object): Pro
 export native function async_ref_roundtrip(value: AniRef): Promise<boolean>;
 export native function async_square(n: int): int;
 export native function batch_compute(count: int): long;
+export native function cancel_arkts_promise_wait(promise: Promise<string>): boolean;
 export native function env_roundtrip(value: string): Promise<string>;
 export native function promise_delayed(delay_ms: int, value: string): long;
 export native function promise_env_rejected(message: string): Promise<string>;
@@ -72,6 +73,7 @@ export native function promise_resolver_into_deferred(value: string): Promise<st
 export native function promise_resolver_reject_message(message: string): Promise<void>;
 export native function promise_resolver_resolve_value(value: string): Promise<string>;
 export native function signature_override_echo(value: string): Promise<string>;
+export native function tokio_await_arkts_promise(promise: Promise<string>): Promise<string>;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
 export native function tokio_delayed_square_async(input: int, delay_ms: int): Promise<int>;
 export native function tokio_fail(message: string): Promise<string>;
@@ -173,6 +175,21 @@ function main(): void {
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
   let promisedTextAsync: string = waitForCompletion(() => tokio_fetch_text_async("ani://tokio"));
   __assert_eq_string("tokio_fetch_text_async", promisedTextAsync, "Response from: ani://tokio");
+  let awaitedArktsText: string = waitForCompletion(() => tokio_await_arkts_promise(Promise.resolve<string>("from-arkts")));
+  __assert_eq_string("tokio_await_arkts_promise", awaitedArktsText, "from-arkts");
+  let awaitedArktsRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await tokio_await_arkts_promise(Promise.reject<string>(new Error("arkts boom")));
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("tokio_await_arkts_promise_rejected", awaitedArktsRejected);
+  let pendingArktsPromise = new Promise<string>(
+    (_resolve: (value: string) => void, _reject: (error: Error) => void): void => {}
+  );
+  __assert_true("cancel_arkts_promise_wait", cancel_arkts_promise_wait(pendingArktsPromise));
   let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await tokio_fail("boom");

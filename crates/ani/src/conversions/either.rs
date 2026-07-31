@@ -36,7 +36,12 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 /// used in Either must implement this trait to provide runtime type checking.
 pub trait ValidateFromAni<'env> {
     /// Check if the given ani_object can be converted to this type
-    fn validate(env: &Env<'env>, value: sys::ani_object) -> bool;
+    ///
+    /// # Safety
+    ///
+    /// `value` must be a live ANI reference that belongs to the VM associated
+    /// with `env`, or a null reference accepted by the implementation.
+    unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool;
 }
 
 /// Trait for converting from ANI object (ani_object) to Rust type in Either context.
@@ -48,7 +53,12 @@ pub trait ValidateFromAni<'env> {
 /// For types implementing `Unboxable`, this trait is automatically implemented.
 pub trait FromAniObject<'env>: Sized {
     /// Convert from ani_object to Self
-    fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self>;
+    ///
+    /// # Safety
+    ///
+    /// `value` must be a live ANI object reference that belongs to the VM
+    /// associated with `env` and must satisfy this type's runtime validation.
+    unsafe fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self>;
 }
 
 /// Trait for converting Rust type to ANI object (ani_object) in Either context.
@@ -73,7 +83,7 @@ impl<'env, T> FromAniObject<'env> for T
 where
     T: Unboxable<'env>,
 {
-    fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self> {
+    unsafe fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self> {
         let obj = unsafe { AniObject::from_raw(value) };
         T::unbox(env, &obj)
     }
@@ -128,13 +138,13 @@ macro_rules! either_n {
         {
             type Input = sys::ani_object;
 
-            fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+            unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
                 // Try each variant in order - validation first, then conversion.
                 // This allows explicit `Null` / `Undefined` variants to participate
                 // instead of being rejected up front as a raw nullish reference.
                 $(
-                    if $variant::validate(env, value) {
-                        if let Ok(v) = $variant::from_ani_object(env, value) {
+                    if unsafe { $variant::validate(env, value) } {
+                        if let Ok(v) = unsafe { $variant::from_ani_object(env, value) } {
                             return Ok(Self::$variant(v));
                         }
                     }
@@ -271,17 +281,17 @@ impl<A, B> Either<A, B> {
 // ============================================================================
 
 impl<'env> ValidateFromAni<'env> for String {
-    fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
+    unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
         if value.is_null() {
             return false;
         }
 
         let obj = unsafe { AniObject::from_raw(value) };
 
-        if let Ok(cls) = env.find_class("std.core.String") {
-            if env.object_instance_of(&obj, &cls).unwrap_or(false) {
-                return true;
-            }
+        if let Ok(cls) = env.find_class("std.core.String")
+            && env.object_instance_of(&obj, &cls).unwrap_or(false)
+        {
+            return true;
         }
 
         // Primitive wrappers should not be treated as string union variants.
@@ -295,10 +305,10 @@ impl<'env> ValidateFromAni<'env> for String {
             "std.core.Float",
             "std.core.Double",
         ] {
-            if let Ok(cls) = env.find_class(numeric_cls) {
-                if env.object_instance_of(&obj, &cls).unwrap_or(false) {
-                    return false;
-                }
+            if let Ok(cls) = env.find_class(numeric_cls)
+                && env.object_instance_of(&obj, &cls).unwrap_or(false)
+            {
+                return false;
             }
         }
 
@@ -311,7 +321,7 @@ impl<'env> ValidateFromAni<'env> for String {
 macro_rules! impl_validate_for_boxed {
     ($rust_type:ty, $class_descriptor:expr) => {
         impl<'env> ValidateFromAni<'env> for $rust_type {
-            fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
+            unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
                 if let Ok(cls) = env.find_class($class_descriptor) {
                     let obj = unsafe { AniObject::from_raw(value) };
                     env.object_instance_of(&obj, &cls).unwrap_or(false)
@@ -337,7 +347,7 @@ impl_validate_for_boxed!(f64, "std.core.Double");
 // ============================================================================
 
 impl<'env> FromAniObject<'env> for String {
-    fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self> {
+    unsafe fn from_ani_object(env: &Env<'env>, value: sys::ani_object) -> Result<Self> {
         // String object can be cast to ani_string directly
         let str_ref = unsafe { AniString::from_raw(value as sys::ani_string) };
         env.get_string(&str_ref)

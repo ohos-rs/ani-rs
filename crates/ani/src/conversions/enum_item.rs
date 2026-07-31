@@ -137,7 +137,7 @@ impl<'env> FromAni<'env> for EnumItem<'env> {
     type Input = sys::ani_enum_item;
 
     #[inline]
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "EnumItem pointer is null"));
         }

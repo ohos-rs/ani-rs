@@ -80,7 +80,13 @@ pub trait FromAni<'env>: Sized {
     type Input;
 
     /// Perform conversion
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self>;
+    ///
+    /// # Safety
+    ///
+    /// `value` must have been produced by the ANI VM associated with `env`,
+    /// must match this Rust type's ANI signature, and must remain valid for
+    /// the duration of the conversion.
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self>;
 }
 
 /// Fast conversion trait for simple types that don't need env

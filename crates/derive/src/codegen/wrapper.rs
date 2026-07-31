@@ -109,10 +109,10 @@ fn classify_param(arg: &FnArg, param_name: Option<&str>) -> ParamKind {
 }
 
 fn get_param_name(arg: &FnArg) -> Option<String> {
-    if let FnArg::Typed(pat_type) = arg {
-        if let Pat::Ident(pat_ident) = &*pat_type.pat {
-            return Some(pat_ident.ident.to_string());
-        }
+    if let FnArg::Typed(pat_type) = arg
+        && let Pat::Ident(pat_ident) = &*pat_type.pat
+    {
+        return Some(pat_ident.ident.to_string());
     }
     None
 }

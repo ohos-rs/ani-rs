@@ -4,6 +4,7 @@
 //!
 //! - [`Function`] - Scoped function type for immediate use within current scope
 //! - [`FunctionRef`] - Global reference function type for cross-scope/storage use
+//! - [`ThreadsafeFunction`] - Cross-thread callback alias with automatic VM attachment
 //! - [`FnArgs`] - Wrapper for multiple function arguments (optional, tuples work directly)
 //! - [`ToAniArgs`] - Trait for converting Rust arguments to ANI function call arguments
 //! - [`ToAniArg`] - Trait for converting a single Rust value to ani_ref
@@ -410,7 +411,7 @@ impl_to_ani_args_for_tuples!(
 /// # Type Parameters
 ///
 /// - `Args`: The argument type(s). Use `()` for no args, `(A,)` for one arg,
-///           or `(A, B, ...)` tuple for multiple args.
+///   or `(A, B, ...)` tuple for multiple args.
 /// - `Return`: The return type. Use `()` for void functions.
 ///
 /// # Lifetime
@@ -548,7 +549,7 @@ where
     )
     .map_err(|_| Error::new(Status::GenericFailure, "Function call failed"))?;
 
-    Return::from_ani(env, unsafe { std::mem::transmute_copy(&result) })
+    unsafe { Return::from_ani(env, std::mem::transmute_copy(&result)) }
 }
 
 // ============================================================================
@@ -601,6 +602,14 @@ pub struct FunctionRef<Args, Return> {
     _args: PhantomData<Args>,
     _return: PhantomData<Return>,
 }
+
+/// An ArkTS callback that can be moved to a worker thread.
+///
+/// This alias emphasizes the managed [`FunctionRef`] use case. Values received
+/// through [`FromAni`] remember their owning VM; call
+/// [`FunctionRef::call_attached`] on any Rust thread to attach for the duration
+/// of the callback and detach automatically afterwards.
+pub type ThreadsafeFunction<Args, Return> = FunctionRef<Args, Return>;
 
 // FunctionRef can be sent across threads
 unsafe impl<Args, Return> Send for FunctionRef<Args, Return> {}
@@ -674,6 +683,29 @@ where
     pub fn call(&self, env: &Env<'_>, args: Args) -> Result<Return> {
         let local = env.local_ref_from_global_ref(self.as_global_ref())?;
         call_function_impl(env, local.as_raw() as sys::ani_fn_object, args)
+    }
+
+    /// Calls the function on the current thread, attaching it to the owning VM
+    /// when necessary.
+    ///
+    /// Managed references created by ANI conversion support this method.
+    /// References constructed with [`FunctionRef::from_global_ref`] do not know
+    /// their VM and must use [`FunctionRef::call`] with an explicit `Env`.
+    pub fn call_attached(&self, args: Args) -> Result<Return> {
+        let vm = self.vm.as_ref().ok_or_else(|| {
+            Error::new(
+                Status::InvalidArgs,
+                "FunctionRef has no owning VM; construct it through ANI or use \
+                 FunctionRef::from_global_ref_managed",
+            )
+        })?;
+        vm.with_attached(|env| self.call(env, args))
+    }
+
+    /// Returns whether this callback owns the VM information required by
+    /// [`FunctionRef::call_attached`].
+    pub fn can_call_attached(&self) -> bool {
+        self.vm.is_some()
     }
 
     /// Borrow the function back as a scoped Function
@@ -843,7 +875,7 @@ where
 {
     type Input = sys::ani_fn_object;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Function value is null"));
         }
@@ -864,7 +896,7 @@ where
 {
     type Input = sys::ani_fn_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Function value is null"));
         }
@@ -998,6 +1030,25 @@ mod tests {
         assert_to_global::<Function<'static, (String,), String>>();
         assert_to_global::<FunctionRef<(String,), String>>();
         assert_from_global::<Function<'static, (String,), String>>();
+    }
+
+    #[test]
+    fn test_threadsafe_function_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ThreadsafeFunction<(String,), String>>();
+    }
+
+    #[test]
+    fn unmanaged_function_cannot_auto_attach() {
+        let raw = std::ptr::dangling_mut::<std::ffi::c_void>() as sys::ani_ref;
+        let global = unsafe { GlobalRef::from_raw(raw) };
+        let callback = unsafe { FunctionRef::<(), ()>::from_global_ref(global) };
+
+        assert!(!callback.can_call_attached());
+        assert_eq!(
+            callback.call_attached(()).unwrap_err().status,
+            Status::InvalidArgs
+        );
     }
 
     #[test]

@@ -368,7 +368,7 @@ impl TypeInfo for WeakRef {
 impl<'env> FromAni<'env> for Ref<AniObject<'static>> {
     type Input = sys::ani_object;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Object value is null"));
         }
@@ -384,7 +384,7 @@ impl<'env> FromAni<'env> for Ref<AniObject<'static>> {
 impl<'env> FromAni<'env> for GlobalRef {
     type Input = sys::ani_ref;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "GlobalRef value is null"));
         }
@@ -395,7 +395,7 @@ impl<'env> FromAni<'env> for GlobalRef {
 impl<'env> FromAni<'env> for WeakRef {
     type Input = sys::ani_wref;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "WeakRef value is null"));
         }

@@ -178,6 +178,7 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
     matches!(
         ani_type,
         AniType::AniObject
+            | AniType::BigInt
             | AniType::GlobalRef
             | AniType::WeakRef
             | AniType::RuntimeHandle(_)
@@ -671,6 +672,7 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
     matches!(
         ani_type,
         AniType::String(StringType::Str)
+            | AniType::BigInt
             | AniType::AniObject
             | AniType::RuntimeHandle(_)
             | AniType::AnyValue

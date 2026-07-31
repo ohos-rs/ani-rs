@@ -1,7 +1,7 @@
 //! Boxing/Unboxing Support
 //!
 //! Implements boxing and unboxing for primitive types
-//! Option<int> in ArkTS needs to use the Int wrapper class
+//! `Option<int>` in ArkTS needs to use the Int wrapper class
 
 use crate::env::Env;
 use crate::error::Result;
@@ -63,10 +63,18 @@ impl<'env> Boxable<'env> for bool {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_boolean(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_boolean(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_boolean(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -80,7 +88,15 @@ impl<'env> Unboxable<'env> for bool {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_boolean(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_boolean(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_boolean(obj, "value")
+        }
     }
 }
 
@@ -100,10 +116,18 @@ impl<'env> Boxable<'env> for i8 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_byte(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_byte(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_byte(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -117,7 +141,15 @@ impl<'env> Unboxable<'env> for i8 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_byte(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_byte(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_byte(obj, "value")
+        }
     }
 }
 
@@ -137,10 +169,18 @@ impl<'env> Boxable<'env> for i16 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_short(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_short(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_short(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -154,7 +194,15 @@ impl<'env> Unboxable<'env> for i16 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_short(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_short(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_short(obj, "value")
+        }
     }
 }
 
@@ -174,10 +222,18 @@ impl<'env> Boxable<'env> for u16 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_char(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_char(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_char(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -191,7 +247,15 @@ impl<'env> Unboxable<'env> for u16 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_char(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_char(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_char(obj, "value")
+        }
     }
 }
 
@@ -227,10 +291,18 @@ impl<'env> Boxable<'env> for i32 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_int(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_int(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_int(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -244,7 +316,15 @@ impl<'env> Unboxable<'env> for i32 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_int(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_int(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_int(obj, "value")
+        }
     }
 }
 
@@ -264,10 +344,18 @@ impl<'env> Boxable<'env> for i64 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_long(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_long(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_long(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -281,7 +369,15 @@ impl<'env> Unboxable<'env> for i64 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_long(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_long(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_long(obj, "value")
+        }
     }
 }
 
@@ -301,10 +397,18 @@ impl<'env> Boxable<'env> for f32 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_float(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_float(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_float(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -318,7 +422,15 @@ impl<'env> Unboxable<'env> for f32 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_float(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_float(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_float(obj, "value")
+        }
     }
 }
 
@@ -338,10 +450,18 @@ impl<'env> Boxable<'env> for f64 {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        let class = env.find_class(Self::box_class_descriptor())?;
-        let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
-        let args = [ani_value_double(self)];
-        env.new_object(&class, &ctor, &args[..])
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_box_double(self)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            let class = env.find_class(Self::box_class_descriptor())?;
+            let ctor = env.find_constructor(&class, Self::box_constructor_signature())?;
+            let args = [ani_value_double(self)];
+            env.new_object(&class, &ctor, &args[..])
+        }
     }
 }
 
@@ -355,7 +475,15 @@ impl<'env> Unboxable<'env> for f64 {
     }
 
     fn unbox(env: &Env<'env>, obj: &AniObject<'env>) -> Result<Self> {
-        env.get_field_by_name_double(obj, "value")
+        #[cfg(feature = "api24")]
+        {
+            env.primitive_unbox_double(obj)
+        }
+
+        #[cfg(not(feature = "api24"))]
+        {
+            env.get_field_by_name_double(obj, "value")
+        }
     }
 }
 

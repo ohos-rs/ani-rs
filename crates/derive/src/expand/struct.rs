@@ -156,8 +156,15 @@ fn expand_object_type_impls(
                 #qualified_name_lit
             }
 
+            /// Reconstructs this Rust value from an ANI object after its class
+            /// has already been validated by the generated wrapper.
+            ///
+            /// # Safety
+            ///
+            /// `value` must be a live object owned by the VM associated with
+            /// `env`, and it must be an instance of this generated ANI class.
             #[doc(hidden)]
-            pub fn __ani_from_bound_ani_object<'env>(
+            pub unsafe fn __ani_from_bound_ani_object<'env>(
                 env: &ani::env::Env<'env>,
                 value: ani::sys::ani_object,
             ) -> ani::error::Result<Self>
@@ -190,7 +197,7 @@ fn expand_object_type_impls(
         {
             type Input = ani::sys::ani_object;
 
-            fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
+            unsafe fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
                 if value.is_null() {
                     return Err(ani::error::Error::new(
                         ani::error::Status::InvalidArgs,
@@ -210,7 +217,7 @@ fn expand_object_type_impls(
                     ));
                 }
 
-                Self::__ani_from_bound_ani_object(env, value)
+                unsafe { Self::__ani_from_bound_ani_object(env, value) }
             }
         }
 
@@ -246,7 +253,7 @@ fn expand_object_type_impls(
             for #struct_name #ty_generics
         #env_where_clause
         {
-            fn validate(env: &ani::env::Env<'env>, value: ani::sys::ani_object) -> bool {
+            unsafe fn validate(env: &ani::env::Env<'env>, value: ani::sys::ani_object) -> bool {
                 if value.is_null() {
                     return false;
                 }
@@ -264,11 +271,13 @@ fn expand_object_type_impls(
             for #struct_name #ty_generics
         #env_where_with_record_bounds
         {
-            fn from_ani_object(
+            unsafe fn from_ani_object(
                 env: &ani::env::Env<'env>,
                 value: ani::sys::ani_object,
             ) -> ani::error::Result<Self> {
-                <Self as ani::conversions::FromAni<'env>>::from_ani(env, value)
+                unsafe {
+                    <Self as ani::conversions::FromAni<'env>>::from_ani(env, value)
+                }
             }
         }
 
@@ -285,10 +294,12 @@ fn expand_object_type_impls(
                 env: &ani::env::Env<'env>,
                 value: &ani::types::AniRef<'env>,
             ) -> ani::error::Result<Self> {
-                <Self as ani::conversions::FromAni<'env>>::from_ani(
-                    env,
-                    value.as_raw() as ani::sys::ani_object,
-                )
+                unsafe {
+                    <Self as ani::conversions::FromAni<'env>>::from_ani(
+                        env,
+                        value.as_raw() as ani::sys::ani_object,
+                    )
+                }
             }
         }
 
@@ -870,7 +881,7 @@ fn expand_enum_type_impls(
         impl<'env> ani::conversions::FromAni<'env> for #enum_name {
             type Input = ani::sys::ani_enum_item;
 
-            fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
+            unsafe fn from_ani(env: &ani::env::Env<'env>, value: Self::Input) -> ani::error::Result<Self> {
                 if value.is_null() {
                     return Err(ani::error::Error::new(
                         ani::error::Status::InvalidArgs,

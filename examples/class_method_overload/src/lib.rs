@@ -14,6 +14,7 @@ pub struct MathBox {
 #[ani(class = "MathBox")]
 impl MathBox {
     #[ani(constructor)]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(env: &Env<'_>, this: &AniObject<'_>, base: i32) -> Result<()> {
         MathBox { _base: base }.write_back_to_ani_object(env, this)
     }

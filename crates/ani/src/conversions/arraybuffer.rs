@@ -43,7 +43,7 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 /// # Memory Model
 ///
 /// When converting from ANI (`FromAni`):
-/// - Data is copied from the ANI ArrayBuffer into a Rust-owned Vec<u8>
+/// - Data is copied from the ANI ArrayBuffer into a Rust-owned `Vec<u8>`
 /// - The Rust side owns the memory and will free it when dropped
 ///
 /// When converting from ANI (`FromAni`): we hold a **global reference** so the ANI object is not freed
@@ -93,6 +93,7 @@ impl ArrayBuffer {
         }
     }
 
+    /// Return the number of bytes in this buffer.
     #[inline]
     pub fn len(&self) -> usize {
         match &self.backing {
@@ -101,11 +102,13 @@ impl ArrayBuffer {
         }
     }
 
+    /// Return `true` when this buffer contains no bytes.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Borrow the buffer as an immutable byte slice.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
         match &self.backing {
@@ -120,6 +123,12 @@ impl ArrayBuffer {
         }
     }
 
+    /// Borrow an owned buffer as a mutable byte slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this value is backed by an ANI `ArrayBuffer`, because ANI
+    /// only exposes immutable data through this wrapper.
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         match &mut self.backing {
@@ -130,6 +139,7 @@ impl ArrayBuffer {
         }
     }
 
+    /// Return a pointer to the first byte in this buffer.
     #[inline]
     pub fn as_ptr(&self) -> *const u8 {
         match &self.backing {
@@ -138,6 +148,11 @@ impl ArrayBuffer {
         }
     }
 
+    /// Return a mutable pointer to the first byte in an owned buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this value is backed by an ANI `ArrayBuffer`.
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         match &mut self.backing {
@@ -164,7 +179,13 @@ impl ArrayBuffer {
         }
     }
 
-    /// Create from raw parts (copies into owned buffer).
+    /// Create an owned buffer by copying from raw memory.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid for reads of `len` bytes and properly aligned for
+    /// `u8`. The referenced memory must remain valid for the duration of this
+    /// call. For `len == 0`, `ptr` must still be non-null and aligned.
     #[inline]
     pub unsafe fn from_raw_parts(ptr: *const u8, len: usize) -> Self {
         Self::new(unsafe { slice::from_raw_parts(ptr, len) }.to_vec())
@@ -177,12 +198,12 @@ impl Drop for ArrayBuffer {
         if let ArrayBufferBacking::AniRef {
             global_ref, env, ..
         } = backing
+            && !env.is_null()
+            && !global_ref.is_null()
         {
-            if !env.is_null() && !global_ref.is_null() {
-                let api = ani_api_raw!(env);
-                if let Some(delete_fn) = api.GlobalReference_Delete {
-                    let _ = unsafe { delete_fn(env, global_ref) };
-                }
+            let api = ani_api_raw!(env);
+            if let Some(delete_fn) = api.GlobalReference_Delete {
+                let _ = unsafe { delete_fn(env, global_ref) };
             }
         }
     }
@@ -348,7 +369,7 @@ impl<'env> ToAni<'env> for &ArrayBuffer {
 impl<'env> FromAni<'env> for ArrayBuffer {
     type Input = sys::ani_arraybuffer;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Ok(ArrayBuffer::new(Vec::new()));
         }
@@ -510,7 +531,7 @@ impl<'env> Deref for ArrayBufferSlice<'env> {
 impl<'env> FromAni<'env> for ArrayBufferSlice<'env> {
     type Input = sys::ani_arraybuffer;
 
-    fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
         unsafe { Self::from_raw(env, value) }
     }
 }

@@ -14,10 +14,12 @@ use crate::codegen::should_skip_in_signature;
 // ============================================================================
 
 /// Generate ANI signature from Rust type
+#[cfg(test)]
 pub fn rust_type_to_signature(ty: &Type) -> String {
     rust_type_to_signature_with_type_params(ty, &HashSet::new())
 }
 
+#[cfg(test)]
 pub fn rust_type_to_signature_with_type_params(ty: &Type, type_params: &HashSet<String>) -> String {
     let ani_type = AniType::from_syn_type_with_type_params(ty, type_params);
     ani_type.to_signature()
@@ -490,6 +492,16 @@ mod tests {
                 ani::conversions::NativePointer<crate::NativeResource>
             )),
             "J"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(
+                ani::conversions::ManagedResource<crate::NativeResource>
+            )),
+            "J"
+        );
+        assert_eq!(
+            rust_type_to_signature(&syn::parse_quote!(ani::conversions::BigInt)),
+            "Lstd/core/BigInt;"
         );
         assert_eq!(
             rust_type_to_signature(&syn::parse_quote!(ani::conversions::AnyValue)),

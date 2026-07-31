@@ -1,6 +1,6 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
-use ani::conversions::{Deferred, PromiseRaw, RefContainer};
+use ani::conversions::{Deferred, PromiseRaw, RefContainer, ThreadsafeFunction};
 use ani::prelude::*;
 use ani_derive::{ani, AniClass};
 use std::sync::{
@@ -41,6 +41,7 @@ pub struct AsyncWidget {
 #[ani(class = "AsyncWidget")]
 impl AsyncWidget {
     #[ani(constructor)]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(env: &Env<'_>, this: &AniObject<'_>) -> Result<()> {
         AsyncWidget { _tag: 0 }.write_back_to_ani_object(env, this)
     }
@@ -341,6 +342,23 @@ pub fn tokio_fetch_text(env: &Env<'_>, url: String) -> Result<PromiseRaw<'static
 }
 
 #[ani]
+pub fn tokio_await_arkts_promise(
+    env: &Env<'_>,
+    promise: PromiseRaw<'_, String>,
+) -> Result<PromiseRaw<'static, String>> {
+    let future = promise.into_future(env)?;
+    ani::tokio::spawn_future(env, future).map(PromiseRaw::into_static)
+}
+
+#[ani]
+pub fn cancel_arkts_promise_wait(env: &Env<'_>, promise: PromiseRaw<'_, String>) -> Result<bool> {
+    let mut future = promise.into_future(env)?;
+    let first = future.cancel()?;
+    let second = future.cancel()?;
+    Ok(first && !second && future.is_cancelled())
+}
+
+#[ani]
 pub fn tokio_fail(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, String>> {
     ani::tokio::spawn_future(env, async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -361,7 +379,7 @@ pub fn tokio_manual_ref_container_ready(
         tokio::time::sleep(Duration::from_millis(5)).await;
         let attach = vm.attach_current_thread_scoped()?;
         let env = attach.env();
-        let local: AniObject<'_> = container.to_local(&env)?;
+        let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
         Ok(!ty.as_raw().is_null())
     })
@@ -383,7 +401,7 @@ pub fn tokio_manual_global_ref_container_ready(
         tokio::time::sleep(Duration::from_millis(5)).await;
         let attach = vm.attach_current_thread_scoped()?;
         let env = attach.env();
-        let local: AniObject<'_> = container.to_local(&env)?;
+        let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
         Ok(!ty.as_raw().is_null())
     })
@@ -402,7 +420,7 @@ pub fn tokio_manual_typed_ref_container_ready(
         tokio::time::sleep(Duration::from_millis(5)).await;
         let attach = vm.attach_current_thread_scoped()?;
         let env = attach.env();
-        let local: AniObject<'_> = container.to_local(&env)?;
+        let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
         Ok(!ty.as_raw().is_null())
     })
@@ -412,18 +430,12 @@ pub fn tokio_manual_typed_ref_container_ready(
 #[ani]
 pub fn tokio_manual_function_ref_container_call(
     env: &Env<'_>,
-    callback: FunctionRef<(String,), String>,
+    callback: ThreadsafeFunction<(String,), String>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    let vm = env.get_vm()?;
-    let container = RefContainer::new(env, &callback)?;
-
     ani::tokio::spawn_future_factory(env, move || async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let attach = vm.attach_current_thread_scoped()?;
-        let env = attach.env();
-        let callback: Function<'_, (String,), String> = container.to_local(&env)?;
-        callback.call(env, (value,))
+        callback.call_attached((value,))
     })
     .map(PromiseRaw::into_static)
 }

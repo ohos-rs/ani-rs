@@ -188,7 +188,7 @@ pub fn make_user_profile_group() -> HashSet<UserProfile> {
 #[ani]
 pub fn summarize_user_profile_group(values: HashSet<UserProfile>) -> String {
     let mut entries = values.into_iter().collect::<Vec<_>>();
-    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    entries.sort_by_key(|left| left.id);
     entries
         .into_iter()
         .map(|value| {

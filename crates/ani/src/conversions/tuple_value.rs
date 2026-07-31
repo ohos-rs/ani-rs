@@ -191,7 +191,7 @@ impl<'env> FromAni<'env> for TupleValue<'env> {
     type Input = sys::ani_tuple_value;
 
     #[inline]
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(
                 Status::InvalidArgs,

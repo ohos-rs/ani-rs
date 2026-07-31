@@ -4,6 +4,7 @@
 //!
 //! - [`PromiseRaw`] - Raw Promise value with lifetime, for synchronous contexts
 //! - [`Deferred`] - Deferred resolver for async Promise resolution
+//! - [`PromiseFuture`] - Rust `Future` view of an ArkTS Promise
 //!
 //! # Examples
 //!
@@ -40,16 +41,27 @@
 
 use std::marker::PhantomData;
 use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
 use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString};
+use crate::vm::AniVm;
 use crate::{ani_call, ani_call_2ret};
 
 use super::function::{Function, FunctionRef, ToAniArgs};
-use super::{FromAni, ToAni as ConversionToAni, TypeInfo};
+use super::{FromAni, ToAni as ConversionToAni, TypeInfo, Unboxable};
+
+const PROMISE_STATE_PENDING: i32 = 0;
+const PROMISE_STATE_LINKED: i32 = 1;
+const PROMISE_STATE_RESOLVED: i32 = 2;
+const PROMISE_STATE_REJECTED: i32 = 3;
+const DEFAULT_PROMISE_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// Raw Promise value in ANI
 ///
@@ -141,6 +153,18 @@ impl<'env, T> PromiseRaw<'env, T> {
     #[inline]
     pub fn into_static(self) -> PromiseRaw<'static, T> {
         self.with_lifetime()
+    }
+
+    /// Promotes this ArkTS Promise to a cancellable Rust [`Future`].
+    ///
+    /// The Promise is retained with a global ANI reference. Dropping or
+    /// explicitly cancelling the future releases that reference; it does not
+    /// attempt to abort the underlying ArkTS operation.
+    pub fn into_future(self, env: &Env<'env>) -> Result<PromiseFuture<T>>
+    where
+        T: PromiseFutureValue,
+    {
+        PromiseFuture::new(env, self)
     }
 
     /// Create a new Promise and immediately resolve it with the given value
@@ -290,6 +314,243 @@ impl<'env, T> PromiseRaw<'env, T> {
     }
 }
 
+/// Converts the reference stored in a settled ArkTS Promise into owned Rust
+/// data.
+///
+/// Implement this trait for application object types that need to be awaited
+/// from Rust. The conversion runs while the polling thread is attached to the
+/// VM, so returned values must not retain local ANI references.
+pub trait PromiseFutureValue: Send + Sized + 'static {
+    /// Converts a resolved Promise reference into an owned Rust value.
+    fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self>;
+}
+
+macro_rules! impl_primitive_promise_future_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl PromiseFutureValue for $ty {
+                fn from_promise_ref<'env>(
+                    env: &Env<'env>,
+                    value: AniRef<'env>,
+                ) -> Result<Self> {
+                    let object =
+                        unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+                    <Self as Unboxable<'env>>::unbox(env, &object)
+                }
+            }
+        )+
+    };
+}
+
+impl_primitive_promise_future_value!(bool, i8, i16, u16, i32, i64, f32, f64);
+
+impl PromiseFutureValue for char {
+    fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
+        let value = u16::from_promise_ref(env, value)?;
+        char::from_u32(u32::from(value)).ok_or_else(|| {
+            Error::new(
+                Status::InvalidType,
+                format!("Promise resolved with invalid char code unit {value:#06x}"),
+            )
+        })
+    }
+}
+
+impl PromiseFutureValue for String {
+    fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
+        let value = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+        env.get_string(&value)
+    }
+}
+
+impl PromiseFutureValue for super::BigInt {
+    fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
+        unsafe { Self::from_ani(env, value.as_raw() as sys::ani_object) }
+    }
+}
+
+impl PromiseFutureValue for () {
+    fn from_promise_ref<'env>(_env: &Env<'env>, _value: AniRef<'env>) -> Result<Self> {
+        Ok(())
+    }
+}
+
+struct PromiseWakeState {
+    cancelled: AtomicBool,
+    wake_scheduled: AtomicBool,
+}
+
+enum PromisePoll<T> {
+    Pending,
+    Ready(Result<T>),
+}
+
+/// A cancellable Rust [`Future`](std::future::Future) backed by an ArkTS
+/// Promise.
+///
+/// ANI currently exposes Promise creation and settlement but no native
+/// continuation-registration API. This implementation therefore checks the
+/// runtime Promise state on a short timer. It never blocks an executor thread,
+/// retains the Promise with a global reference, and automatically attaches
+/// whichever Rust thread polls it.
+pub struct PromiseFuture<T> {
+    vm: AniVm,
+    promise: Option<crate::types::GlobalRef>,
+    wake_state: Arc<PromiseWakeState>,
+    poll_interval: Duration,
+    completed: bool,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: PromiseFutureValue> PromiseFuture<T> {
+    /// Creates a future and promotes the Promise to a global ANI reference.
+    pub fn new<'env>(env: &Env<'env>, promise: PromiseRaw<'env, T>) -> Result<Self> {
+        let promise_ref = unsafe { AniRef::from_raw(promise.into_raw() as sys::ani_ref) };
+        Ok(Self {
+            vm: env.get_vm()?,
+            promise: Some(env.create_global_ref(&promise_ref)?),
+            wake_state: Arc::new(PromiseWakeState {
+                cancelled: AtomicBool::new(false),
+                wake_scheduled: AtomicBool::new(false),
+            }),
+            poll_interval: DEFAULT_PROMISE_POLL_INTERVAL,
+            completed: false,
+            marker: PhantomData,
+        })
+    }
+
+    /// Changes the interval used while the Promise is pending.
+    ///
+    /// Values below one millisecond are clamped to one millisecond to avoid a
+    /// busy loop.
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval.max(Duration::from_millis(1));
+        self
+    }
+
+    /// Releases this future's Promise reference.
+    ///
+    /// Cancellation is idempotent and does not abort the ArkTS operation
+    /// itself because ANI has no Promise cancellation primitive.
+    pub fn cancel(&mut self) -> Result<bool> {
+        if self.wake_state.cancelled.swap(true, Ordering::AcqRel) {
+            return Ok(false);
+        }
+        self.release_promise()?;
+        Ok(true)
+    }
+
+    /// Returns whether the Rust-side wait has been cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.wake_state.cancelled.load(Ordering::Acquire)
+    }
+
+    fn release_promise(&mut self) -> Result<()> {
+        let Some(global) = self.promise.take() else {
+            return Ok(());
+        };
+        self.vm.with_attached(|env| env.delete_global_ref(global))
+    }
+
+    fn inspect(&self) -> Result<PromisePoll<T>> {
+        let global = self.promise.as_ref().ok_or_else(|| {
+            Error::new(
+                Status::GenericFailure,
+                "Promise future no longer owns a Promise",
+            )
+        })?;
+        self.vm.with_attached(|env| {
+            let promise = env.local_object_from_global_ref(global)?;
+            match env.get_field_by_name_int(&promise, "state")? {
+                PROMISE_STATE_PENDING | PROMISE_STATE_LINKED => Ok(PromisePoll::Pending),
+                PROMISE_STATE_RESOLVED => {
+                    let value = env.get_field_by_name_ref(&promise, "value")?;
+                    Ok(PromisePoll::Ready(T::from_promise_ref(env, value)))
+                }
+                PROMISE_STATE_REJECTED => {
+                    let value = env.get_field_by_name_ref(&promise, "value")?;
+                    Ok(PromisePoll::Ready(Err(promise_rejection_error(env, value))))
+                }
+                state => Ok(PromisePoll::Ready(Err(Error::new(
+                    Status::Error,
+                    format!("ArkTS Promise reported unknown state {state}"),
+                )))),
+            }
+        })
+    }
+
+    fn schedule_wake(&self, waker: &Waker) {
+        if self.wake_state.wake_scheduled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let state = Arc::clone(&self.wake_state);
+        let waker = waker.clone();
+        let interval = self.poll_interval;
+        std::thread::spawn(move || {
+            std::thread::sleep(interval);
+            state.wake_scheduled.store(false, Ordering::Release);
+            if !state.cancelled.load(Ordering::Acquire) {
+                waker.wake();
+            }
+        });
+    }
+}
+
+impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
+    type Output = Result<T>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        assert!(!self.completed, "PromiseFuture polled after completion");
+        if self.is_cancelled() {
+            self.completed = true;
+            return Poll::Ready(Err(Error::new(
+                Status::GenericFailure,
+                "Promise future was cancelled",
+            )));
+        }
+        match self.inspect() {
+            Ok(PromisePoll::Pending) => {
+                self.schedule_wake(context.waker());
+                Poll::Pending
+            }
+            Ok(PromisePoll::Ready(result)) => {
+                self.completed = true;
+                if let Err(cleanup_error) = self.release_promise() {
+                    return Poll::Ready(Err(cleanup_error));
+                }
+                Poll::Ready(result)
+            }
+            Err(error) => {
+                self.completed = true;
+                let _ = self.release_promise();
+                Poll::Ready(Err(error))
+            }
+        }
+    }
+}
+
+impl<T> Drop for PromiseFuture<T> {
+    fn drop(&mut self) {
+        self.wake_state.cancelled.store(true, Ordering::Release);
+        let Some(global) = self.promise.take() else {
+            return;
+        };
+        let _ = self.vm.with_attached(|env| env.delete_global_ref(global));
+    }
+}
+
+fn promise_rejection_error(env: &Env<'_>, value: AniRef<'_>) -> Error {
+    let error_object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+    let reason = env
+        .get_property_by_name_ref(&error_object, "message")
+        .and_then(|message| {
+            let message = unsafe { AniString::from_raw(message.as_raw() as sys::ani_string) };
+            env.get_string(&message)
+        })
+        .unwrap_or_else(|_| "ArkTS Promise rejected".to_string());
+    Error::new(Status::GenericFailure, reason)
+}
+
 /// Deferred resolver for Promise
 ///
 /// `Deferred` holds the resolver part of a Promise and can be used to
@@ -415,6 +676,13 @@ impl<'env> PromiseValue<'env> for AniString<'env> {
 impl<'env> PromiseValue<'env> for AniRef<'env> {
     fn into_promise_ref(self, _env: &Env<'env>) -> Result<AniRef<'env>> {
         Ok(self)
+    }
+}
+
+impl<'env> PromiseValue<'env> for super::BigInt {
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;
+        Ok(unsafe { AniRef::from_raw(value as sys::ani_ref) })
     }
 }
 
@@ -598,7 +866,7 @@ impl<'env, T> ConversionToAni<'env> for PromiseRaw<'env, T> {
 impl<'env, T> FromAni<'env> for PromiseRaw<'env, T> {
     type Input = sys::ani_object;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Null pointer: promise"));
         }
@@ -617,7 +885,7 @@ impl<'env, T> ConversionToAni<'env> for Deferred<T> {
 impl<'env, T> FromAni<'env> for Deferred<T> {
     type Input = sys::ani_resolver;
 
-    fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
+    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
         if value.is_null() {
             return Err(Error::new(Status::InvalidArgs, "Null pointer: resolver"));
         }
@@ -727,20 +995,6 @@ pub(crate) fn create_promise_error<'a>(
     Ok(unsafe { crate::types::AniError::from_raw(err_obj.into_raw() as sys::ani_error) })
 }
 
-fn create_boxed_boolean<'a>(env: &Env<'a>, value: bool) -> Result<AniObject<'a>> {
-    use crate::types::ani_value_boolean;
-
-    // Find std/core/Boolean class
-    let boolean_class = env.find_class("std.core.Boolean")?;
-
-    // Find constructor <ctor>(Z:V)
-    let ctor = env.find_constructor(&boolean_class, "z:")?;
-
-    // Create boxed object
-    let args = [ani_value_boolean(value)];
-    env.new_object(&boolean_class, &ctor, &args)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,13 +1025,15 @@ mod tests {
             let resolver = deferred.into_resolver();
             let _: Deferred<bool> = resolver.into_deferred();
             let _ = Deferred::<String>::new(env);
-            let _ = PromiseRaw::<String>::from_ani(
-                env,
-                PromiseRaw::<String>::resolve_string(env, "ok")
-                    .expect("promise should resolve")
-                    .into_raw(),
-            );
-            let _ = Deferred::<String>::from_ani(env, resolver.as_raw());
+            let _ = unsafe {
+                PromiseRaw::<String>::from_ani(
+                    env,
+                    PromiseRaw::<String>::resolve_string(env, "ok")
+                        .expect("promise should resolve")
+                        .into_raw(),
+                )
+            };
+            let _ = unsafe { Deferred::<String>::from_ani(env, resolver.as_raw()) };
         }
 
         let _ = compile;
