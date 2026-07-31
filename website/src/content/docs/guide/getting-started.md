@@ -12,9 +12,19 @@ description: 创建一个最小 ani-rs 动态库，导出 Rust 函数并从 ArkT
 - ArkTS 1.2 / ANI 兼容的应用或运行时
 - 真机或 QEMU 验证时需要 `hdc`
 
-仓库提供 `ani-rs` 构建辅助 CLI；创建 crate 仍使用 Cargo，CLI 负责 SDK 检查、交叉编译、HAP 和 QEMU 验证。
+发布的 `ani-rs` CLI 可独立创建 crate、检查 SDK 并交叉编译；HAP 和 QEMU 资格测试由源码仓库脚本负责。
 
 ## 创建动态库
+
+可以直接使用 CLI 生成不依赖 ani-rs 源码树的项目：
+
+```bash
+cargo install --git https://github.com/ohos-rs/ani-rs ani-cli
+ani-rs new my-ani-module
+cd my-ani-module
+```
+
+也可以手动创建：
 
 ```bash
 cargo new --lib my-ani-module
@@ -76,16 +86,16 @@ ANI_ETS_LIBRARY=my_native_library \
 cargo build
 ```
 
-在 ani-rs 工作区内也可以使用：
+安装 CLI 后可以在任意项目目录使用：
 
 ```bash
-cargo run -p ani-cli -- doctor --arch arm64
-cargo run -p ani-cli -- build \
+ani-rs doctor --arch arm64
+ani-rs build \
   --arch arm64 \
   --module-descriptor entry.src.main.ets.native \
   --ets-output ets/index.ets \
   --library my_native_library \
-  --release -- -p my-ani-module
+  --release
 ```
 
 ## ArkTS 侧调用

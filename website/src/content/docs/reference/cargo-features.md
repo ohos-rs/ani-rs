@@ -3,14 +3,17 @@ title: Cargo Features
 description: 按需启用 ani-rs 的错误集成、异步运行时和 Tokio 功能。
 ---
 
-`ani` 默认不启用可选 feature。同步函数、类型转换和引用 API 不需要额外配置。
+`ani` 默认启用 `api24`。同步函数、类型转换和引用 API 不需要额外配置。
 
 ## 功能列表
 
 | Feature | 作用 |
 | --- | --- |
+| `api23` | API 23 兼容路径，不使用 API 24 primitive boxing entry point |
+| `api24` | API 24+ 原生 primitive boxing；默认 profile |
+| `api26` | API 26 发布/QEMU 验证 profile，包含 `api24` |
 | `error_anyhow` | 将 `anyhow::Error` 转换为 `ani::Error` |
-| `serde-json` | 启用 `Json<T>`、`serde_json::Value` 与结构化 `AniEnum` 的 JSON 字符串桥接 |
+| `serde-json` | 启用 `Json<T>`、`serde_json::Value` 与结构化 `AniEnum` 的原生 Object bridge |
 | `async` | `tokio_rt` 的易用别名 |
 | `tokio_rt` | 启用 ani-rs Tokio runtime 与 Promise bridge |
 | `tokio_fs` | 启用 Tokio 文件系统 API |
@@ -75,7 +78,7 @@ ani = {
 serde = { version = "1", features = ["derive"] }
 ```
 
-该 feature 通过 ArkTS `string` 传输 JSON，适合 `Json<T>` 与带字段的 `AniEnum`；它不会把任意 serde struct 自动声明为 ArkTS class。
+该 feature 把 serde 数据递归转换为原生 ArkTS `Record`、`Array`、boxed primitive 与 `null`；它不会把任意 serde struct 自动声明为 ArkTS class。
 
 ## 选择建议
 

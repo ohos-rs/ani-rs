@@ -163,6 +163,7 @@ struct Square { input: i32 }
 impl Task for Square {
     type Output = i32;
     type JsValue = i32;
+    type Error = Error;
 
     fn compute(&mut self, cancel: &CancellationToken) -> Result<i32> {
         cancel.check()?;
@@ -180,6 +181,8 @@ pub fn square_in_background(input: i32) -> AsyncTask<Square> {
 }
 ```
 
+`Task::Error` 不固定为 ani-rs 的 `Error`；任何实现 `AniErrorPayload` 的业务错误都可以直接使用，调度边界不会先转换为字符串。
+
 ## 跨线程回调
 
 `ThreadsafeFunction<Args, Return>` 是带容量的可克隆队列。dispatcher 在调用 ArkTS 前 attach 到所属 VM；`Blocking` 提供背压，`NonBlocking` 在队列满时返回 `Status::QueueFull`。`call` 返回的 `ThreadsafeFunctionCall` 既可以 `.wait()`，也可以作为 Future `await`；`close()` 后拒绝新任务并排空已入队任务。
@@ -193,3 +196,32 @@ let result = pending.wait()?;
 ```
 
 完整示例位于 `examples/async_wrapper`。
+
+## Async Iterator 与 Stream
+
+`stream_channel(capacity)` 创建默认错误类型的有界 pull stream；需要自定义业务错误时使用 `stream_channel_with_error::<T, E>(capacity)`。每次 `next_task()` 返回一个共享调度器驱动的 Promise，channel 断开时解析为 `null`，生成的 `*AsyncIterator.next()` 包装为 `IteratorResult<T>`：
+
+```rust
+#[derive(Debug)]
+struct FeedError { message: String }
+
+impl std::fmt::Display for FeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl AniErrorPayload for FeedError {
+    fn ani_status(&self) -> &str { "FeedUnavailable" }
+    fn ani_code(&self) -> i32 { 72001 }
+    fn ani_message(&self) -> &str { &self.message }
+}
+
+let (sender, stream) =
+    stream_channel_with_error::<i32, FeedError>(32)?;
+sender.send(1)?;
+sender.send_error(FeedError { message: "closed".into() })?;
+let task = stream.next_task();
+```
+
+队列有界并提供背压；取消、队列关闭和业务错误最终都进入同一结构化 Promise rejection 通道。

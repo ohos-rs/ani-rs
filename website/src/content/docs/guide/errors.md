@@ -47,41 +47,52 @@ try {
 
 错误还可以使用 `Error::with_cause(...)` 保留原因链。
 
-## 业务错误码
+## 可扩展业务错误
 
-状态类型只需实现 `AsRef<str>`：
+`Error<S>` 可通过 `with_code`、`with_metadata` 和 `with_cause` 扩展。业务错误也可以直接实现 `AniErrorPayload`，无需先映射到框架 `Status` 或字符串：
 
 ```rust
-#[derive(Debug, Clone, Copy)]
-enum AuthError {
-    InvalidCredentials,
-    TokenExpired,
+#[derive(Debug)]
+struct AuthError {
+    operation: String,
 }
 
-impl AsRef<str> for AuthError {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::InvalidCredentials => "InvalidCredentials",
-            Self::TokenExpired => "TokenExpired",
-        }
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "authentication failed: {}", self.operation)
     }
 }
 
-fn authenticate(
-    token: &str,
-) -> std::result::Result<(), Error<AuthError>> {
-    if token.is_empty() {
-        return Err(Error::new(
-            AuthError::InvalidCredentials,
-            "token is empty",
-        ));
+impl AniErrorPayload for AuthError {
+    fn ani_status(&self) -> &str { "InvalidCredentials" }
+    fn ani_code(&self) -> i32 { 71001 }
+    fn ani_message(&self) -> &str { "token is invalid" }
+    fn visit_ani_metadata(&self, visit: &mut dyn FnMut(&str, &str)) {
+        visit("operation", &self.operation);
     }
+}
 
-    Ok(())
+#[ani(async)]
+async fn authenticate(token: String)
+    -> std::result::Result<(), AuthError>
+{
+    Err(AuthError { operation: format!("token:{token}") })
 }
 ```
 
-导出函数可以把业务错误映射到公共 `ani::Error`，避免把内部错误结构泄漏到 ArkTS API。
+同步 `Result`、`#[ani(async)]`、`AsyncTask`、`Deferred` 和 async stream 共用这一协议。Promise rejection 使用标准 ArkTS `Error`：`name` 保存 status，`code` 和 `message` 保持业务值，`cause` 保存可扩展的 `Record` 上下文（`status`、`metadata` 和可选嵌套 `cause`）。因此新增业务字段不需要修改调度器或宏生成代码。
+
+```ts
+try {
+  await authenticate('bad')
+} catch (value) {
+  const error = value as Error
+  console.log(error.name, error.code, error.message)
+  const context = error.cause as Record<string, Object>
+  const metadata = context['metadata'] as Record<string, string>
+  console.log(metadata['operation'])
+}
+```
 
 ## anyhow 集成
 

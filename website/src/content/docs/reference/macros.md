@@ -168,7 +168,7 @@ pub enum State {
 }
 ```
 
-unit variants 使用 ANI enum item 映射。包含 tuple 或 struct 字段的 enum 必须同时派生 serde 的 `Serialize`/`Deserialize` 并启用 `ani/serde-json`，运行时通过确定性的 JSON 字符串边界传输：
+unit variants 使用 ANI enum item 映射。包含 tuple 或 struct 字段的 enum 必须同时派生 serde 的 `Serialize`/`Deserialize` 并启用 `ani/serde-json`，运行时通过原生 ArkTS `Record`/`Array`/boxed primitive 对象图传输：
 
 ```rust
 #[derive(Serialize, Deserialize, AniEnum)]

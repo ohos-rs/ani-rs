@@ -85,24 +85,22 @@ es2panda \
 
 系统镜像通常不提供独立的 `ark` 或 `es2panda` 命令。QEMU 中运行外部 ABC 时，需要设备侧 runner 使用系统 Ark Runtime 加载 ABC；仓库里的 `scripts/run_arkvm_examples_ohos_qemu.sh` 可以作为完整参考。
 
-## CLI 与可复现 HAP
+## 独立 CLI
 
-仓库内 CLI 统一了交叉编译、声明参数和验证入口：
+安装后的 CLI 不依赖源码仓库，可查看支持合同、检查工具链并交叉编译当前项目：
 
 ```bash
-cargo run -p ani-cli -- build \
+ani-rs support
+ani-rs doctor --arch arm64
+ani-rs build \
   --arch arm64 \
   --module-descriptor entry.src.main.ets.native \
   --ets-output entry/src/main/ets/native/index.ets \
   --library my_ani_module \
-  --release -- -p my-ani-module
-
-cargo run -p ani-cli -- hap --arch arm64
-cargo run -p ani-cli -- hap-repro --arch arm64
-cargo run -p ani-cli -- verify-hap --arch arm64 -- app.hap
+  --release
 ```
 
-`build_hap_smoke.sh` 使用固定 descriptor，把匹配工具链生成的静态 ABC 放入 `resources/rawfile/ani_rs_smoke.abc`，并把目标 ABI 的 `.so` 放入 `libs/<abi>/`。`check_hap_reproducible.sh` 在两个独立目录重新构建并比较解包后的全部内容；ZIP 时间戳不参与比较。
+源码仓库中的 `build_hap_smoke.sh`、`check_hap_reproducible.sh` 和 QEMU 脚本只用于 ani-rs 自身的发布资格测试，不属于已发布 CLI 的公共命令。
 
 ## 检查构建结果
 

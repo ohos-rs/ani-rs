@@ -119,7 +119,7 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 
 ## TypedArray
 
-`Int8Array`、`Uint8Array`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。当前 ABI 使用 `ArrayBuffer` 传输，并固定为 little-endian，避免宿主字节序影响产物：
+`Int8Array`、`Uint8Array`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。公开 ABI 使用对应的 ArkTS 原生 TypedArray class；返回值构造原生数组，输入读取它的 `buffer`、`byteOffset` 和 `byteLength`。内部复制使用 little-endian，`TypedArraySlice<'env, T>` 可提供当前调用作用域内的只读零拷贝视图：
 
 ```rust
 use ani::prelude::*;
@@ -136,11 +136,11 @@ pub fn sequence() -> Uint16Array {
 }
 ```
 
-输入字节数不能被元素宽度整除时会返回 `InvalidArgs`。
+class 不匹配、范围越界或字节数不能被元素宽度整除时会返回结构化错误。
 
-## Serde JSON
+## 结构化 Object 与 Enum
 
-启用 `serde-json` feature 后，`Json<T>` 和 `serde_json::Value` 可通过 JSON 字符串边界传输。该路径适合配置、消息和结构化 enum，不等同于 ArkTS 原生对象映射：
+启用 `serde-json` feature 后，`Json<T>`、`serde_json::Value` 和带字段的 `AniEnum` 会递归映射为 ArkTS 原生 `Record`、`Array`、`String`、boxed number/boolean 与 `null`，不会在 ABI 边界传递 JSON 文本：
 
 ```rust
 use ani::prelude::Json;
