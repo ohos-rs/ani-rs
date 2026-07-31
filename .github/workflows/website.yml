@@ -9,6 +9,13 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/website.yml"
+  pull_request:
+    paths:
+      - "website/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/website.yml"
   workflow_dispatch:
 
 permissions:
@@ -55,6 +62,7 @@ jobs:
   deploy:
     name: Deploy website
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

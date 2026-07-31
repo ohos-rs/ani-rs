@@ -1,0 +1,19 @@
+[package]
+name = "ani-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ani = { path = "../crates/ani" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "bigint_decimal"
+path = "fuzz_targets/bigint_decimal.rs"
+test = false
+doc = false
+bench = false

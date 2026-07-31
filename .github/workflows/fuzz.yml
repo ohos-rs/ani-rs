@@ -1,0 +1,19 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  bigint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz decimal BigInt conversion
+        run: cargo fuzz run bigint_decimal --fuzz-dir fuzz -- -max_total_time=60

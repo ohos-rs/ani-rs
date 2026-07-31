@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  rust:
+    name: Rust quality and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Configure Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint all features and targets
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Lint API 23 compatibility path
+        run: cargo clippy -p ani --all-targets --no-default-features -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
+
+  header:
+    name: ANI header drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install pinned bindgen
+        run: cargo install bindgen-cli --version 0.72.1 --locked
+      - name: Verify pinned header and generated bindings
+        run: scripts/header.sh --check
+
+  ets:
+    name: Deterministic ETS generation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Verify independent ETS builds
+        run: scripts/check_example_ets.sh
+
+  package:
+    name: Documentation and crate packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Build public API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p ani -p ani-derive -p ani-sys -p ani-cli --all-features --no-deps
+      - name: Package ani-sys
+        run: cargo package -p ani-sys --no-verify
+      - name: Package ani-derive
+        run: cargo package -p ani-derive --no-verify
+      - name: Package ani
+        run: cargo package -p ani --no-verify
+      - name: Package ani-cli
+        run: cargo package -p ani-cli --no-verify

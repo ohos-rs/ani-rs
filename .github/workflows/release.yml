@@ -1,0 +1,30 @@
+name: Release checks
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: cargo install bindgen-cli --version 0.72.1 --locked
+      - run: scripts/check_release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ani-rs-crates-${{ github.ref_name }}
+          path: target/package/*.crate

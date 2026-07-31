@@ -13,6 +13,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ani-cli"
+version = "0.0.1-alpha.1"
+
+[[package]]
 name = "ani-derive"
 version = "0.0.1-beta.1"
 dependencies = [

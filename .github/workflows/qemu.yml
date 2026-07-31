@@ -1,0 +1,123 @@
+name: OpenHarmony QEMU
+
+on:
+  workflow_dispatch:
+    inputs:
+      guest_arch:
+        description: Architecture of the running QEMU guest
+        required: true
+        default: arm64
+        type: choice
+        options:
+          - arm64
+          - x86_64
+          - armv7a
+      hdc_target:
+        description: HDC endpoint forwarded by the QEMU package
+        required: true
+        default: 127.0.0.1:5558
+        type: string
+      qemu_packages_root:
+        description: Directory containing the extracted 20260728 QEMU packages
+        required: true
+        default: /Volumes/PSSD/qemu/releases/ohos-qemu-vpn-20260728/packages
+        type: string
+      ohos_source_root:
+        description: Matching OpenHarmony source/output root
+        required: true
+        default: /Volumes/PSSD/qemu/openharmony
+        type: string
+      deveco_sdk_root:
+        description: DevEco OpenHarmony SDK root
+        required: true
+        default: /Applications/DevEco-Studio.app/Contents/sdk/default/openharmony
+        type: string
+      asan_runner:
+        description: Build the device-side ABC runner with AddressSanitizer
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohos-qemu-${{ inputs.guest_arch }}
+  cancel-in-progress: false
+
+jobs:
+  qemu:
+    name: ${{ inputs.guest_arch }} image runtime suite
+    runs-on: [self-hosted, ohos-qemu]
+    timeout-minutes: 90
+    env:
+      HDC_TARGET: ${{ inputs.hdc_target }}
+      QEMU_PACKAGES_ROOT: ${{ inputs.qemu_packages_root }}
+      OHOS_QEMU_GUEST_ARCH: ${{ inputs.guest_arch }}
+      OHOS_SOURCE_ROOT: ${{ inputs.ohos_source_root }}
+      DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root }}
+      OHOS_QEMU_WORK_ROOT: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}
+      OHOS_QEMU_REMOTE_ROOT: /data/local/tmp/ani-rs-qemu-${{ github.run_id }}
+      OHOS_QEMU_RUNNER_ASAN: ${{ inputs.asan_runner && '1' || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Resolve package and Rust target
+        shell: bash
+        run: |
+          case "$OHOS_QEMU_GUEST_ARCH" in
+            arm64)
+              package=openharmony-qemu-arm64-arm64_virt
+              rust_target=aarch64-unknown-linux-ohos
+              ;;
+            x86_64)
+              package=openharmony-qemu-x86_64-x86_64_virt
+              rust_target=x86_64-unknown-linux-ohos
+              ;;
+            armv7a)
+              package=openharmony-qemu-armv7a-armv7a_virt
+              rust_target=armv7-unknown-linux-ohos
+              ;;
+            *) exit 2 ;;
+          esac
+          echo "QEMU_PACKAGE_ROOT=$QEMU_PACKAGES_ROOT/$package" >> "$GITHUB_ENV"
+          echo "OHOS_RUST_TARGET=$rust_target" >> "$GITHUB_ENV"
+      - name: Install Rust target
+        run: rustup target add "$OHOS_RUST_TARGET"
+      - name: Verify the requested QEMU image is running
+        shell: bash
+        run: |
+          test -f "$QEMU_PACKAGE_ROOT/manifest.json"
+          grep -q "\"guest_arch\": \"$OHOS_QEMU_GUEST_ARCH\"" "$QEMU_PACKAGE_ROOT/manifest.json"
+          ps -ax -o command= | grep -F "$QEMU_PACKAGE_ROOT/images/" | grep -v grep
+      - name: Verify connected OpenHarmony API level
+        shell: bash
+        run: |
+          if command -v hdc >/dev/null 2>&1; then
+            HDC_BIN="$(command -v hdc)"
+          else
+            HDC_BIN="$DEVECO_SDK_ROOT/toolchains/hdc"
+          fi
+          api_level="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.ohos.apiversion' | tr -d '\r[:space:]')"
+          version="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.product.software.version' | tr -d '\r')"
+          echo "OpenHarmony: $version (API $api_level)"
+          test "$api_level" -ge 24
+      - name: Run cross-build, ETS/ABC and QEMU runtime suite
+        run: scripts/run_arkvm_examples_ohos_qemu.sh
+      - name: Upload QEMU report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ohos-qemu-${{ inputs.guest_arch }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/report.tsv
+          if-no-files-found: warn
+      - name: Clean device test directory
+        if: always()
+        shell: bash
+        run: |
+          if command -v hdc >/dev/null 2>&1; then
+            HDC_BIN="$(command -v hdc)"
+          else
+            HDC_BIN="$DEVECO_SDK_ROOT/toolchains/hdc"
+          fi
+          "$HDC_BIN" -t "$HDC_TARGET" shell "rm -rf '$OHOS_QEMU_REMOTE_ROOT'" || true
