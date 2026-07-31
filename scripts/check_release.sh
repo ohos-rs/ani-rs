@@ -9,6 +9,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 scripts/header.sh --check
 scripts/check_example_ets.sh
+scripts/check_performance.sh
 
 RUSTDOCFLAGS="-D warnings" cargo doc \
   -p ani -p ani-derive -p ani-sys -p ani-cli \

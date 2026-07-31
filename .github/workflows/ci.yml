@@ -33,7 +33,11 @@ jobs:
       - name: Lint all features and targets
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Lint API 23 compatibility path
-        run: cargo clippy -p ani --all-targets --no-default-features -- -D warnings
+        run: cargo clippy -p ani --all-targets --no-default-features --features api23 -- -D warnings
+      - name: Lint API 24 default profile
+        run: cargo clippy -p ani --all-targets --no-default-features --features api24 -- -D warnings
+      - name: Lint API 26 release profile
+        run: cargo clippy -p ani --all-targets --no-default-features --features api26 -- -D warnings
       - name: Run workspace tests
         run: cargo test --workspace --all-features
 
@@ -75,6 +79,29 @@ jobs:
         run: cargo package -p ani --no-verify
       - name: Package ani-cli
         run: cargo package -p ani-cli --no-verify
+
+  semver:
+    name: Public API semver
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with baseline
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks --version 0.49.0 --locked
+      - name: Check public crates against target branch
+        env:
+          ANI_SEMVER_BASELINE_REV: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/master^' }}
+        run: scripts/check_semver.sh
+
+  performance:
+    name: Performance regression gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run stable microbench gates
+        run: scripts/check_performance.sh
 
   security:
     name: Dependency policy and advisories
