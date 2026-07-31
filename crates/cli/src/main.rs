@@ -1,6 +1,9 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+const ANI_RS_REPOSITORY: &str = "https://github.com/ohos-rs/ani-rs";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Arch {
@@ -34,6 +37,14 @@ impl Arch {
             Self::Arm64 => "aarch64-unknown-linux-ohos",
             Self::X86_64 => "x86_64-unknown-linux-ohos",
             Self::Armv7a => "armv7-unknown-linux-ohos",
+        }
+    }
+
+    fn abi(self) -> &'static str {
+        match self {
+            Self::Arm64 => "arm64-v8a",
+            Self::X86_64 => "x86_64",
+            Self::Armv7a => "armeabi-v7a",
         }
     }
 }
@@ -180,6 +191,75 @@ fn doctor(options: &Options) -> Result<(), String> {
     Ok(())
 }
 
+fn print_support() {
+    println!("ani-rs support contract");
+    println!("  API 23  legacy boxed primitives (--no-default-features --features api23)");
+    println!("  API 24  native primitive boxing (default)");
+    println!("  API 26  release/QEMU profile (--features api26)");
+    println!("  header  OpenHarmony API 26 / ANI_VERSION_1");
+    println!("  QEMU    ohos-qemu-vpn-20260728 / API 26");
+    println!(
+        "  ABI     {}, {}, {}",
+        Arch::Arm64.abi(),
+        Arch::X86_64.abi(),
+        Arch::Armv7a.abi()
+    );
+}
+
+fn scaffold_manifest(package_name: &str) -> String {
+    format!(
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nani = {{ git = \"{ANI_RS_REPOSITORY}\", features = [\"api24\"] }}\nani-derive = {{ git = \"{ANI_RS_REPOSITORY}\" }}\n"
+    )
+}
+
+fn scaffold(args: &[String]) -> Result<(), String> {
+    let destination = args
+        .first()
+        .map(PathBuf::from)
+        .ok_or_else(|| "new requires a destination path".to_string())?;
+    if destination.exists() {
+        return Err(format!(
+            "destination already exists: {}",
+            destination.display()
+        ));
+    }
+    let raw_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "destination must end in a valid UTF-8 project name".to_string())?;
+    let package_name = raw_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let library_name = package_name.replace('-', "_");
+    let source_dir = destination.join("src");
+    fs::create_dir_all(&source_dir).map_err(|error| {
+        format!(
+            "failed to create project directory {}: {error}",
+            source_dir.display()
+        )
+    })?;
+    let manifest = scaffold_manifest(&package_name);
+    let source = format!(
+        "use ani_derive::ani;\n\n#[ani]\npub fn add(left: i32, right: i32) -> i32 {{\n    left + right\n}}\n\n#[ani]\npub fn module_name() -> String {{\n    \"{library_name}\".to_string()\n}}\n"
+    );
+    fs::write(destination.join("Cargo.toml"), manifest)
+        .and_then(|_| fs::write(source_dir.join("lib.rs"), source))
+        .map_err(|error| format!("failed to write scaffold: {error}"))?;
+    println!("created {}", destination.display());
+    println!(
+        "next: cd {} && ani-rs build --release",
+        destination.display()
+    );
+    Ok(())
+}
+
 fn build(options: &Options) -> Result<(), String> {
     validate(options)?;
     let target = options.arch.rust_target();
@@ -221,53 +301,20 @@ fn build(options: &Options) -> Result<(), String> {
     }
 }
 
-fn run_repo_script(name: &str, args: &[String], options: &Options) -> Result<(), String> {
-    let script = env::current_dir()
-        .map_err(|error| format!("failed to resolve current directory: {error}"))?
-        .join("scripts")
-        .join(name);
-    if !script.is_file() {
-        return Err(format!(
-            "{} must be run from an ani-rs checkout (missing {})",
-            name,
-            script.display()
-        ));
-    }
-    let guest_arch = match options.arch {
-        Arch::Arm64 => "arm64",
-        Arch::X86_64 => "x86_64",
-        Arch::Armv7a => "armv7a",
-    };
-    let mut command = Command::new(script);
-    command
-        .args(args)
-        .env("DEVECO_SDK_ROOT", &options.sdk_root)
-        .env("OHOS_QEMU_GUEST_ARCH", guest_arch);
-    let status = command
-        .status()
-        .map_err(|error| format!("failed to run {name}: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{name} failed with {status}"))
-    }
-}
-
 fn usage() -> String {
     "\
 ani-rs - OpenHarmony ANI build helper
 
 Usage:
+  ani-rs new PATH
+  ani-rs support
   ani-rs doctor [--arch arm64|x86_64|armv7a] [--sdk PATH]
   ani-rs build  [--arch ARCH] [--sdk PATH] [--release]
                 [--module-descriptor NAME] [--ets-output PATH] [--library NAME]
                 [-- CARGO_ARGS...]
-  ani-rs hap    [--arch ARCH] [--sdk PATH]
-  ani-rs hap-repro [--arch ARCH] [--sdk PATH]
-  ani-rs qemu   [--arch ARCH] [--sdk PATH]
-  ani-rs qemu-memory [--arch ARCH] [--sdk PATH]
-  ani-rs hap-qemu [--arch ARCH] [--sdk PATH] [-- HAP_PATH]
-  ani-rs verify-hap [--arch ARCH] [--sdk PATH] -- HAP_PATH
+
+Repository QEMU/HAP qualification is intentionally provided by the ani-rs
+source tree scripts; the published CLI has no source-tree dependency.
 "
     .to_string()
 }
@@ -277,58 +324,13 @@ fn run() -> Result<(), String> {
     let command = args.next().ok_or_else(usage)?;
     let options = parse_options(args)?;
     match command.as_str() {
+        "new" => scaffold(&options.cargo_args),
+        "support" => {
+            print_support();
+            Ok(())
+        }
         "doctor" => doctor(&options),
         "build" => build(&options),
-        "hap" => run_repo_script(
-            "build_hap_smoke.sh",
-            &[match options.arch {
-                Arch::Arm64 => "arm64",
-                Arch::X86_64 => "x86_64",
-                Arch::Armv7a => "armv7a",
-            }
-            .to_string()],
-            &options,
-        ),
-        "hap-repro" => run_repo_script(
-            "check_hap_reproducible.sh",
-            &[match options.arch {
-                Arch::Arm64 => "arm64",
-                Arch::X86_64 => "x86_64",
-                Arch::Armv7a => "armv7a",
-            }
-            .to_string()],
-            &options,
-        ),
-        "qemu" => {
-            // The runtime script intentionally consumes its configuration via
-            // environment variables so CI and local runs share one path.
-            run_repo_script("run_arkvm_examples_ohos_qemu.sh", &[], &options)
-        }
-        "qemu-memory" => run_repo_script("check_qemu_memory.sh", &[], &options),
-        "hap-qemu" => {
-            let arch = match options.arch {
-                Arch::Arm64 => "arm64",
-                Arch::X86_64 => "x86_64",
-                Arch::Armv7a => "armv7a",
-            };
-            let mut script_args = options.cargo_args.clone();
-            if script_args.is_empty() {
-                script_args.push(String::new());
-            }
-            script_args.push(arch.to_string());
-            run_repo_script("run_hap_abc_ohos_qemu.sh", &script_args, &options)
-        }
-        "verify-hap" => {
-            let Some(hap) = options.cargo_args.first() else {
-                return Err("verify-hap requires a HAP path after --".to_string());
-            };
-            let arch = match options.arch {
-                Arch::Arm64 => "arm64",
-                Arch::X86_64 => "x86_64",
-                Arch::Armv7a => "armv7a",
-            };
-            run_repo_script("verify_hap.sh", &[hap.clone(), arch.to_string()], &options)
-        }
         "-h" | "--help" | "help" => Err(usage()),
         _ => Err(format!("unknown command {command:?}\n\n{}", usage())),
     }
@@ -362,6 +364,7 @@ mod tests {
             Arch::parse("armv7a").unwrap().rust_target(),
             "armv7-unknown-linux-ohos"
         );
+        assert_eq!(Arch::Arm64.abi(), "arm64-v8a");
     }
 
     #[test]
@@ -401,5 +404,16 @@ mod tests {
             Some(PathBuf::from("generated/native.ets"))
         );
         assert_eq!(options.ets_library.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn scaffold_uses_the_project_repository_instead_of_a_crates_io_name_collision() {
+        let manifest = scaffold_manifest("demo-addon");
+        assert!(manifest.contains("name = \"demo-addon\""));
+        assert!(manifest.contains(
+            "ani = { git = \"https://github.com/ohos-rs/ani-rs\", features = [\"api24\"] }"
+        ));
+        assert!(manifest.contains("ani-derive = { git = \"https://github.com/ohos-rs/ani-rs\" }"));
+        assert!(!manifest.contains("ani = { version"));
     }
 }
