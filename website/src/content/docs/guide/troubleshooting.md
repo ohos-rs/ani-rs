@@ -36,12 +36,12 @@ llvm-readelf -d libmy_ani_module.so
 
 ARM64 OpenHarmony 应使用 `aarch64-unknown-linux-ohos` 目标和 SDK 提供的 linker。
 
-## `ANI_Constructor` 不存在
+## `ANI_Constructor` 或 `ANI_Destructor` 不存在
 
 确认 crate 中确实展开了 `#[ani]`，并检查导出符号：
 
 ```bash
-llvm-nm -D libmy_ani_module.so | grep ANI_Constructor
+llvm-nm -D libmy_ani_module.so | grep -E 'ANI_(Constructor|Destructor)'
 ```
 
 还要确认应用没有 strip 掉必需的动态符号。
@@ -130,8 +130,8 @@ es2panda \
 
 ```bash
 hdc list targets
-hdc -t 127.0.0.1:5557 shell uname -a
-hdc -t 127.0.0.1:5557 shell ls /system/lib64/libarkruntime.so
+hdc -t 127.0.0.1:5558 shell uname -a
+hdc -t 127.0.0.1:5558 shell ls /system/lib64/libarkruntime.so
 ```
 
 端口号本身不能证明目标是 OpenHarmony QEMU。确认系统版本、CPU 架构和 Ark Runtime 文件均符合测试要求。
@@ -141,9 +141,9 @@ hdc -t 127.0.0.1:5557 shell ls /system/lib64/libarkruntime.so
 ## 查看设备日志
 
 ```bash
-hdc -t 127.0.0.1:5557 shell hilog -r
+hdc -t 127.0.0.1:5558 shell hilog -r
 # 复现问题
-hdc -t 127.0.0.1:5557 shell hilog -x
+hdc -t 127.0.0.1:5558 shell hilog -x
 ```
 
 重点查找：

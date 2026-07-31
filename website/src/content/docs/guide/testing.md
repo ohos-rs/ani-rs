@@ -88,7 +88,7 @@ es2panda \
 
 ```bash
 hdc list targets
-hdc -t 127.0.0.1:5557 shell uname -m
+hdc -t 127.0.0.1:5558 shell uname -m
 ```
 
 不要仅根据端口号判断环境类型。应确认它运行的是需要验证的 OpenHarmony QEMU 系统镜像，而不是 DevEco 模拟器或其他设备。
@@ -96,11 +96,11 @@ hdc -t 127.0.0.1:5557 shell uname -m
 把 ARM64 动态库、ABC 和 runner 推送到设备：
 
 ```bash
-hdc -t 127.0.0.1:5557 shell mkdir -p /data/local/tmp/my-ani
-hdc -t 127.0.0.1:5557 file send \
+hdc -t 127.0.0.1:5558 shell mkdir -p /data/local/tmp/my-ani
+hdc -t 127.0.0.1:5558 file send \
   target/aarch64-unknown-linux-ohos/release/libmy_ani_module.so \
   /data/local/tmp/my-ani/libmy_ani_module.so
-hdc -t 127.0.0.1:5557 file send \
+hdc -t 127.0.0.1:5558 file send \
   smoke.abc \
   /data/local/tmp/my-ani/smoke.abc
 ```
@@ -108,12 +108,18 @@ hdc -t 127.0.0.1:5557 file send \
 设备镜像通常没有可直接执行的 `ark` 命令。外部 ABC 需要 runner 通过系统 `libarkruntime.so` 加载；可以复用仓库的：
 
 ```bash
-HDC_TARGET=127.0.0.1:5557 \
-OHOS_SOURCE_ROOT=/path/to/openharmony \
+HDC_TARGET=127.0.0.1:5558 \
+QEMU_PACKAGES_ROOT=/Volumes/PSSD/qemu/releases/ohos-qemu-vpn-20260728/packages \
+OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1 \
+OHOS_SOURCE_ROOT=/Volumes/PSSD/qemu/openharmony \
 DEVECO_SDK_ROOT=/path/to/openharmony-sdk \
 OHOS_QEMU_PACKAGE_FILTER=my-package \
 ./scripts/run_arkvm_examples_ohos_qemu.sh
 ```
+
+设置 `QEMU_PACKAGES_ROOT` 后脚本会校验 manifest；设置 `OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1` 后还会确认当前进程确实引用该包的 `images/`，从而避免把 DevEco 模拟器或其他端口误认为目标镜像。
+
+独立 ABC runner 不会触发 Stage 应用的动态库卸载流程，因此测试驱动在 `DestroyVM` 前从当前模块显式解析并调用一次 `ANI_Destructor`；生命周期用例要求观察到 finalizer 标记。这样构造、绑定、析构和资源清理都在真实 Ark Runtime 内执行，而不是只检查 ELF 符号。
 
 该脚本适合仓库 example。应用项目应把相同原则集成进自己的测试任务：同源工具链编译 ABC、目标架构 `.so`、系统 Runtime 执行和明确断言。
 
@@ -128,12 +134,29 @@ OHOS_QEMU_PACKAGE_FILTER=my-package \
 5. 同时检查 ArkTS 异常和 `hilog`。
 
 ```bash
-hdc -t 127.0.0.1:5557 install -r entry-default-signed.hap
-hdc -t 127.0.0.1:5557 shell aa start \
+hdc -t 127.0.0.1:5558 install -r entry-default-signed.hap
+hdc -t 127.0.0.1:5558 shell aa start \
   -b com.example.myani \
   -a EntryAbility
-hdc -t 127.0.0.1:5557 shell hilog -x
+hdc -t 127.0.0.1:5558 shell hilog -x
 ```
+
+仓库 smoke HAP 可以不安装，直接提取其中实际打包的 ABC 与动态库并在 QEMU 执行：
+
+```bash
+scripts/build_hap_smoke.sh arm64
+HDC_TARGET=127.0.0.1:5558 scripts/run_hap_abc_ohos_qemu.sh
+```
+
+## 内存增长检查
+
+```bash
+HDC_TARGET=127.0.0.1:5558 scripts/check_qemu_memory.sh
+```
+
+脚本分别创建 fresh ANI VM，并在每个 VM 内连续执行 50 或 100 轮 ArrayBuffer、异步与 native resource 场景，记录 `/proc/self/smaps_rollup` 的 PSS。除了单次增长必须低于 32 MB，100 轮相对 50 轮的额外增长还必须低于 8 MB，避免只看一次运行而漏掉线性增长。
+
+20260728 镜像的 Ark Runtime 在 JIT 模式下反射重复异步入口约二十余轮会崩在 `libarkruntime.so` 的 JIT code cache。常规 52 场景测试仍使用 JIT；内存压力测试显式关闭 JIT，把平台 JIT 问题和 ani-rs 所有权泄漏分开观察。
 
 ## 推荐顺序
 

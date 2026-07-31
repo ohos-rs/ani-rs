@@ -112,6 +112,7 @@ export default defineConfig({
           items: [
             { slug: 'reference/macros' },
             { slug: 'reference/cargo-features' },
+            { slug: 'reference/support-matrix' },
           ],
         },
       ],

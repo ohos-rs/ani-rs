@@ -17,16 +17,21 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 | --- | --- | --- |
 | `()` | `V` | `void` |
 | `bool` | `Z` | `boolean` |
-| `i8` / `u8` | `B` | `byte` |
-| `i16` / `u16` | `S` / `C` | `short` / `char` |
-| `i32` / `u32` | `I` | `int` |
-| `i64` / `u64` | `J` | `long` |
+| `i8` | `B` | `byte` |
+| `u8` / `i16` | `S` | `short` |
+| `u16` | `C` | `char`（UTF-16 code unit） |
+| `i32` | `I` | `int` |
+| `u32` / `i64` / `isize` / `usize` | `J` | `long` |
+| `char` | string reference | `string`（一个 Unicode scalar） |
+| `u64` / `i128` / `u128` | BigInt reference | `bigint` |
 | `f32` | `F` | `float` |
 | `f64` | `D` | `double` |
 | `String` | string reference | `string` |
 | `BigInt` | `Lstd/core/BigInt;` | `bigint` |
 
-选择整数类型时要考虑 ArkTS 的数值范围。不要仅为了方便把指针或句柄暴露成普通 `long`；优先使用 class 或引用 wrapper。
+无符号和平台宽度整数都执行范围检查，不会使用 `as` 静默截断。`u8`、`u32`、`usize` 和 `isize` 在 ArkTS 侧使用更宽的有符号类型；`u64`、`i128` 和 `u128` 使用 BigInt。Rust `char` 通过单 Unicode scalar 字符串传输，因此 `🦀` 等非 BMP 字符不会被截断为一个 UTF-16 code unit。
+
+不要仅为了方便把指针或句柄暴露成普通 `long`；优先使用 class、`Ref<T>` 或 `ManagedResource<T>`。
 
 `BigInt` 使用规范化十进制字符串在 Rust 侧无损持有任意精度值：
 
@@ -54,7 +59,7 @@ pub fn bigint_from_text(value: String) -> Result<BigInt> {
 
 | Rust | ArkTS |
 | --- | --- |
-| `Option<T>` | `T \| null` |
+| `Option<T>` | `T \| null \| undefined` |
 | `Null` | `null` |
 | `Undefined` | `undefined` |
 | `Either<T, Undefined>` | `T \| undefined` |
@@ -108,7 +113,53 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 ```
 
 - `ArrayBufferSlice<'_>` 是当前调用作用域内的只读借用。
-- `ArrayBuffer` 拥有数据，适合返回或跨出当前转换步骤。
+- 从 ANI 传入的 `ArrayBuffer` 持有 VM 与 global ref，Rust 读取期间底层存储不会提前失效。
+- 第一次可变访问会复制为 Rust 所有的缓冲区，避免直接改写 ArkTS 仍在共享的内存。
+- 返回 ArkTS 时会创建新的 ANI ArrayBuffer；释放和 VM 析构都会清理持有的引用。
+
+## TypedArray
+
+`Int8Array`、`Uint8Array`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。当前 ABI 使用 `ArrayBuffer` 传输，并固定为 little-endian，避免宿主字节序影响产物：
+
+```rust
+use ani::prelude::*;
+use ani_derive::ani;
+
+#[ani]
+pub fn sum(values: Uint16Array) -> i64 {
+    values.as_slice().iter().map(|value| i64::from(*value)).sum()
+}
+
+#[ani]
+pub fn sequence() -> Uint16Array {
+    Uint16Array::new(vec![1, 2, u16::MAX])
+}
+```
+
+输入字节数不能被元素宽度整除时会返回 `InvalidArgs`。
+
+## Serde JSON
+
+启用 `serde-json` feature 后，`Json<T>` 和 `serde_json::Value` 可通过 JSON 字符串边界传输。该路径适合配置、消息和结构化 enum，不等同于 ArkTS 原生对象映射：
+
+```rust
+use ani::prelude::Json;
+use ani_derive::ani;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct Config { pub enabled: bool }
+
+#[ani]
+pub fn normalize(config: Json<Config>) -> Json<Config> {
+    config
+}
+```
+
+```toml
+ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["serde-json"] }
+serde = { version = "1", features = ["derive"] }
+```
 
 ## Union
 

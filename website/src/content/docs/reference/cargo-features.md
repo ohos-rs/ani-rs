@@ -10,6 +10,7 @@ description: 按需启用 ani-rs 的错误集成、异步运行时和 Tokio 功�
 | Feature | 作用 |
 | --- | --- |
 | `error_anyhow` | 将 `anyhow::Error` 转换为 `ani::Error` |
+| `serde-json` | 启用 `Json<T>`、`serde_json::Value` 与结构化 `AniEnum` 的 JSON 字符串桥接 |
 | `async` | `tokio_rt` 的易用别名 |
 | `tokio_rt` | 启用 ani-rs Tokio runtime 与 Promise bridge |
 | `tokio_fs` | 启用 Tokio 文件系统 API |
@@ -63,6 +64,19 @@ ani = {
 anyhow = "1"
 ```
 
+## Serde JSON
+
+```toml
+[dependencies]
+ani = {
+  git = "https://github.com/ohos-rs/ani-rs",
+  features = ["serde-json"]
+}
+serde = { version = "1", features = ["derive"] }
+```
+
+该 feature 通过 ArkTS `string` 传输 JSON，适合 `Json<T>` 与带字段的 `AniEnum`；它不会把任意 serde struct 自动声明为 ArkTS class。
+
 ## 选择建议
 
 - 没有 async API：保持默认 features。
@@ -70,3 +84,4 @@ anyhow = "1"
 - 使用具体 Tokio 模块：在 `async` 之外增加对应 `tokio_*`。
 - 库代码希望控制体积与依赖：不要直接使用 `tokio_full`。
 - 已有 anyhow 错误链：增加 `error_anyhow`。
+- 需要 serde 消息或结构化 enum：增加 `serde-json`。

@@ -24,6 +24,7 @@ ANI_ETS_OUTPUT=entry/src/main/ets/native/my_module.ets cargo build
 | --- | --- |
 | `ANI_ETS_OUTPUT` | 设置 `.ets` 输出文件，允许相对 crate 根目录 |
 | `ANI_ETS_LIBRARY` | 覆盖生成文件中的 `loadLibrary` 名称 |
+| `ANI_MODULE_DESCRIPTOR` | 固定运行时注册使用的完整 module descriptor |
 | `CARGO_TARGET_DIR` | 修改 Cargo 产物目录，同时影响默认 ETS 目录 |
 
 :::caution
@@ -66,6 +67,8 @@ entry/
 
 ArkTS 代码导入生成模块后，`loadLibrary` 会加载动态库，并由 `ANI_Constructor` 完成 native function 或 method 绑定。
 
+动态库还会导出 `ANI_Destructor`。VM 卸载模块时，它按顺序执行 `#[ani(finalize)]`、释放仍存活的 `ManagedResource`、停止 ani-rs 拥有的 Tokio worker，并清空注册状态。
+
 如果项目走静态 ArkTS 编译链，`.ets` 会随应用构建进入模块 ABC；不要把源 `.ets` 当成设备侧独立脚本直接执行。
 
 ## 独立编译 ABC
@@ -82,6 +85,25 @@ es2panda \
 
 系统镜像通常不提供独立的 `ark` 或 `es2panda` 命令。QEMU 中运行外部 ABC 时，需要设备侧 runner 使用系统 Ark Runtime 加载 ABC；仓库里的 `scripts/run_arkvm_examples_ohos_qemu.sh` 可以作为完整参考。
 
+## CLI 与可复现 HAP
+
+仓库内 CLI 统一了交叉编译、声明参数和验证入口：
+
+```bash
+cargo run -p ani-cli -- build \
+  --arch arm64 \
+  --module-descriptor entry.src.main.ets.native \
+  --ets-output entry/src/main/ets/native/index.ets \
+  --library my_ani_module \
+  --release -- -p my-ani-module
+
+cargo run -p ani-cli -- hap --arch arm64
+cargo run -p ani-cli -- hap-repro --arch arm64
+cargo run -p ani-cli -- verify-hap --arch arm64 -- app.hap
+```
+
+`build_hap_smoke.sh` 使用固定 descriptor，把匹配工具链生成的静态 ABC 放入 `resources/rawfile/ani_rs_smoke.abc`，并把目标 ABI 的 `.so` 放入 `libs/<abi>/`。`check_hap_reproducible.sh` 在两个独立目录重新构建并比较解包后的全部内容；ZIP 时间戳不参与比较。
+
 ## 检查构建结果
 
 在进入应用打包前，先确认：
@@ -89,12 +111,12 @@ es2panda \
 1. `.so` 的目标架构与设备一致。
 2. `.ets` 中的 `loadLibrary` 名称正确。
 3. `.ets` 声明覆盖同一 target 下注册的全部 native 成员。
-4. `ANI_Constructor` 可从动态库导出。
+4. `ANI_Constructor` 和 `ANI_Destructor` 都可从动态库导出。
 
 ```bash
 llvm-readelf -h target/aarch64-unknown-linux-ohos/release/libmy_ani_module.so
 llvm-nm -D target/aarch64-unknown-linux-ohos/release/libmy_ani_module.so \
-  | grep ANI_Constructor
+  | grep -E 'ANI_(Constructor|Destructor)'
 ```
 
 遇到加载或绑定错误时，继续看 [故障排查](/guide/troubleshooting/)。

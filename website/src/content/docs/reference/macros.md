@@ -89,6 +89,19 @@ pub async fn load_value(key: String) -> Result<String> {
 
 初始化函数可以不返回值，也可以返回 `Result<()>`。`Env<'_>` 参数会自动注入。
 
+## 析构
+
+`#[ani(finalize)]`（别名 `fini`）注册模块卸载回调。函数不能有业务参数，可以选择接收注入的 `&Env<'_>`，并返回 `()` 或 `Result<()>`：
+
+```rust
+#[ani(finalize)]
+fn shutdown() {
+    // 释放模块自己的外部资源
+}
+```
+
+回调在 `ANI_Destructor` 中执行。ani-rs 随后还会清理托管资源和内部异步 worker。
+
 ## Object
 
 ```rust
@@ -117,6 +130,20 @@ pub struct NamedPoint {
 
 ## 派生宏
 
+### 透明与数组新类型
+
+单字段、非泛型 newtype 可以复用内部类型的 ANI ABI：
+
+```rust
+#[ani(transparent)]
+pub struct UserId(pub i64);
+
+#[ani(array)]
+pub struct Scores(pub Vec<i32>);
+```
+
+`array` 的内部字段必须是 `Vec<T>`、`ArrayBuffer`、`TypedArray<T>` 或 ANI array wrapper。错误形状会在编译期给出诊断。
+
 ### `AniClass`
 
 ```rust
@@ -141,7 +168,15 @@ pub enum State {
 }
 ```
 
-只适用于 unit variants。
+unit variants 使用 ANI enum item 映射。包含 tuple 或 struct 字段的 enum 必须同时派生 serde 的 `Serialize`/`Deserialize` 并启用 `ani/serde-json`，运行时通过确定性的 JSON 字符串边界传输：
+
+```rust
+#[derive(Serialize, Deserialize, AniEnum)]
+pub enum Message {
+    Text(String),
+    Point { x: i32, y: i32 },
+}
+```
 
 ## 自动注入参数
 

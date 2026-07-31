@@ -20,6 +20,8 @@ pub fn await_arkts(
 
 Future 持有全局 ANI 引用，并在实际轮询线程自动 attach。`cancel()` 和 Drop 都会释放该引用；ANI 没有 Promise 取消原语，因此取消停止的是 Rust 侧等待，不会强制终止 ArkTS 操作。
 
+每个入站 Promise 只启动一个后台状态观察器。Rust executor 在 Promise settle 或取消前保持休眠，不会因每次 `poll` 新建线程；完成、取消和 Drop 都只释放一次 global ref。
+
 异步 I/O 或需要等待的 Rust API，优先写成 `#[ani(async)] async fn`。生成的 ArkTS 返回类型是 `Promise<T>`。
 
 ## 开启异步运行时
@@ -151,6 +153,43 @@ pub fn create_deferred(
 
 ## 阻塞工作
 
-`async fn` 适合异步 I/O。长时间 CPU 计算或阻塞系统调用不会因为放进 async 函数就自动变得非阻塞，应使用专用工作线程或 `tokio::task::spawn_blocking`，并限制并发。
+`async fn` 适合异步 I/O。长时间 CPU 计算或阻塞系统调用不会因为放进 async 函数就自动变得非阻塞。对于可取消的专用工作，使用 `Task`、`AsyncTask<T>` 和 `CancellationToken`：
+
+```rust
+use ani::prelude::*;
+
+struct Square { input: i32 }
+
+impl Task for Square {
+    type Output = i32;
+    type JsValue = i32;
+
+    fn compute(&mut self, cancel: &CancellationToken) -> Result<i32> {
+        cancel.check()?;
+        Ok(self.input * self.input)
+    }
+
+    fn resolve<'env>(self, _env: &Env<'env>, value: i32) -> Result<i32> {
+        Ok(value)
+    }
+}
+
+#[ani]
+pub fn square_in_background(input: i32) -> AsyncTask<Square> {
+    AsyncTask::new(Square { input })
+}
+```
+
+## 跨线程回调
+
+`ThreadsafeFunction<Args, Return>` 是带容量的可克隆队列。dispatcher 在调用 ArkTS 前 attach 到所属 VM；`Blocking` 提供背压，`NonBlocking` 在队列满时返回 `Status::QueueFull`。`call` 返回的 `ThreadsafeFunctionCall` 既可以 `.wait()`，也可以作为 Future `await`；`close()` 后拒绝新任务并排空已入队任务。
+
+```rust
+let pending = callback.call(
+    ("ready".to_string(),),
+    ThreadsafeFunctionCallMode::NonBlocking,
+)?;
+let result = pending.wait()?;
+```
 
 完整示例位于 `examples/async_wrapper`。
