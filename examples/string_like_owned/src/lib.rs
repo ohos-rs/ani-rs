@@ -57,6 +57,13 @@ pub fn borrowed_c_str_literal() -> &'static CStr {
     c"borrowed-c"
 }
 
+/// Rust `char` is represented as a one-scalar ArkTS string, preserving
+/// supplementary-plane Unicode values that do not fit in UTF-16 `char`.
+#[ani]
+pub fn char_identity(value: char) -> char {
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +88,6 @@ mod tests {
         assert_eq!(borrowed_path_literal(), Path::new("borrowed/path"));
         assert_eq!(borrowed_os_str_literal(), OsStr::new("borrowed-os"));
         assert_eq!(borrowed_c_str_literal().to_str().unwrap(), "borrowed-c");
+        assert_eq!(char_identity('🦀'), '🦀');
     }
 }

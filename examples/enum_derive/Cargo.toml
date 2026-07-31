@@ -1,11 +1,14 @@
 [package]
 name = "ani-example-enum-derive"
 version = "0.1.0"
+publish = false
+license.workspace = true
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-ani = { workspace = true }
+ani = { workspace = true, features = ["serde-json"] }
 ani-derive = { workspace = true }
+serde = { version = "1", features = ["derive"] }

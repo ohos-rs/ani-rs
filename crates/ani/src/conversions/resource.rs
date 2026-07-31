@@ -31,6 +31,30 @@ fn registry() -> &'static RwLock<HashMap<i64, ResourceEntry>> {
     RESOURCE_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// Returns the number of live managed resources in this native module.
+pub fn live_managed_resource_count() -> Result<usize> {
+    registry()
+        .read()
+        .map(|entries| entries.len())
+        .map_err(|_| lock_error("counting resources"))
+}
+
+/// Releases every managed resource owned by this native module.
+///
+/// The generated `ANI_Destructor` invokes this automatically.
+#[doc(hidden)]
+pub fn close_all_managed_resources() -> Result<usize> {
+    let removed = {
+        let mut entries = registry()
+            .write()
+            .map_err(|_| lock_error("closing all resources"))?;
+        std::mem::take(&mut *entries)
+    };
+    let count = removed.len();
+    drop(removed);
+    Ok(count)
+}
+
 fn lock_error(operation: &str) -> Error {
     Error::new(
         Status::Error,
@@ -322,5 +346,20 @@ mod tests {
             ManagedResource::<u8>::from_raw(-1).unwrap_err().status,
             Status::InvalidArgs
         );
+    }
+
+    #[test]
+    fn module_cleanup_releases_all_live_resources() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let first = ManagedResource::new(DropCounter(Arc::clone(&drops))).unwrap();
+        let second = ManagedResource::new(DropCounter(Arc::clone(&drops))).unwrap();
+        assert!(live_managed_resource_count().unwrap() >= 2);
+
+        let removed = close_all_managed_resources().unwrap();
+        assert!(removed >= 2);
+        assert_eq!(live_managed_resource_count().unwrap(), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        assert!(!first.is_alive().unwrap());
+        assert!(!second.is_alive().unwrap());
     }
 }

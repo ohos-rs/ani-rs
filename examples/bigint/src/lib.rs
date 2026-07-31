@@ -43,3 +43,19 @@ pub fn big_int_decimal_digits(value: BigInt) -> i32 {
         .unwrap_or_else(|| value.as_decimal())
         .len() as i32
 }
+
+/// Lossless built-in unsigned and 128-bit integer mappings use ArkTS bigint.
+#[ani]
+pub fn u64_identity(value: u64) -> u64 {
+    value
+}
+
+#[ani]
+pub fn i128_identity(value: i128) -> i128 {
+    value
+}
+
+#[ani]
+pub fn u128_identity(value: u128) -> u128 {
+    value
+}

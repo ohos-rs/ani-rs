@@ -440,6 +440,29 @@ pub fn tokio_manual_function_ref_container_call(
     .map(PromiseRaw::into_static)
 }
 
+pub struct SquareTask {
+    input: i32,
+}
+
+impl Task for SquareTask {
+    type Output = i32;
+    type JsValue = i32;
+
+    fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output> {
+        cancellation.check()?;
+        Ok(self.input * self.input)
+    }
+
+    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[ani]
+pub fn background_square(input: i32) -> AsyncTask<SquareTask, i32> {
+    AsyncTask::new(SquareTask { input })
+}
+
 // ============================================================================
 // #[ani(async)] macro-based async bindings.
 // ============================================================================
@@ -512,6 +535,15 @@ mod tests {
         let _ = tokio_manual_global_ref_container_ready;
         let _ = tokio_manual_typed_ref_container_ready;
         let _ = tokio_manual_function_ref_container_call;
+        let _ = background_square;
+    }
+
+    #[test]
+    fn background_task_supports_cooperative_cancellation() {
+        let task = AsyncTask::new(SquareTask { input: 8 });
+        let token = task.cancellation_token();
+        token.cancel();
+        assert!(token.is_cancelled());
     }
 
     #[test]

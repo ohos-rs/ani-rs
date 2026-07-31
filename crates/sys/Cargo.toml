@@ -2,6 +2,7 @@
 name = "ani-sys"
 version = "0.0.1-alpha.1"
 edition = "2024"
+rust-version.workspace = true
 license = "MIT"
 description = "ANI raw bindings"
 repository = "https://github.com/ohos-rs/ani-rs"

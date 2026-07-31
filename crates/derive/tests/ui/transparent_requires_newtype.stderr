@@ -1,0 +1,5 @@
+error: #[ani(transparent)] and #[ani(array)] require exactly one field
+ --> tests/ui/transparent_requires_newtype.rs:4:26
+  |
+4 | struct InvalidTransparent(i32, i32);
+  |                          ^^^^^^^^^^

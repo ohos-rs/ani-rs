@@ -19,6 +19,44 @@ use crate::types::AniString;
 use super::traits::{FromAni, ToAni, TypeInfo};
 
 // ============================================================================
+// char - a complete Unicode scalar represented as an ArkTS string
+// ============================================================================
+
+impl TypeInfo for char {
+    fn type_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_string"
+    }
+}
+
+impl<'env> ToAni<'env> for char {
+    type Output = AniString<'env>;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        env.create_string(self.encode_utf8(&mut [0; 4]))
+    }
+}
+
+impl<'env> FromAni<'env> for char {
+    type Input = AniString<'env>;
+
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let value = env.get_string(&value)?;
+        let mut chars = value.chars();
+        match (chars.next(), chars.next()) {
+            (Some(value), None) => Ok(value),
+            _ => Err(Error::new(
+                crate::error::Status::InvalidArgs,
+                "ArkTS string must contain exactly one Unicode scalar for Rust char",
+            )),
+        }
+    }
+}
+
+// ============================================================================
 // String - Lstd/core/String;
 // ============================================================================
 

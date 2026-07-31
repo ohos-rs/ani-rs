@@ -137,7 +137,7 @@ pub fn with_optional_float(required: f32, optional: Option<f32>) -> f32 {
     }
 }
 
-/// Return optional int to exercise Option<T> return conversion.
+/// Return optional int to exercise `Option<T>` return conversion.
 #[ani]
 pub fn make_optional_int(use_value: bool) -> Option<i32> {
     if use_value {

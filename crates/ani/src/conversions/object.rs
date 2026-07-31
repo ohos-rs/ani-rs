@@ -269,89 +269,65 @@ impl_object_member_primitive!(
 
 impl<'env> ObjectField<'env> for u8 {
     fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i8::get_named_field(env, obj, name)? as u8)
+        let value = i16::get_named_field(env, obj, name)?;
+        u8::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("short field {name}={value} does not fit in u8"),
+            )
+        })
     }
 
     fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i8).set_named_field(env, obj, name)
+        i16::from(self).set_named_field(env, obj, name)
     }
 }
 
 impl<'env> ObjectProperty<'env> for u8 {
     fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i8::get_named_property(env, obj, name)? as u8)
-    }
-
-    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i8).set_named_property(env, obj, name)
-    }
-}
-
-impl<'env> ObjectField<'env> for u32 {
-    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i32::get_named_field(env, obj, name)? as u32)
-    }
-
-    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i32).set_named_field(env, obj, name)
-    }
-}
-
-impl<'env> ObjectProperty<'env> for u32 {
-    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i32::get_named_property(env, obj, name)? as u32)
-    }
-
-    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i32).set_named_property(env, obj, name)
-    }
-}
-
-impl<'env> ObjectField<'env> for u64 {
-    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i64::get_named_field(env, obj, name)? as u64)
-    }
-
-    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i64).set_named_field(env, obj, name)
-    }
-}
-
-impl<'env> ObjectProperty<'env> for u64 {
-    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        Ok(i64::get_named_property(env, obj, name)? as u64)
-    }
-
-    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as i64).set_named_property(env, obj, name)
-    }
-}
-
-impl<'env> ObjectField<'env> for char {
-    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        let value = u16::get_named_field(env, obj, name)?;
-        char::from_u32(value as u32)
-            .ok_or_else(|| Error::new(Status::InvalidType, format!("Invalid char field: {name}")))
-    }
-
-    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as u16).set_named_field(env, obj, name)
-    }
-}
-
-impl<'env> ObjectProperty<'env> for char {
-    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
-        let value = u16::get_named_property(env, obj, name)?;
-        char::from_u32(value as u32).ok_or_else(|| {
+        let value = i16::get_named_property(env, obj, name)?;
+        u8::try_from(value).map_err(|_| {
             Error::new(
-                Status::InvalidType,
-                format!("Invalid char property: {name}"),
+                Status::OutOfRange,
+                format!("short property {name}={value} does not fit in u8"),
             )
         })
     }
 
     fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
-        (self as u16).set_named_property(env, obj, name)
+        i16::from(self).set_named_property(env, obj, name)
+    }
+}
+
+impl<'env> ObjectField<'env> for u32 {
+    fn get_named_field(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = i64::get_named_field(env, obj, name)?;
+        u32::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("long field {name}={value} does not fit in u32"),
+            )
+        })
+    }
+
+    fn set_named_field(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        i64::from(self).set_named_field(env, obj, name)
+    }
+}
+
+impl<'env> ObjectProperty<'env> for u32 {
+    fn get_named_property(env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<Self> {
+        let value = i64::get_named_property(env, obj, name)?;
+        u32::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("long property {name}={value} does not fit in u32"),
+            )
+        })
+    }
+
+    fn set_named_property(self, env: &Env<'env>, obj: &AniObject<'_>, name: &str) -> Result<()> {
+        i64::from(self).set_named_property(env, obj, name)
     }
 }
 

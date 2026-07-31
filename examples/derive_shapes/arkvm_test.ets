@@ -41,8 +41,10 @@ export native function make_derive_pair(left: string, right: string): DerivePair
 export native function make_object_box(value: string): ObjectBox<string>;
 export native function make_object_pair(left: string, right: string): ObjectPair<string, string>;
 export native function marker_identity(value: DeriveMarker): boolean;
+export native function next_user_id(id: long): long;
 export native function object_marker_identity(value: ObjectMarker): boolean;
 export native function read_derive_box(value: DeriveBox<string>): string;
+export native function score_total(scores: ValueArray<int>): int;
 
 
 
@@ -152,6 +154,8 @@ __assert_true(
   "object_marker_identity",
   object_marker_identity(new ObjectMarker()),
 );
+__assert_eq_long("transparent_newtype", next_user_id(41), 42);
+__assert_eq_int("array_newtype", score_total([2, 3, 4]), 9);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

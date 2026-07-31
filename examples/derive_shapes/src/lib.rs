@@ -2,6 +2,24 @@
 
 use ani_derive::{ani, AniClass};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[ani(transparent)]
+pub struct UserId(pub i64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[ani(array)]
+pub struct Scores(pub Vec<i32>);
+
+#[ani]
+pub fn next_user_id(id: UserId) -> UserId {
+    UserId(id.0 + 1)
+}
+
+#[ani]
+pub fn score_total(scores: Scores) -> i32 {
+    scores.0.into_iter().sum()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, AniClass)]
 #[ani(class = "DeriveBox")]
 pub struct DeriveBox<T> {

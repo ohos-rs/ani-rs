@@ -60,6 +60,33 @@ impl BigInt {
             )
         })
     }
+
+    /// Converts to `u64`, returning `OutOfRange` instead of truncating.
+    pub fn to_u64(&self) -> Result<u64> {
+        self.parse_integer("u64")
+    }
+
+    /// Converts to `i128`, returning `OutOfRange` instead of truncating.
+    pub fn to_i128(&self) -> Result<i128> {
+        self.parse_integer("i128")
+    }
+
+    /// Converts to `u128`, returning `OutOfRange` instead of truncating.
+    pub fn to_u128(&self) -> Result<u128> {
+        self.parse_integer("u128")
+    }
+
+    fn parse_integer<T>(&self, target: &'static str) -> Result<T>
+    where
+        T: FromStr,
+    {
+        self.decimal.parse().map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("BigInt {} does not fit in {target}", self.decimal),
+            )
+        })
+    }
 }
 
 impl fmt::Display for BigInt {
@@ -91,6 +118,66 @@ impl From<u64> for BigInt {
         }
     }
 }
+
+impl From<i128> for BigInt {
+    fn from(value: i128) -> Self {
+        Self {
+            decimal: value.to_string(),
+        }
+    }
+}
+
+impl From<u128> for BigInt {
+    fn from(value: u128) -> Self {
+        Self {
+            decimal: value.to_string(),
+        }
+    }
+}
+
+macro_rules! impl_rust_bigint_conversion {
+    ($ty:ty, $method:ident) => {
+        impl TypeInfo for $ty {
+            fn type_signature() -> &'static str {
+                "Lstd/core/BigInt;"
+            }
+
+            fn ani_c_type() -> &'static str {
+                "ani_object"
+            }
+        }
+
+        impl<'env> ToAni<'env> for $ty {
+            type Output = sys::ani_object;
+
+            fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+                BigInt::from(self).to_ani(env)
+            }
+        }
+
+        impl<'env> FromAni<'env> for $ty {
+            type Input = sys::ani_object;
+
+            unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+                unsafe { BigInt::from_ani(env, value) }?.$method()
+            }
+        }
+
+        impl ToAniArg for $ty {
+            fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+                BigInt::from(*self).to_ani_arg(env)
+            }
+
+            fn arg_signature() -> &'static str {
+                "Lstd/core/BigInt;"
+            }
+        }
+    };
+}
+
+impl_rust_bigint_conversion!(u64, to_u64);
+impl_rust_bigint_conversion!(i128, to_i128);
+impl_rust_bigint_conversion!(u128, to_u128);
 
 impl TypeInfo for BigInt {
     fn type_signature() -> &'static str {
@@ -198,6 +285,22 @@ mod tests {
             BigInt::from_decimal("9223372036854775808")
                 .unwrap()
                 .to_i64()
+                .unwrap_err()
+                .status,
+            Status::OutOfRange
+        );
+    }
+
+    #[test]
+    fn rust_integer_boundaries_are_lossless() {
+        assert_eq!(BigInt::from(u64::MAX).to_u64().unwrap(), u64::MAX);
+        assert_eq!(BigInt::from(i128::MIN).to_i128().unwrap(), i128::MIN);
+        assert_eq!(BigInt::from(i128::MAX).to_i128().unwrap(), i128::MAX);
+        assert_eq!(BigInt::from(u128::MAX).to_u128().unwrap(), u128::MAX);
+        assert_eq!(
+            BigInt::from_decimal("-1")
+                .unwrap()
+                .to_u128()
                 .unwrap_err()
                 .status,
             Status::OutOfRange

@@ -4,7 +4,7 @@
 //! `Option<int>` in ArkTS needs to use the Int wrapper class
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result, Status};
 use crate::types::*;
 
 // ============================================================================
@@ -271,7 +271,13 @@ impl<'env> Boxable<'env> for char {
     }
 
     fn box_value(self, env: &Env<'env>) -> Result<Self::Boxed> {
-        (self as u16).box_value(env)
+        let value = u16::try_from(self as u32).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                "non-BMP Rust char cannot be boxed as a single ANI char code unit",
+            )
+        })?;
+        value.box_value(env)
     }
 }
 

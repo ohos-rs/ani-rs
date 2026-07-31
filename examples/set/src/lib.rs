@@ -1,4 +1,4 @@
-//! Set Example - Handling ArkTS Set<string> values.
+//! Set Example - Handling ArkTS `Set<string>` values.
 
 use std::collections::{BTreeSet, HashSet};
 

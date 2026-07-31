@@ -20,6 +20,8 @@ pub enum AniMacroKind {
     Bindgen,
     /// Initialization function
     Init,
+    /// Module finalization function
+    Finalize,
     /// Object/class definition
     Object,
 }
@@ -59,6 +61,10 @@ pub struct AniAttrs {
     pub before_bindings: bool,
     /// object field configuration
     pub object_name: Option<String>,
+    /// Delegate a single-field newtype directly to its inner ANI type.
+    pub transparent: bool,
+    /// Delegate a single-field collection newtype to its inner ANI array type.
+    pub array: bool,
 }
 
 impl Parse for AniAttrs {
@@ -76,6 +82,9 @@ impl Parse for AniAttrs {
                 // Type identifiers
                 "init" => {
                     attrs.kind = AniMacroKind::Init;
+                }
+                "finalize" | "fini" => {
+                    attrs.kind = AniMacroKind::Finalize;
                 }
                 "object" => {
                     attrs.kind = AniMacroKind::Object;
@@ -138,6 +147,12 @@ impl Parse for AniAttrs {
                 "before_bindings" => {
                     attrs.before_bindings = true;
                 }
+                "transparent" => {
+                    attrs.transparent = true;
+                }
+                "array" => {
+                    attrs.array = true;
+                }
                 other => {
                     return Err(syn::Error::new_spanned(
                         item.key,
@@ -170,6 +185,8 @@ pub struct BindgenAttrs {
     pub getter: Option<String>,
     pub setter: Option<String>,
     pub is_async: bool,
+    pub transparent: bool,
+    pub array: bool,
 }
 
 impl From<AniAttrs> for BindgenAttrs {
@@ -186,6 +203,8 @@ impl From<AniAttrs> for BindgenAttrs {
             getter: attrs.getter,
             setter: attrs.setter,
             is_async: attrs.is_async,
+            transparent: attrs.transparent,
+            array: attrs.array,
         }
     }
 }
@@ -208,6 +227,10 @@ pub fn parse_bindgen_attrs_from_attribute(attr: &Attribute) -> syn::Result<Bindg
 pub struct InitAttrs {
     pub before_bindings: bool,
 }
+
+/// Attributes for module finalization functions.
+#[derive(Debug, Default, Clone)]
+pub struct FinalizeAttrs;
 
 impl From<AniAttrs> for InitAttrs {
     fn from(attrs: AniAttrs) -> Self {

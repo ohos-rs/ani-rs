@@ -13,8 +13,8 @@ use syn::{
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    ObjectMemberAccessKind, ObjectMemberDescriptor, register_object_type_alias,
-    register_object_type_members,
+    AniType, ObjectMemberAccessKind, ObjectMemberDescriptor, register_exact_type_alias,
+    register_object_type_alias, register_object_type_members,
 };
 use crate::types::{
     EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind, current_module_name,
@@ -65,6 +65,9 @@ pub fn expand_struct(
     struct_item: ItemStruct,
     prepare: TokenStream,
 ) -> TokenStream {
+    if attrs.transparent || attrs.array {
+        return expand_transparent_struct(struct_item, prepare, attrs.array);
+    }
     if let Err(err) = validate_object_item_struct(&struct_item) {
         return err.to_compile_error();
     }
@@ -88,6 +91,112 @@ pub fn expand_struct(
         #prepare
         #struct_item
         #object_impls
+    }
+}
+
+fn expand_transparent_struct(
+    struct_item: ItemStruct,
+    prepare: TokenStream,
+    array_mode: bool,
+) -> TokenStream {
+    if !struct_item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &struct_item.generics,
+            "#[ani(transparent)] and #[ani(array)] do not support generic newtypes",
+        )
+        .to_compile_error();
+    }
+
+    let (field_ty, read, construct) = match &struct_item.fields {
+        Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+            let ty = fields.unnamed.first().expect("length checked").ty.clone();
+            (ty, quote! { self.0 }, quote! { Self(value) })
+        }
+        Fields::Named(fields) if fields.named.len() == 1 => {
+            let field = fields.named.first().expect("length checked");
+            let Some(ident) = field.ident.clone() else {
+                unreachable!("named field has an identifier")
+            };
+            let ty = field.ty.clone();
+            (
+                ty,
+                quote! { self.#ident },
+                quote! { Self { #ident: value } },
+            )
+        }
+        _ => {
+            return syn::Error::new_spanned(
+                &struct_item.fields,
+                "#[ani(transparent)] and #[ani(array)] require exactly one field",
+            )
+            .to_compile_error();
+        }
+    };
+
+    let inner = AniType::from_syn_type(&field_ty);
+    if array_mode
+        && !matches!(
+            inner,
+            AniType::Wrapper(crate::types::ani_type::WrapperType::Vec(_))
+                | AniType::ArrayBuffer
+                | AniType::FixedArray(_)
+                | AniType::ArrayHandle(_)
+        )
+    {
+        return syn::Error::new_spanned(
+            &field_ty,
+            "#[ani(array)] inner field must be Vec<T>, ArrayBuffer, TypedArray, or an ANI array wrapper",
+        )
+        .to_compile_error();
+    }
+    register_exact_type_alias(&struct_item.ident.to_string(), &field_ty);
+
+    let name = &struct_item.ident;
+    quote! {
+        #prepare
+        #struct_item
+
+        impl ani::conversions::TypeInfo for #name {
+            fn type_signature() -> &'static str {
+                <#field_ty as ani::conversions::TypeInfo>::type_signature()
+            }
+
+            fn ani_c_type() -> &'static str {
+                <#field_ty as ani::conversions::TypeInfo>::ani_c_type()
+            }
+
+            fn is_primitive() -> bool {
+                <#field_ty as ani::conversions::TypeInfo>::is_primitive()
+            }
+        }
+
+        impl<'env> ani::conversions::ToAni<'env> for #name
+        where
+            #field_ty: ani::conversions::ToAni<'env>,
+        {
+            type Output = <#field_ty as ani::conversions::ToAni<'env>>::Output;
+
+            fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
+                ani::conversions::ToAni::to_ani(#read, env)
+            }
+        }
+
+        impl<'env> ani::conversions::FromAni<'env> for #name
+        where
+            #field_ty: ani::conversions::FromAni<'env>,
+        {
+            type Input = <#field_ty as ani::conversions::FromAni<'env>>::Input;
+
+            unsafe fn from_ani(
+                env: &ani::env::Env<'env>,
+                input: Self::Input,
+            ) -> ani::error::Result<Self> {
+                let value = unsafe {
+                    <#field_ty as ani::conversions::FromAni<'env>>::from_ani(env, input)
+                }?;
+                Ok(#construct)
+            }
+        }
     }
 }
 
@@ -905,6 +1014,72 @@ fn expand_enum_type_impls(
     }
 }
 
+fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStream {
+    let string_type: syn::Type = syn::parse_quote!(String);
+    register_exact_type_alias(&enum_name.to_string(), &string_type);
+
+    let mut parts = qualified_name
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let ets_name = parts.pop().unwrap_or(qualified_name);
+    let rendered = format!("type {ets_name} = string");
+    if parts.is_empty() {
+        emit_compile_ets_rendered_decl(EtsDeclKind::Global, "", &rendered);
+    } else {
+        emit_compile_ets_rendered_decl(EtsDeclKind::Namespace, &parts.join("."), &rendered);
+    }
+
+    quote! {
+        impl ani::conversions::TypeInfo for #enum_name {
+            fn type_signature() -> &'static str {
+                "Lstd/core/String;"
+            }
+
+            fn ani_c_type() -> &'static str {
+                "ani_string"
+            }
+        }
+
+        impl<'env> ani::conversions::ToAni<'env> for #enum_name
+        where
+            Self: ani::serde::Serialize,
+        {
+            type Output = ani::types::AniString<'env>;
+
+            fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
+                let value = ani::serde_json::to_string(&self).map_err(|error| {
+                    ani::error::Error::new(
+                        ani::error::Status::InvalidArgs,
+                        format!("failed to serialize structured enum: {error}"),
+                    )
+                })?;
+                env.create_string(&value)
+            }
+        }
+
+        impl<'env> ani::conversions::FromAni<'env> for #enum_name
+        where
+            Self: ani::serde::de::DeserializeOwned,
+        {
+            type Input = ani::types::AniString<'env>;
+
+            unsafe fn from_ani(
+                env: &ani::env::Env<'env>,
+                value: Self::Input,
+            ) -> ani::error::Result<Self> {
+                let value = env.get_string(&value)?;
+                ani::serde_json::from_str(&value).map_err(|error| {
+                    ani::error::Error::new(
+                        ani::error::Status::InvalidArgs,
+                        format!("failed to deserialize structured enum: {error}"),
+                    )
+                })
+            }
+        }
+    }
+}
+
 /// Expand AniEnum derive macro
 pub fn expand_enum_derive(input: DeriveInput) -> TokenStream {
     let data = match validate_enum_derive_input(&input) {
@@ -916,6 +1091,13 @@ pub fn expand_enum_derive(input: DeriveInput) -> TokenStream {
         Ok(name) => name,
         Err(err) => return err.to_compile_error(),
     };
+    if data
+        .variants
+        .iter()
+        .any(|variant| !matches!(variant.fields, Fields::Unit))
+    {
+        return expand_structured_enum(&input.ident, &enum_name);
+    }
     let variants = match collect_enum_variant_specs(data) {
         Ok(variants) => variants,
         Err(err) => return err.to_compile_error(),
@@ -1080,13 +1262,15 @@ mod tests {
     }
 
     #[test]
-    fn derive_ani_enum_rejects_non_unit_variants() {
+    fn derive_ani_enum_supports_structured_variants_through_json() {
         let input: DeriveInput = parse_quote! {
             enum BadEnum {
                 Value(i32),
             }
         };
         let expanded = expand_enum_derive(input).to_string();
-        assert!(expanded.contains("currently only supports unit variants"));
+        assert!(expanded.contains("serde_json :: to_string"));
+        assert!(expanded.contains("serde_json :: from_str"));
+        assert!(expanded.contains("ani_string"));
     }
 }

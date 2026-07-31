@@ -850,6 +850,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         | AniType::Wrapper(WrapperType::Ref(inner)) => {
             default_object_value_for_ani_type(inner, ets_type)
         }
+        AniType::Transparent(inner) => default_object_value_for_ani_type(inner, ets_type),
         AniType::Record(_) => format!("{{}} as {}", ets_type),
         AniType::Set(_) => format!("new {}()", ets_type),
         AniType::Map(_) => format!("new {}()", ets_type),
@@ -939,6 +940,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
             ResultStyle::ThrowingValue => ani_type_to_ets_in_context(inner, context),
         },
         AniType::Wrapper(WrapperType::Ref(inner)) => ani_type_to_ets_in_context(inner, context),
+        AniType::Transparent(inner) => ani_type_to_ets_in_context(inner, context),
         AniType::Function(func_type) => function_type_to_ets(func_type, context),
         AniType::FnArgs(_) => "Array<Object>".to_string(),
         AniType::Promise(promise) => {
@@ -1239,11 +1241,11 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
 fn value_array_type_name(p: &PrimitiveType) -> &'static str {
     match p {
         PrimitiveType::Bool => "ValueArray<boolean>",
-        PrimitiveType::I8 | PrimitiveType::U8 => "ValueArray<byte>",
-        PrimitiveType::I16 => "ValueArray<short>",
-        PrimitiveType::U16 | PrimitiveType::Char => "ValueArray<char>",
-        PrimitiveType::I32 | PrimitiveType::U32 => "ValueArray<int>",
-        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => {
+        PrimitiveType::I8 => "ValueArray<byte>",
+        PrimitiveType::U8 | PrimitiveType::I16 => "ValueArray<short>",
+        PrimitiveType::U16 => "ValueArray<char>",
+        PrimitiveType::I32 => "ValueArray<int>",
+        PrimitiveType::U32 | PrimitiveType::I64 | PrimitiveType::Isize | PrimitiveType::Usize => {
             "ValueArray<long>"
         }
         PrimitiveType::F32 => "ValueArray<float>",
@@ -1254,11 +1256,11 @@ fn value_array_type_name(p: &PrimitiveType) -> &'static str {
 fn primitive_to_ets(p: &PrimitiveType) -> &'static str {
     match p {
         PrimitiveType::Bool => "boolean",
-        PrimitiveType::I8 | PrimitiveType::U8 => "byte",
-        PrimitiveType::I16 => "short",
-        PrimitiveType::U16 | PrimitiveType::Char => "char",
-        PrimitiveType::I32 | PrimitiveType::U32 => "int",
-        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize => {
+        PrimitiveType::I8 => "byte",
+        PrimitiveType::U8 | PrimitiveType::I16 => "short",
+        PrimitiveType::U16 => "char",
+        PrimitiveType::I32 => "int",
+        PrimitiveType::U32 | PrimitiveType::I64 | PrimitiveType::Isize | PrimitiveType::Usize => {
             "long"
         }
         PrimitiveType::F32 => "float",

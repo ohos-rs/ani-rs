@@ -1,4 +1,4 @@
-//! Map Example - Handling ArkTS Map<string, int> values.
+//! Map Example - Handling ArkTS `Map<string, int>` values.
 
 use std::collections::BTreeMap;
 

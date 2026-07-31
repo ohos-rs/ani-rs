@@ -48,7 +48,7 @@ use ani_derive::ani;
 
 /// Global storage for a single object reference
 ///
-/// Ref<AniObject<'static>> is Send + Sync, so it can be stored in a Mutex
+/// `Ref<AniObject<'static>>` is `Send + Sync`, so it can be stored in a `Mutex`.
 static STORED_OBJECT: Mutex<Option<Ref<AniObject<'static>>>> = Mutex::new(None);
 
 /// Store an object for later use
@@ -229,7 +229,7 @@ pub fn clear_all_named_objects() -> Result<()> {
 
 /// Clone a stored reference
 ///
-/// Demonstrates using Ref<T>::clone_ref() to create a new global reference
+/// Demonstrates using `Ref<T>::clone_ref()` to create a new global reference
 /// pointing to the same object.
 ///
 /// # Returns

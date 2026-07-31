@@ -1,0 +1,5 @@
+error: #[ani(finalize)] only supports `env: &Env<'_>` as parameter
+ --> tests/ui/finalize_rejects_arguments.rs:4:21
+  |
+4 | fn invalid_finalize(value: i32) {
+  |                     ^^^^^^^^^^

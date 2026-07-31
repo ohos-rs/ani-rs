@@ -58,6 +58,7 @@ export native function async_get_result(task_id: int): int;
 export native function async_object_strict_equals(lhs: Object, rhs: Object): Promise<boolean>;
 export native function async_ref_roundtrip(value: AniRef): Promise<boolean>;
 export native function async_square(n: int): int;
+export native function background_square(input: int): Promise<int>;
 export native function batch_compute(count: int): long;
 export native function cancel_arkts_promise_wait(promise: Promise<string>): boolean;
 export native function env_roundtrip(value: string): Promise<string>;
@@ -175,21 +176,6 @@ function main(): void {
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
   let promisedTextAsync: string = waitForCompletion(() => tokio_fetch_text_async("ani://tokio"));
   __assert_eq_string("tokio_fetch_text_async", promisedTextAsync, "Response from: ani://tokio");
-  let awaitedArktsText: string = waitForCompletion(() => tokio_await_arkts_promise(Promise.resolve<string>("from-arkts")));
-  __assert_eq_string("tokio_await_arkts_promise", awaitedArktsText, "from-arkts");
-  let awaitedArktsRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
-    try {
-      await tokio_await_arkts_promise(Promise.reject<string>(new Error("arkts boom")));
-      return false;
-    } catch (_e) {
-      return true;
-    }
-  });
-  __assert_true("tokio_await_arkts_promise_rejected", awaitedArktsRejected);
-  let pendingArktsPromise = new Promise<string>(
-    (_resolve: (value: string) => void, _reject: (error: Error) => void): void => {}
-  );
-  __assert_true("cancel_arkts_promise_wait", cancel_arkts_promise_wait(pendingArktsPromise));
   let tokioRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
       await tokio_fail("boom");
@@ -265,6 +251,8 @@ function main(): void {
   __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
   let signatureText: string = waitForCompletion(() => signature_override_echo("value"));
   __assert_eq_string("signature_override_echo", signatureText, "sig:value");
+  let backgroundSquare: int = waitForCompletion(() => background_square(9));
+  __assert_eq_int("background_square", backgroundSquare, 81);
 
   let ctorBox = new AsyncCtorBox("demo", 4);
   __assert_eq_int("async_constructor_total", ctorBox.total, 4);

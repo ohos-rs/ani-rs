@@ -107,6 +107,12 @@ pub enum Status {
     /// Generic failure for custom errors
     #[default]
     GenericFailure = 100,
+    /// A bounded callback/task queue has reached capacity.
+    QueueFull = 101,
+    /// A callback/task handle is closing or already closed.
+    Closing = 102,
+    /// An asynchronous operation was cancelled.
+    Cancelled = 103,
 }
 
 impl AsRef<str> for Status {
@@ -128,6 +134,9 @@ impl AsRef<str> for Status {
             Status::InvalidVersion => "InvalidVersion",
             Status::Ambiguous => "Ambiguous",
             Status::GenericFailure => "GenericFailure",
+            Status::QueueFull => "QueueFull",
+            Status::Closing => "Closing",
+            Status::Cancelled => "Cancelled",
         }
     }
 }
@@ -180,6 +189,7 @@ impl From<Status> for sys::ani_status {
             Status::InvalidVersion => 13,
             Status::Ambiguous => 14,
             Status::GenericFailure => 1, // Maps to generic error
+            Status::QueueFull | Status::Closing | Status::Cancelled => 1,
         }
     }
 }

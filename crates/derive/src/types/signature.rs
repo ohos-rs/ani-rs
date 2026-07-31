@@ -287,10 +287,12 @@ pub fn module_to_descriptor(name: &str) -> String {
 /// ANI examples and generated declaration file names use package name with
 /// `-` converted to `_`.
 pub fn current_module_name() -> String {
-    if let Ok(override_name) = std::env::var("ANI_TEST_MODULE_NAME") {
-        let trimmed = override_name.trim();
-        if !trimmed.is_empty() {
-            return trimmed.replace('-', "_");
+    for key in ["ANI_MODULE_DESCRIPTOR", "ANI_TEST_MODULE_NAME"] {
+        if let Ok(override_name) = std::env::var(key) {
+            let trimmed = override_name.trim();
+            if !trimmed.is_empty() {
+                return trimmed.replace('-', "_");
+            }
         }
     }
     std::env::var("CARGO_PKG_NAME")

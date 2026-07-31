@@ -22,7 +22,7 @@
 //!
 //! // That's it! No ani_module! needed.
 //! // ANI_Constructor is automatically generated on first #[ani] macro usage.
-//! // Module name is derived from CARGO_PKG_NAME.
+//! // Set ANI_MODULE_DESCRIPTOR for a fully-qualified Stage/HAP descriptor.
 //! ```
 //!
 //! ## Architecture
@@ -43,6 +43,10 @@ pub use ctor;
 
 // Re-export sys crate
 pub use ani_sys as sys;
+#[cfg(feature = "serde-json")]
+pub use serde;
+#[cfg(feature = "serde-json")]
+pub use serde_json;
 
 // Core modules
 pub mod bindgen_runtime;

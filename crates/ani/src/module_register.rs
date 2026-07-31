@@ -35,6 +35,15 @@ pub struct InitRegisterEntry {
     pub callback: RegisterCallback,
 }
 
+/// Finalization callback registration entry.
+#[derive(Clone)]
+pub struct FinalizeRegisterEntry {
+    /// Function name (for debugging)
+    pub name: &'static str,
+    /// Callback invoked during module unloading
+    pub callback: RegisterCallback,
+}
+
 /// Native binding target description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ClassBindingScope {
@@ -88,6 +97,8 @@ static MODULE_REGISTER_CALLBACKS: RwLock<Vec<ModuleRegisterEntry>> = RwLock::new
 static INIT_BEFORE_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
 /// Global registry for init callbacks that run after native binding registration
 static INIT_AFTER_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::new(Vec::new());
+/// Global registry for finalizers, executed in reverse registration order.
+static FINALIZE_CALLBACKS: RwLock<Vec<FinalizeRegisterEntry>> = RwLock::new(Vec::new());
 /// Deferred native bindings collected from generated per-function callbacks.
 static PENDING_BINDINGS: RwLock<Vec<PendingBindingEntry>> = RwLock::new(Vec::new());
 
@@ -124,6 +135,36 @@ pub fn register_init_callback(
         .write()
         .expect("Failed to acquire write lock for init callbacks")
         .push(entry);
+}
+
+/// Register a module finalization callback.
+#[doc(hidden)]
+pub fn register_finalize_callback(name: &'static str, callback: RegisterCallback) {
+    FINALIZE_CALLBACKS
+        .write()
+        .expect("Failed to acquire write lock for finalize callbacks")
+        .push(FinalizeRegisterEntry { name, callback });
+}
+
+/// Run registered finalizers in reverse registration order.
+///
+/// All callbacks are attempted. The first failure is returned after cleanup.
+#[doc(hidden)]
+pub unsafe fn execute_finalizers(env: *mut sys::ani_env) -> sys::ani_status {
+    let callbacks = FINALIZE_CALLBACKS
+        .read()
+        .expect("Failed to acquire read lock for finalize callbacks");
+    let mut first_error = sys::ani_status_ANI_OK;
+    for entry in callbacks.iter().rev() {
+        let status = unsafe { (entry.callback)(env) };
+        if status != sys::ani_status_ANI_OK {
+            eprintln!("Failed to run finalizer: {} (status={status})", entry.name);
+            if first_error == sys::ani_status_ANI_OK {
+                first_error = status;
+            }
+        }
+    }
+    first_error
 }
 
 /// Queue a native binding export.
@@ -239,15 +280,19 @@ fn is_builtin_descriptor(descriptor: &str) -> bool {
         || descriptor.starts_with("@")
 }
 
-fn test_module_override_name() -> Option<String> {
-    std::env::var("ANI_TEST_MODULE_NAME")
-        .ok()
-        .map(|value| value.trim().replace('-', "_"))
-        .filter(|value| !value.is_empty())
+fn configured_module_override_name() -> Option<String> {
+    ["ANI_MODULE_DESCRIPTOR", "ANI_TEST_MODULE_NAME"]
+        .into_iter()
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().replace('-', "_"))
+                .filter(|value| !value.is_empty())
+        })
 }
 
-fn override_descriptor_for_test(descriptor: &str) -> Option<String> {
-    let override_name = test_module_override_name()?;
+fn override_configured_descriptor(descriptor: &str) -> Option<String> {
+    let override_name = configured_module_override_name()?;
     let trimmed = descriptor.trim();
     if trimmed.is_empty()
         || is_builtin_descriptor(trimmed)
@@ -272,7 +317,7 @@ fn descriptor_candidates(descriptor: &str) -> Vec<String> {
     }
 
     let mut out = Vec::new();
-    if let Some(override_descriptor) = override_descriptor_for_test(trimmed) {
+    if let Some(override_descriptor) = override_configured_descriptor(trimmed) {
         out.push(override_descriptor.clone());
         out.push(format!("{DEFMODULE_PREFIX}{override_descriptor}"));
     }

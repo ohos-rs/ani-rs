@@ -17,20 +17,21 @@ mod imp {
     use std::future::Future;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::pin::Pin;
-    use std::sync::OnceLock;
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
 
     use crate::conversions::{Deferred, PromiseRaw, PromiseValue};
     use crate::env::Env;
     use crate::error::{Error, Result, Status};
 
-    static TOKIO_RUNTIME: OnceLock<::tokio::runtime::Runtime> = OnceLock::new();
-    static LOCAL_WORKER: OnceLock<LocalWorker> = OnceLock::new();
+    static TOKIO_RUNTIME: Mutex<Option<Arc<::tokio::runtime::Runtime>>> = Mutex::new(None);
+    static LOCAL_WORKER: Mutex<Option<LocalWorker>> = Mutex::new(None);
 
     type LocalJob = Box<dyn FnOnce() + Send + 'static>;
 
     struct LocalWorker {
         tx: ::tokio::sync::mpsc::UnboundedSender<LocalJob>,
+        join: std::thread::JoinHandle<()>,
     }
 
     struct CatchUnwindFuture<F> {
@@ -86,7 +87,7 @@ mod imp {
 
     fn build_local_worker() -> Result<LocalWorker> {
         let (tx, mut rx) = ::tokio::sync::mpsc::unbounded_channel::<LocalJob>();
-        std::thread::Builder::new()
+        let join = std::thread::Builder::new()
             .name("ani-tokio-local".to_string())
             .spawn(move || {
                 let runtime = match ::tokio::runtime::Builder::new_current_thread()
@@ -113,23 +114,19 @@ mod imp {
                     format!("failed to spawn ani local tokio worker: {err}"),
                 )
             })?;
-        Ok(LocalWorker { tx })
-    }
-
-    fn local_worker() -> Result<&'static LocalWorker> {
-        if let Some(worker) = LOCAL_WORKER.get() {
-            return Ok(worker);
-        }
-
-        let worker = build_local_worker()?;
-        let _ = LOCAL_WORKER.set(worker);
-        Ok(LOCAL_WORKER
-            .get()
-            .expect("ani local worker must be initialized after set attempt"))
+        Ok(LocalWorker { tx, join })
     }
 
     fn submit_local_job(job: LocalJob) -> Result<()> {
-        local_worker()?
+        let mut worker = LOCAL_WORKER.lock().map_err(|_| {
+            Error::new(Status::GenericFailure, "ani local worker lock was poisoned")
+        })?;
+        if worker.is_none() {
+            *worker = Some(build_local_worker()?);
+        }
+        worker
+            .as_ref()
+            .expect("ani local worker initialized above")
             .tx
             .send(job)
             .map_err(|_| Error::new(Status::GenericFailure, "ani local tokio worker stopped"))
@@ -156,16 +153,41 @@ mod imp {
     }
 
     /// Get the shared multi-thread Tokio runtime used by manual ANI helpers.
-    pub fn runtime() -> Result<&'static ::tokio::runtime::Runtime> {
-        if let Some(runtime) = TOKIO_RUNTIME.get() {
-            return Ok(runtime);
+    pub fn runtime() -> Result<Arc<::tokio::runtime::Runtime>> {
+        let mut runtime = TOKIO_RUNTIME
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "tokio runtime lock was poisoned"))?;
+        if runtime.is_none() {
+            *runtime = Some(Arc::new(build_runtime()?));
+        }
+        Ok(Arc::clone(
+            runtime.as_ref().expect("tokio runtime initialized above"),
+        ))
+    }
+
+    /// Stops module-owned async workers and cancels pending local tasks.
+    #[doc(hidden)]
+    pub fn shutdown_runtime() {
+        let worker = LOCAL_WORKER
+            .lock()
+            .ok()
+            .and_then(|mut worker| worker.take());
+        if let Some(LocalWorker { tx, join }) = worker {
+            drop(tx);
+            if join.thread().id() != std::thread::current().id() {
+                let _ = join.join();
+            }
         }
 
-        let runtime = build_runtime()?;
-        let _ = TOKIO_RUNTIME.set(runtime);
-        Ok(TOKIO_RUNTIME
-            .get()
-            .expect("tokio runtime must be initialized after set attempt"))
+        let runtime = TOKIO_RUNTIME
+            .lock()
+            .ok()
+            .and_then(|mut runtime| runtime.take());
+        if let Some(runtime) = runtime
+            && let Ok(runtime) = Arc::try_unwrap(runtime)
+        {
+            runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+        }
     }
 
     /// Spawn a future factory on the dedicated local runtime thread and expose
@@ -290,6 +312,10 @@ mod imp {
     const MISSING_TOKIO_RT: &str =
         "async bindings require enabling `ani` feature `async` (or `tokio_rt`)";
 
+    /// No-op when Tokio integration is not compiled in.
+    #[doc(hidden)]
+    pub fn shutdown_runtime() {}
+
     /// Return a rejected Promise explaining that Tokio integration is disabled.
     pub fn spawn_future<'env, T, F>(env: &Env<'env>, _future: F) -> Result<PromiseRaw<'env, T>>
     where
@@ -359,6 +385,6 @@ mod imp {
 #[cfg(feature = "tokio_rt")]
 pub use imp::runtime;
 pub use imp::{
-    block_on_future_result, spawn_future, spawn_future_factory, spawn_future_result,
-    spawn_future_result_factory,
+    block_on_future_result, shutdown_runtime, spawn_future, spawn_future_factory,
+    spawn_future_result, spawn_future_result_factory,
 };

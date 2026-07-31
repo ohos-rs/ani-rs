@@ -9,6 +9,9 @@ export native function big_int_identity(value: bigint): bigint;
 export native function big_int_is_negative(value: bigint): boolean;
 export native function big_int_to_decimal(value: bigint): string;
 export native function big_int_to_i64_lossless(value: bigint): long;
+export native function i128_identity(value: bigint): bigint;
+export native function u128_identity(value: bigint): bigint;
+export native function u64_identity(value: bigint): bigint;
 
 
 
@@ -94,6 +97,12 @@ __assert_eq_long("big_int_to_i64_lossless", big_int_to_i64_lossless(new BigInt("
 __assert_throws("big_int_to_i64_overflow", (): void => {
   big_int_to_i64_lossless(huge);
 });
+let maxU64 = new BigInt("18446744073709551615");
+__assert_eq_string("u64_max_lossless", u64_identity(maxU64).toString(), maxU64.toString());
+let minI128 = new BigInt("-170141183460469231731687303715884105728");
+__assert_eq_string("i128_min_lossless", i128_identity(minI128).toString(), minI128.toString());
+let maxU128 = new BigInt("340282366920938463463374607431768211455");
+__assert_eq_string("u128_max_lossless", u128_identity(maxU128).toString(), maxU128.toString());
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

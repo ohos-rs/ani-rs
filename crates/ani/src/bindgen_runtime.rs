@@ -162,6 +162,40 @@ pub trait ToAni<'env> {
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output>;
 }
 
+/// Converts a reference-like legacy bindgen result into a raw ANI reference.
+///
+/// This keeps `Option<T>` lossless for strings, objects and raw references;
+/// primitive values continue to use the primary conversion traits in
+/// [`crate::conversions`], where they are boxed explicitly.
+pub trait IntoAniRef {
+    /// Consume the value and return its raw ANI reference.
+    fn into_ani_ref(self) -> sys::ani_ref;
+}
+
+impl IntoAniRef for sys::ani_ref {
+    fn into_ani_ref(self) -> sys::ani_ref {
+        self
+    }
+}
+
+impl IntoAniRef for AniRef<'_> {
+    fn into_ani_ref(self) -> sys::ani_ref {
+        self.into_raw()
+    }
+}
+
+impl IntoAniRef for AniObject<'_> {
+    fn into_ani_ref(self) -> sys::ani_ref {
+        self.into_raw() as sys::ani_ref
+    }
+}
+
+impl IntoAniRef for AniString<'_> {
+    fn into_ani_ref(self) -> sys::ani_ref {
+        self.into_raw() as sys::ani_ref
+    }
+}
+
 // Basic type implementations (direct mapping)
 impl<'env> ToAni<'env> for bool {
     type Output = sys::ani_boolean;
@@ -252,20 +286,17 @@ impl<'env> ToAni<'env> for () {
 }
 
 // Option type implementation
-impl<'env, T: ToAni<'env>> ToAni<'env> for Option<T> {
+impl<'env, T> ToAni<'env> for Option<T>
+where
+    T: ToAni<'env>,
+    T::Output: IntoAniRef,
+{
     type Output = sys::ani_ref;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
-            Some(value) => {
-                let _converted = value.to_ani(env)?;
-                // TODO: Return converted reference
-                Ok(std::ptr::null_mut())
-            }
-            None => {
-                // Return null or undefined
-                Ok(std::ptr::null_mut())
-            }
+            Some(value) => Ok(value.to_ani(env)?.into_ani_ref()),
+            None => Ok(std::ptr::null_mut()),
         }
     }
 }

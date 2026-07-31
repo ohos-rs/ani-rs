@@ -1,0 +1,5 @@
+error: #[ani(array)] inner field must be Vec<T>, ArrayBuffer, TypedArray, or an ANI array wrapper
+ --> tests/ui/array_requires_array_inner.rs:4:21
+  |
+4 | struct InvalidArray(i32);
+  |                     ^^^

@@ -23,10 +23,12 @@ use std::ops::{Deref, DerefMut};
 use std::ptr;
 use std::slice;
 
+use crate::ani_call_2ret;
 use crate::env::Env;
 use crate::error::Result;
 use crate::sys;
-use crate::{ani_api, ani_api_raw, ani_call_2ret};
+use crate::types::{AniRef, GlobalRef};
+use crate::vm::AniVm;
 
 use super::traits::{FromAni, ToAni, TypeInfo};
 
@@ -43,8 +45,9 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 /// # Memory Model
 ///
 /// When converting from ANI (`FromAni`):
-/// - Data is copied from the ANI ArrayBuffer into a Rust-owned `Vec<u8>`
-/// - The Rust side owns the memory and will free it when dropped
+/// - A global reference keeps the ANI ArrayBuffer alive and reads are zero-copy
+/// - The first mutable access uses copy-on-write and releases that reference
+/// - If global-reference creation is unavailable, conversion safely falls back to a copy
 ///
 /// When converting from ANI (`FromAni`): we hold a **global reference** so the ANI object is not freed
 /// (like napi-rs Buffer with `napi_create_reference`). When converting to ANI (`ToAni`): we create
@@ -61,8 +64,8 @@ enum ArrayBufferBacking {
     Owned(Vec<u8>),
     /// Hold global ref so ANI object is not freed; data pointer is shared (zero-copy).
     AniRef {
-        global_ref: sys::ani_ref,
-        env: *mut sys::ani_env,
+        global_ref: GlobalRef,
+        vm: AniVm,
         ptr: *const u8,
         len: usize,
     },
@@ -123,19 +126,25 @@ impl ArrayBuffer {
         }
     }
 
-    /// Borrow an owned buffer as a mutable byte slice.
+    fn ensure_owned(&mut self) {
+        if matches!(self.backing, ArrayBufferBacking::Owned(_)) {
+            return;
+        }
+        let copy = self.as_slice().to_vec();
+        let old = std::mem::replace(&mut self.backing, ArrayBufferBacking::Owned(copy));
+        release_ani_backing(old);
+    }
+
+    /// Borrow this buffer as mutable bytes.
     ///
-    /// # Panics
-    ///
-    /// Panics when this value is backed by an ANI `ArrayBuffer`, because ANI
-    /// only exposes immutable data through this wrapper.
+    /// ANI-backed buffers use copy-on-write: the first mutable access copies
+    /// the bytes into Rust-owned storage and releases the global ANI reference.
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.ensure_owned();
         match &mut self.backing {
             ArrayBufferBacking::Owned(v) => v.as_mut_slice(),
-            ArrayBufferBacking::AniRef { .. } => {
-                panic!("as_mut_slice not supported for ANI-backed ArrayBuffer")
-            }
+            ArrayBufferBacking::AniRef { .. } => unreachable!("ensure_owned converted backing"),
         }
     }
 
@@ -148,18 +157,13 @@ impl ArrayBuffer {
         }
     }
 
-    /// Return a mutable pointer to the first byte in an owned buffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this value is backed by an ANI `ArrayBuffer`.
+    /// Return a mutable pointer, applying copy-on-write for ANI-backed data.
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ensure_owned();
         match &mut self.backing {
             ArrayBufferBacking::Owned(v) => v.as_mut_ptr(),
-            ArrayBufferBacking::AniRef { .. } => {
-                panic!("as_mut_ptr not supported for ANI-backed ArrayBuffer")
-            }
+            ArrayBufferBacking::AniRef { .. } => unreachable!("ensure_owned converted backing"),
         }
     }
 
@@ -169,12 +173,18 @@ impl ArrayBuffer {
         let backing = std::mem::replace(&mut self.backing, ArrayBufferBacking::Owned(Vec::new()));
         match backing {
             ArrayBufferBacking::Owned(v) => v,
-            ArrayBufferBacking::AniRef { ptr, len, .. } => {
-                if len == 0 {
-                    Vec::new()
+            backing @ ArrayBufferBacking::AniRef { .. } => {
+                let bytes = if let ArrayBufferBacking::AniRef { ptr, len, .. } = &backing {
+                    if *len == 0 {
+                        Vec::new()
+                    } else {
+                        unsafe { slice::from_raw_parts(*ptr, *len) }.to_vec()
+                    }
                 } else {
-                    unsafe { slice::from_raw_parts(ptr, len) }.to_vec()
-                }
+                    Vec::new()
+                };
+                release_ani_backing(backing);
+                bytes
             }
         }
     }
@@ -195,17 +205,13 @@ impl ArrayBuffer {
 impl Drop for ArrayBuffer {
     fn drop(&mut self) {
         let backing = std::mem::replace(&mut self.backing, ArrayBufferBacking::Owned(Vec::new()));
-        if let ArrayBufferBacking::AniRef {
-            global_ref, env, ..
-        } = backing
-            && !env.is_null()
-            && !global_ref.is_null()
-        {
-            let api = ani_api_raw!(env);
-            if let Some(delete_fn) = api.GlobalReference_Delete {
-                let _ = unsafe { delete_fn(env, global_ref) };
-            }
-        }
+        release_ani_backing(backing);
+    }
+}
+
+fn release_ani_backing(backing: ArrayBufferBacking) {
+    if let ArrayBufferBacking::AniRef { global_ref, vm, .. } = backing {
+        let _ = vm.with_attached(|env| env.delete_global_ref(global_ref));
     }
 }
 
@@ -374,17 +380,10 @@ impl<'env> FromAni<'env> for ArrayBuffer {
             return Ok(ArrayBuffer::new(Vec::new()));
         }
 
-        let api = ani_api!(env);
-
-        // Like napi-rs Buffer: keep object alive with global ref so it is not freed.
-        if let (Some(create_global), Some(delete_fn)) =
-            (api.GlobalReference_Create, api.GlobalReference_Delete)
-        {
-            let mut global_ref: sys::ani_ref = ptr::null_mut();
-            let status =
-                unsafe { create_global(env.as_raw(), value as sys::ani_ref, &mut global_ref) };
-
-            if status == sys::ani_status_ANI_OK && !global_ref.is_null() {
+        // Like napi-rs Buffer: keep object alive with a managed global reference.
+        let local = unsafe { AniRef::from_raw(value as sys::ani_ref) };
+        if let Ok(global_ref) = env.create_global_ref(&local) {
+            if let Ok(vm) = env.get_vm() {
                 if let Ok((data_ptr, length)) = ani_call_2ret!(
                     env,
                     ArrayBuffer_GetInfo,
@@ -403,13 +402,15 @@ impl<'env> FromAni<'env> for ArrayBuffer {
                     return Ok(ArrayBuffer {
                         backing: ArrayBufferBacking::AniRef {
                             global_ref,
-                            env: env.as_raw(),
+                            vm,
                             ptr,
                             len: length,
                         },
                     });
                 }
-                let _ = unsafe { delete_fn(env.as_raw(), global_ref) };
+                let _ = env.delete_global_ref(global_ref);
+            } else {
+                let _ = env.delete_global_ref(global_ref);
             }
         }
 

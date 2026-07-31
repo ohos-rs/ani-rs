@@ -9,8 +9,10 @@ export enum Status {
   Stopped = 3
 }
 export native function is_terminal(status: Status): boolean;
+export native function message_identity(message: string): string;
 export native function next_status(status: Status): Status;
 export native function status_name(status: Status): string;
+export type Message = string
 
 
 
@@ -86,7 +88,10 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-enum-derive");
-__assert_true("module_imported", true);
+__assert_true("enum_status_terminal", is_terminal(Status.Stopped));
+__assert_eq_string("enum_status_name", status_name(Status.Running), "running");
+let pointJson: string = "{\"Point\":{\"x\":3,\"y\":4}}";
+__assert_eq_string("structured_enum_json", message_identity(pointJson), pointJson);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

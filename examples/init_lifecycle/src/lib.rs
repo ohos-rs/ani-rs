@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 static BEFORE_BINDINGS_INIT: AtomicU8 = AtomicU8::new(0);
 static AFTER_BINDINGS_INIT: AtomicU8 = AtomicU8::new(0);
 static STD_RESULT_INIT: AtomicU8 = AtomicU8::new(0);
+static FINALIZE_COUNT: AtomicU8 = AtomicU8::new(0);
 
 #[ani(init, before_bindings)]
 fn init_before_bindings(env: &Env<'_>) -> Result<()> {
@@ -32,6 +33,12 @@ fn init_std_result() -> std::result::Result<(), ani::error::Error> {
     Ok(())
 }
 
+#[ani(finalize)]
+fn finalize_module() {
+    let count = FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    println!("ANI_FINALIZER_OK count={count}");
+}
+
 #[ani]
 pub fn init_state() -> i32 {
     let before = BEFORE_BINDINGS_INIT.load(Ordering::SeqCst) as i32;
@@ -45,4 +52,9 @@ pub fn reset_init_state() {
     BEFORE_BINDINGS_INIT.store(0, Ordering::SeqCst);
     AFTER_BINDINGS_INIT.store(0, Ordering::SeqCst);
     STD_RESULT_INIT.store(0, Ordering::SeqCst);
+}
+
+#[ani]
+pub fn finalize_count() -> i32 {
+    i32::from(FINALIZE_COUNT.load(Ordering::SeqCst))
 }

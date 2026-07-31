@@ -15,7 +15,7 @@ use crate::codegen::{
     emit_export_plan_ets, generate_async_blocking_wrapper, generate_async_wrapper,
     generate_register_fn, generate_wrapper,
 };
-use crate::parser::{BindgenAttrs, InitAttrs};
+use crate::parser::{BindgenAttrs, FinalizeAttrs, InitAttrs};
 use crate::types::{
     EtsDeclKind, ani_type::AniType, ani_type::WrapperType, class_to_descriptor,
     current_module_name, ets_public_type_for_ani_type, ets_public_type_for_syn_type,
@@ -1032,6 +1032,68 @@ pub fn expand_init(attrs: InitAttrs, func: ItemFn, prepare: TokenStream) -> Toke
     }
 }
 
+/// Expand `#[ani(finalize)]` for module-unload cleanup functions.
+pub fn expand_finalize(_attrs: FinalizeAttrs, func: ItemFn, prepare: TokenStream) -> TokenStream {
+    let finalize_signature = match validate_lifecycle_signature(&func, "finalize") {
+        Ok(sig) => sig,
+        Err(err) => return err.to_compile_error(),
+    };
+
+    let func_name = &func.sig.ident;
+    let func_name_str = func_name.to_string();
+    let callback_name = format_ident!("__ani_finalize_callback_{}", func_name);
+    let ctor_register_name = format_ident!("__ani_ctor_register_finalize_{}", func_name);
+    let call_user_finalize = if finalize_signature.accepts_env {
+        quote! { #func_name(&__ani_env) }
+    } else {
+        quote! { #func_name() }
+    };
+    let env_binding = if finalize_signature.accepts_env {
+        quote! { let __ani_env = unsafe { ::ani::env::Env::from_raw_unchecked(env) }; }
+    } else {
+        quote! {}
+    };
+    let callback_body = match finalize_signature.return_kind {
+        InitReturnKind::Unit => quote! {
+            #call_user_finalize;
+            ::ani::sys::ani_status_ANI_OK
+        },
+        InitReturnKind::Result => quote! {
+            match #call_user_finalize {
+                Ok(()) => ::ani::sys::ani_status_ANI_OK,
+                Err(e) => {
+                    eprintln!("ANI finalizer {} failed: {}", #func_name_str, e);
+                    ::ani::sys::ani_status_ANI_ERROR
+                }
+            }
+        },
+    };
+
+    quote! {
+        #prepare
+        #func
+
+        #[doc(hidden)]
+        #[allow(non_snake_case, unused_variables)]
+        unsafe extern "C" fn #callback_name(env: *mut ::ani::sys::ani_env) -> ::ani::sys::ani_status {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #env_binding
+                #callback_body
+            })) {
+                Ok(status) => status,
+                Err(_) => ::ani::sys::ani_status_ANI_ERROR,
+            }
+        }
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        #[::ani::ctor::ctor(crate_path = ::ani::ctor)]
+        fn #ctor_register_name() {
+            ::ani::module_register::register_finalize_callback(#func_name_str, #callback_name);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitReturnKind {
     Unit,
@@ -1045,10 +1107,14 @@ struct InitSignature {
 }
 
 fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
+    validate_lifecycle_signature(func, "init")
+}
+
+fn validate_lifecycle_signature(func: &ItemFn, attribute: &str) -> syn::Result<InitSignature> {
     if func.sig.asyncness.is_some() {
         return Err(syn::Error::new_spanned(
             func.sig.asyncness,
-            "#[ani(init)] does not support async functions",
+            format!("#[ani({attribute})] does not support async functions"),
         ));
     }
 
@@ -1059,7 +1125,7 @@ fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
             Some(arg) => {
                 return Err(syn::Error::new_spanned(
                     arg,
-                    "#[ani(init)] only supports `env: &Env<'_>` as parameter",
+                    format!("#[ani({attribute})] only supports `env: &Env<'_>` as parameter"),
                 ));
             }
             None => false,
@@ -1067,7 +1133,7 @@ fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
         _ => {
             return Err(syn::Error::new_spanned(
                 &func.sig.inputs,
-                "#[ani(init)] supports at most one parameter: `env: &Env<'_>`",
+                format!("#[ani({attribute})] supports at most one parameter: `env: &Env<'_>`"),
             ));
         }
     };
@@ -1079,7 +1145,9 @@ fn validate_init_signature(func: &ItemFn) -> syn::Result<InitSignature> {
         _ => {
             return Err(syn::Error::new_spanned(
                 &func.sig.output,
-                "#[ani(init)] return type must be `()`, `ani::error::Result<()>`, or `Result<(), ani::error::Error>`",
+                format!(
+                    "#[ani({attribute})] return type must be `()`, `ani::error::Result<()>`, or `Result<(), ani::error::Error>`"
+                ),
             ));
         }
     };

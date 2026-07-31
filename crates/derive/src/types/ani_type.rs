@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::{GenericArgument, PathArguments, Type, TypePath};
 
 // ============================================================================
@@ -26,17 +26,17 @@ pub enum PrimitiveType {
     I32,
     U32,
     I64,
-    U64,
     Isize,
     Usize,
     F32,
     F64,
-    Char,
 }
 
 /// String-like types
 #[derive(Debug, Clone, PartialEq)]
 pub enum StringType {
+    /// A complete Rust Unicode scalar, represented as an ArkTS string.
+    Char,
     String,
     Str,
     CString,
@@ -49,6 +49,10 @@ pub enum StringType {
     BoxPath,
     CowStr,
     CowPath,
+    /// `ani::Json<T>` serde bridge.
+    Json,
+    /// `serde_json::Value` bridge.
+    SerdeJsonValue,
 }
 
 /// Generic wrapper types with inner type
@@ -108,6 +112,8 @@ pub struct EitherType {
 pub struct PromiseType {
     /// The inner type for the promise value
     pub inner: Option<Box<AniType>>,
+    /// Whether conversion must start a native [`AsyncTask`] instead of unwrapping `PromiseRaw`.
+    pub native_task: bool,
 }
 
 /// Record type (`Record<string, V>`)
@@ -185,6 +191,8 @@ pub enum AniType {
     Undefined,
     /// Wrapper types (Option, Vec, Result, Ref)
     Wrapper(WrapperType),
+    /// User newtype that delegates conversions to its inner type.
+    Transparent(Box<AniType>),
     /// Function types
     Function(FunctionType),
     /// FnArgs wrapper for function arguments
@@ -247,6 +255,7 @@ pub struct ObjectMemberDescriptor {
 static OBJECT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 static OBJECT_TYPE_MEMBERS: OnceLock<Mutex<BTreeMap<String, Vec<ObjectMemberDescriptor>>>> =
     OnceLock::new();
+static EXACT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 
 fn object_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
     OBJECT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -254,6 +263,36 @@ fn object_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
 
 fn object_type_members() -> &'static Mutex<BTreeMap<String, Vec<ObjectMemberDescriptor>>> {
     OBJECT_TYPE_MEMBERS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn exact_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
+    EXACT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+pub fn register_exact_type_alias(rust_name: &str, inner_type: &Type) {
+    let rust_name = normalize_object_alias_key(rust_name);
+    if !rust_name.is_empty() {
+        exact_type_aliases()
+            .lock()
+            .expect("failed to lock exact type aliases")
+            .insert(rust_name, inner_type.to_token_stream().to_string());
+    }
+}
+
+fn resolve_exact_type_alias(type_path: &TypePath) -> Option<AniType> {
+    let qualified = normalize_object_alias_key(&type_path_qualified_name(type_path));
+    let ident = type_path.path.segments.last()?.ident.to_string();
+    let aliases = exact_type_aliases()
+        .lock()
+        .expect("failed to lock exact type aliases");
+    let inner = aliases
+        .get(&qualified)
+        .or_else(|| aliases.get(&ident))
+        .cloned()?;
+    drop(aliases);
+    syn::parse_str::<Type>(&inner)
+        .ok()
+        .map(|inner| AniType::Transparent(Box::new(AniType::from_syn_type(&inner))))
 }
 
 fn normalize_object_alias_key(name: &str) -> String {
@@ -401,6 +440,22 @@ impl AniType {
             return AniType::TypeParam(ident);
         }
 
+        if let Some(alias) = resolve_exact_type_alias(type_path) {
+            return alias;
+        }
+
+        // ArkTS numeric primitives have no lossless ABI representation for these
+        // Rust values. Use its arbitrary precision bigint object instead.
+        if matches!(ident.as_str(), "u64" | "i128" | "u128") {
+            return AniType::BigInt;
+        }
+
+        // ANI `char` is a UTF-16 code unit while Rust `char` is a Unicode scalar.
+        // A string preserves non-BMP values and lets conversion reject invalid arity.
+        if ident == "char" {
+            return AniType::String(StringType::Char);
+        }
+
         // Check for primitive types first
         if let Some(primitive) = parse_primitive(&ident) {
             return AniType::Primitive(primitive);
@@ -437,6 +492,20 @@ impl AniType {
 
         if ident == "Path" {
             return AniType::String(StringType::Path);
+        }
+
+        if ident == "Json" {
+            return AniType::String(StringType::Json);
+        }
+
+        if ident == "Value"
+            && type_path
+                .path
+                .segments
+                .iter()
+                .any(|segment| segment.ident == "serde_json")
+        {
+            return AniType::String(StringType::SerdeJsonValue);
         }
 
         // Check for unit type represented as path
@@ -486,7 +555,23 @@ impl AniType {
         }
 
         // Check for ArrayBuffer types
-        if ident == "ArrayBuffer" || ident == "ArrayBufferSlice" || ident == "AniArrayBuffer" {
+        if matches!(
+            ident.as_str(),
+            "ArrayBuffer"
+                | "ArrayBufferSlice"
+                | "AniArrayBuffer"
+                | "TypedArray"
+                | "Int8Array"
+                | "Uint8Array"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "BigInt64Array"
+                | "BigUint64Array"
+                | "Float32Array"
+                | "Float64Array"
+        ) {
             return AniType::ArrayBuffer;
         }
 
@@ -540,6 +625,17 @@ impl AniType {
             return AniType::Promise(PromiseType {
                 inner: extract_first_generic_type(&segment.arguments)
                     .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
+                native_task: false,
+            });
+        }
+
+        if ident == "AsyncTask" {
+            let types = extract_all_generic_types(&segment.arguments);
+            return AniType::Promise(PromiseType {
+                inner: types
+                    .get(1)
+                    .map(|ty| Box::new(AniType::from_syn_type_with_type_params(ty, type_params))),
+                native_task: true,
             });
         }
 
@@ -725,6 +821,7 @@ impl AniType {
             AniType::Unit => quote! { () },
             AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
+            AniType::Transparent(inner) => inner.to_ani_c_type(),
             AniType::Function(_) => quote! { ani::sys::ani_fn_object },
             AniType::FnArgs(_) => quote! { ani::sys::ani_object },
             AniType::Either(_) => quote! { ani::sys::ani_object },
@@ -775,12 +872,12 @@ impl PrimitiveType {
     pub fn to_ani_c_type(&self) -> TokenStream {
         match self {
             PrimitiveType::Bool => quote! { ani::sys::ani_boolean },
-            PrimitiveType::I8 | PrimitiveType::U8 => quote! { ani::sys::ani_byte },
-            PrimitiveType::I16 => quote! { ani::sys::ani_short },
-            PrimitiveType::U16 | PrimitiveType::Char => quote! { ani::sys::ani_char },
-            PrimitiveType::I32 | PrimitiveType::U32 => quote! { ani::sys::ani_int },
-            PrimitiveType::I64
-            | PrimitiveType::U64
+            PrimitiveType::I8 => quote! { ani::sys::ani_byte },
+            PrimitiveType::U8 | PrimitiveType::I16 => quote! { ani::sys::ani_short },
+            PrimitiveType::U16 => quote! { ani::sys::ani_char },
+            PrimitiveType::I32 => quote! { ani::sys::ani_int },
+            PrimitiveType::U32
+            | PrimitiveType::I64
             | PrimitiveType::Isize
             | PrimitiveType::Usize => quote! { ani::sys::ani_long },
             PrimitiveType::F32 => quote! { ani::sys::ani_float },
@@ -908,6 +1005,7 @@ impl AniType {
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::Wrapper(w) => w.to_signature(),
+            AniType::Transparent(inner) => inner.to_signature(),
             AniType::Function(function) => {
                 format!("L{};", function_signature_name(function).replace('.', "/"))
             }
@@ -992,6 +1090,7 @@ impl AniType {
             AniType::Function(function) => format!("C{{{}}}", function_signature_name(function)),
 
             AniType::Wrapper(WrapperType::Vec(inner)) => inner.to_vec_bind_signature_variant(),
+            AniType::Transparent(inner) => inner.to_union_variant_signature(),
             AniType::Wrapper(WrapperType::Option(inner)) => inner.to_union_variant_signature(),
             AniType::Wrapper(WrapperType::Result(inner)) => inner.to_union_variant_signature(),
             AniType::Wrapper(WrapperType::Ref(inner)) => inner.to_union_variant_signature(),
@@ -1036,12 +1135,12 @@ impl PrimitiveType {
     pub fn to_signature(&self) -> String {
         match self {
             PrimitiveType::Bool => "Z".to_string(),
-            PrimitiveType::I8 | PrimitiveType::U8 => "B".to_string(),
-            PrimitiveType::I16 => "S".to_string(),
-            PrimitiveType::U16 | PrimitiveType::Char => "C".to_string(),
-            PrimitiveType::I32 | PrimitiveType::U32 => "I".to_string(),
-            PrimitiveType::I64
-            | PrimitiveType::U64
+            PrimitiveType::I8 => "B".to_string(),
+            PrimitiveType::U8 | PrimitiveType::I16 => "S".to_string(),
+            PrimitiveType::U16 => "C".to_string(),
+            PrimitiveType::I32 => "I".to_string(),
+            PrimitiveType::U32
+            | PrimitiveType::I64
             | PrimitiveType::Isize
             | PrimitiveType::Usize => "J".to_string(),
             PrimitiveType::F32 => "F".to_string(),
@@ -1051,12 +1150,12 @@ impl PrimitiveType {
     fn to_new_primitive_signature(&self) -> &'static str {
         match self {
             PrimitiveType::Bool => "z",
-            PrimitiveType::I8 | PrimitiveType::U8 => "b",
-            PrimitiveType::I16 => "s",
-            PrimitiveType::U16 | PrimitiveType::Char => "c",
-            PrimitiveType::I32 | PrimitiveType::U32 => "i",
-            PrimitiveType::I64
-            | PrimitiveType::U64
+            PrimitiveType::I8 => "b",
+            PrimitiveType::U8 | PrimitiveType::I16 => "s",
+            PrimitiveType::U16 => "c",
+            PrimitiveType::I32 => "i",
+            PrimitiveType::U32
+            | PrimitiveType::I64
             | PrimitiveType::Isize
             | PrimitiveType::Usize => "l",
             PrimitiveType::F32 => "f",
@@ -1067,12 +1166,12 @@ impl PrimitiveType {
     fn to_boxed_new_signature(&self) -> &'static str {
         match self {
             PrimitiveType::Bool => "C{std.core.Boolean}",
-            PrimitiveType::I8 | PrimitiveType::U8 => "C{std.core.Byte}",
-            PrimitiveType::I16 => "C{std.core.Short}",
-            PrimitiveType::U16 | PrimitiveType::Char => "C{std.core.Char}",
-            PrimitiveType::I32 | PrimitiveType::U32 => "C{std.core.Int}",
-            PrimitiveType::I64
-            | PrimitiveType::U64
+            PrimitiveType::I8 => "C{std.core.Byte}",
+            PrimitiveType::U8 | PrimitiveType::I16 => "C{std.core.Short}",
+            PrimitiveType::U16 => "C{std.core.Char}",
+            PrimitiveType::I32 => "C{std.core.Int}",
+            PrimitiveType::U32
+            | PrimitiveType::I64
             | PrimitiveType::Isize
             | PrimitiveType::Usize => "C{std.core.Long}",
             PrimitiveType::F32 => "C{std.core.Float}",
@@ -1083,12 +1182,12 @@ impl PrimitiveType {
     fn to_fixed_array_ani_c_type(&self) -> TokenStream {
         match self {
             PrimitiveType::Bool => quote! { ani::sys::ani_fixedarray_boolean },
-            PrimitiveType::I8 | PrimitiveType::U8 => quote! { ani::sys::ani_fixedarray_byte },
-            PrimitiveType::I16 => quote! { ani::sys::ani_fixedarray_short },
-            PrimitiveType::U16 | PrimitiveType::Char => quote! { ani::sys::ani_fixedarray_char },
-            PrimitiveType::I32 | PrimitiveType::U32 => quote! { ani::sys::ani_fixedarray_int },
-            PrimitiveType::I64
-            | PrimitiveType::U64
+            PrimitiveType::I8 => quote! { ani::sys::ani_fixedarray_byte },
+            PrimitiveType::U8 | PrimitiveType::I16 => quote! { ani::sys::ani_fixedarray_short },
+            PrimitiveType::U16 => quote! { ani::sys::ani_fixedarray_char },
+            PrimitiveType::I32 => quote! { ani::sys::ani_fixedarray_int },
+            PrimitiveType::U32
+            | PrimitiveType::I64
             | PrimitiveType::Isize
             | PrimitiveType::Usize => quote! { ani::sys::ani_fixedarray_long },
             PrimitiveType::F32 => quote! { ani::sys::ani_fixedarray_float },
@@ -1137,12 +1236,10 @@ fn parse_primitive(ident: &str) -> Option<PrimitiveType> {
         "i32" => Some(PrimitiveType::I32),
         "u32" => Some(PrimitiveType::U32),
         "i64" => Some(PrimitiveType::I64),
-        "u64" => Some(PrimitiveType::U64),
         "isize" => Some(PrimitiveType::Isize),
         "usize" => Some(PrimitiveType::Usize),
         "f32" => Some(PrimitiveType::F32),
         "f64" => Some(PrimitiveType::F64),
-        "char" => Some(PrimitiveType::Char),
         _ => None,
     }
 }
@@ -1162,7 +1259,7 @@ fn parse_fixed_array_type(ident: &str) -> Option<PrimitiveType> {
         "FixedBooleanArray" | "AniFixedArrayBoolean" => Some(PrimitiveType::Bool),
         "FixedByteArray" | "AniFixedArrayByte" => Some(PrimitiveType::I8),
         "FixedShortArray" | "AniFixedArrayShort" => Some(PrimitiveType::I16),
-        "FixedCharArray" | "AniFixedArrayChar" => Some(PrimitiveType::Char),
+        "FixedCharArray" | "AniFixedArrayChar" => Some(PrimitiveType::U16),
         "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some(PrimitiveType::I32),
         "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some(PrimitiveType::I64),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some(PrimitiveType::F32),
@@ -1314,6 +1411,9 @@ pub(crate) fn is_custom_object_name(ident: &str) -> bool {
             | "Deferred"
             | "NativePointer"
             | "ManagedResource"
+            | "AsyncTask"
+            | "TypedArray"
+            | "Json"
     )
 }
 
@@ -1432,14 +1532,16 @@ fn qualify_custom_type_descriptor(name: &str) -> String {
         return trimmed.to_string();
     }
 
-    let module_name = std::env::var("ANI_TEST_MODULE_NAME")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let module_name = ["ANI_MODULE_DESCRIPTOR", "ANI_TEST_MODULE_NAME"]
+        .into_iter()
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| {
-            std::env::var("CARGO_PKG_NAME")
-                .unwrap_or_else(|_| String::from("entry"))
-                .replace('-', "_")
+            std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| String::from("entry"))
         })
         .replace('-', "_");
 
@@ -1644,6 +1746,28 @@ mod tests {
         let ty: Type = syn::parse_quote!(usize);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::Primitive(PrimitiveType::Usize)));
+
+        let ty: Type = syn::parse_quote!(u8);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "S");
+
+        let ty: Type = syn::parse_quote!(u32);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert_eq!(ani_type.to_signature(), "J");
+
+        for ty in [
+            syn::parse_quote!(u64),
+            syn::parse_quote!(i128),
+            syn::parse_quote!(u128),
+        ] {
+            let ani_type = AniType::from_syn_type(&ty);
+            assert!(matches!(ani_type, AniType::BigInt));
+        }
+
+        let ty: Type = syn::parse_quote!(char);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::String(StringType::Char)));
+        assert_eq!(ani_type.to_signature(), "Lstd/core/String;");
     }
 
     #[test]
@@ -1726,7 +1850,9 @@ mod tests {
         let ty: Type = syn::parse_quote!(PromiseRaw<String>);
         let ani_type = AniType::from_syn_type(&ty);
         match ani_type {
-            AniType::Promise(PromiseType { inner: Some(inner) }) => {
+            AniType::Promise(PromiseType {
+                inner: Some(inner), ..
+            }) => {
                 assert!(matches!(
                     inner.as_ref(),
                     AniType::String(StringType::String)

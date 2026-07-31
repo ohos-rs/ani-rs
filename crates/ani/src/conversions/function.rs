@@ -80,7 +80,12 @@
 //! }
 //! ```
 
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use crate::ani_call_ret;
 use crate::env::Env;
@@ -215,6 +220,18 @@ impl ToAniArg for &str {
     }
 }
 
+impl ToAniArg for char {
+    fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+        let mut utf8 = [0; 4];
+        let value = env.create_string(self.encode_utf8(&mut utf8))?;
+        Ok(value.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/String;"
+    }
+}
+
 // Implement ToAniArg for boxed primitive types
 // These use the boxed type signatures
 
@@ -233,6 +250,54 @@ impl ToAniArg for i32 {
 impl ToAniArg for i64 {
     fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
         let boxed = create_boxed_long(env, *self)?;
+        Ok(boxed.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Long;"
+    }
+}
+
+impl ToAniArg for u8 {
+    fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+        let boxed = <i16 as crate::conversions::Boxable<'env>>::box_value((*self).into(), env)?;
+        Ok(boxed.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Short;"
+    }
+}
+
+impl ToAniArg for u32 {
+    fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+        let boxed = create_boxed_long(env, (*self).into())?;
+        Ok(boxed.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Long;"
+    }
+}
+
+impl ToAniArg for usize {
+    fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+        let value = i64::try_from(*self)
+            .map_err(|_| Error::new(Status::OutOfRange, "Rust usize does not fit in ArkTS long"))?;
+        let boxed = create_boxed_long(env, value)?;
+        Ok(boxed.as_raw() as sys::ani_ref)
+    }
+
+    fn arg_signature() -> &'static str {
+        "Lstd/core/Long;"
+    }
+}
+
+impl ToAniArg for isize {
+    fn to_ani_arg<'env>(&self, env: &Env<'env>) -> Result<sys::ani_ref> {
+        let value = i64::try_from(*self)
+            .map_err(|_| Error::new(Status::OutOfRange, "Rust isize does not fit in ArkTS long"))?;
+        let boxed = create_boxed_long(env, value)?;
         Ok(boxed.as_raw() as sys::ani_ref)
     }
 
@@ -447,7 +512,7 @@ pub struct Function<'scope, Args, Return> {
 impl<'scope, Args, Return> Function<'scope, Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     /// Create a new Function from raw pointer
     ///
@@ -508,7 +573,7 @@ impl<'scope, Args, Return> ToGlobalRefSource for Function<'scope, Args, Return> 
 impl<Args, Return> ToGlobalRefSource for FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
         self.as_global_ref().clone_ref(env)
@@ -535,7 +600,7 @@ fn call_function_impl<Args, Return>(
 ) -> Result<Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     let args_vec = args.to_ani_args(env)?;
     let result = ani_call_ret!(
@@ -549,7 +614,28 @@ where
     )
     .map_err(|_| Error::new(Status::GenericFailure, "Function call failed"))?;
 
-    unsafe { Return::from_ani(env, std::mem::transmute_copy(&result)) }
+    if Return::type_signature() == "V" {
+        return unsafe { Return::from_ani(env, std::mem::zeroed()) };
+    }
+
+    let object = unsafe { AniObject::from_raw(result as sys::ani_object) };
+    macro_rules! unbox_return {
+        ($ty:ty) => {{
+            let value = <$ty as crate::conversions::Unboxable<'_>>::unbox(env, &object)?;
+            unsafe { Return::from_ani(env, std::mem::transmute_copy(&value)) }
+        }};
+    }
+    match Return::type_signature() {
+        "Z" => unbox_return!(bool),
+        "B" => unbox_return!(i8),
+        "S" => unbox_return!(i16),
+        "C" => unbox_return!(u16),
+        "I" => unbox_return!(i32),
+        "J" => unbox_return!(i64),
+        "F" => unbox_return!(f32),
+        "D" => unbox_return!(f64),
+        _ => unsafe { Return::from_ani(env, std::mem::transmute_copy(&result)) },
+    }
 }
 
 // ============================================================================
@@ -603,13 +689,243 @@ pub struct FunctionRef<Args, Return> {
     _return: PhantomData<Return>,
 }
 
-/// An ArkTS callback that can be moved to a worker thread.
+/// Queue behavior when submitting a [`ThreadsafeFunction`] call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadsafeFunctionCallMode {
+    /// Wait until bounded queue capacity is available.
+    Blocking,
+    /// Return [`Status::QueueFull`] immediately when capacity is exhausted.
+    NonBlocking,
+}
+
+struct ThreadsafeCallState<Return> {
+    result: Mutex<Option<Result<Return>>>,
+    ready: Condvar,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl<Return> ThreadsafeCallState<Return> {
+    fn new() -> Self {
+        Self {
+            result: Mutex::new(None),
+            ready: Condvar::new(),
+            waker: Mutex::new(None),
+        }
+    }
+
+    fn finish(&self, result: Result<Return>) {
+        if let Ok(mut slot) = self.result.lock() {
+            *slot = Some(result);
+            self.ready.notify_all();
+        }
+        if let Ok(mut waker) = self.waker.lock()
+            && let Some(waker) = waker.take()
+        {
+            waker.wake();
+        }
+    }
+}
+
+/// Awaitable result of a queued cross-thread callback.
+pub struct ThreadsafeFunctionCall<Return> {
+    state: Arc<ThreadsafeCallState<Return>>,
+}
+
+impl<Return> ThreadsafeFunctionCall<Return> {
+    /// Blocks the current Rust thread until the callback completes.
+    pub fn wait(self) -> Result<Return> {
+        let mut result = self
+            .state
+            .result
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "callback result lock poisoned"))?;
+        while result.is_none() {
+            result =
+                self.state.ready.wait(result).map_err(|_| {
+                    Error::new(Status::GenericFailure, "callback result lock poisoned")
+                })?;
+        }
+        result.take().expect("callback result checked above")
+    }
+}
+
+impl<Return> Future for ThreadsafeFunctionCall<Return> {
+    type Output = Result<Return>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Keep the result lock while publishing the waker. This closes the
+        // completion-between-check-and-registration race: `finish` cannot set
+        // the result until the waker is visible, and will therefore always
+        // wake a task that returns Pending here.
+        if let Ok(mut result) = self.state.result.lock() {
+            if let Some(result) = result.take() {
+                return Poll::Ready(result);
+            }
+            if let Ok(mut waker) = self.state.waker.lock() {
+                *waker = Some(cx.waker().clone());
+            }
+        }
+        Poll::Pending
+    }
+}
+
+struct ThreadsafeMessage<Args, Return> {
+    args: Args,
+    state: Arc<ThreadsafeCallState<Return>>,
+}
+
+struct ThreadsafeFunctionInner<Args, Return> {
+    sender: Mutex<Option<std::sync::mpsc::SyncSender<ThreadsafeMessage<Args, Return>>>>,
+    callback: Arc<FunctionRef<Args, Return>>,
+    join: Mutex<Option<std::thread::JoinHandle<()>>>,
+    closed: AtomicBool,
+}
+
+impl<Args, Return> Drop for ThreadsafeFunctionInner<Args, Return> {
+    fn drop(&mut self) {
+        if let Ok(sender) = self.sender.get_mut() {
+            sender.take();
+        }
+        if let Ok(join) = self.join.get_mut()
+            && let Some(join) = join.take()
+            && join.thread().id() != std::thread::current().id()
+        {
+            let _ = join.join();
+        }
+    }
+}
+
+/// A bounded, cloneable cross-thread callback queue.
 ///
-/// This alias emphasizes the managed [`FunctionRef`] use case. Values received
-/// through [`FromAni`] remember their owning VM; call
-/// [`FunctionRef::call_attached`] on any Rust thread to attach for the duration
-/// of the callback and detach automatically afterwards.
-pub type ThreadsafeFunction<Args, Return> = FunctionRef<Args, Return>;
+/// A dedicated dispatcher serializes calls and attaches to the owning ANI VM
+/// for each invocation. Calls can apply blocking or non-blocking backpressure,
+/// return an awaitable result, and are rejected after [`close`](Self::close).
+pub struct ThreadsafeFunction<Args, Return> {
+    inner: Arc<ThreadsafeFunctionInner<Args, Return>>,
+}
+
+impl<Args, Return> Clone for ThreadsafeFunction<Args, Return> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<Args, Return> ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    /// Creates a queue around a managed callback.
+    pub fn new(callback: FunctionRef<Args, Return>, capacity: usize) -> Result<Self> {
+        if capacity == 0 {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "ThreadsafeFunction capacity must be greater than zero",
+            ));
+        }
+        if !callback.can_call_attached() {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "ThreadsafeFunction requires a callback with an owning VM",
+            ));
+        }
+
+        let callback = Arc::new(callback);
+        let (sender, receiver) =
+            std::sync::mpsc::sync_channel::<ThreadsafeMessage<Args, Return>>(capacity);
+        let dispatcher_callback = Arc::clone(&callback);
+        let join = std::thread::Builder::new()
+            .name("ani-threadsafe-function".to_string())
+            .spawn(move || {
+                while let Ok(message) = receiver.recv() {
+                    message
+                        .state
+                        .finish(dispatcher_callback.call_attached(message.args));
+                }
+            })
+            .map_err(|error| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("failed to spawn callback dispatcher: {error}"),
+                )
+            })?;
+        Ok(Self {
+            inner: Arc::new(ThreadsafeFunctionInner {
+                sender: Mutex::new(Some(sender)),
+                callback,
+                join: Mutex::new(Some(join)),
+                closed: AtomicBool::new(false),
+            }),
+        })
+    }
+
+    /// Submit a callback invocation with explicit queue behavior.
+    pub fn call(
+        &self,
+        args: Args,
+        mode: ThreadsafeFunctionCallMode,
+    ) -> Result<ThreadsafeFunctionCall<Return>> {
+        if self.is_closed() {
+            return Err(Error::new(Status::Closing, "ThreadsafeFunction is closed"));
+        }
+        let sender = self
+            .inner
+            .sender
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "callback queue lock poisoned"))?
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| Error::new(Status::Closing, "ThreadsafeFunction is closed"))?;
+        let state = Arc::new(ThreadsafeCallState::new());
+        let message = ThreadsafeMessage {
+            args,
+            state: Arc::clone(&state),
+        };
+        match mode {
+            ThreadsafeFunctionCallMode::Blocking => sender
+                .send(message)
+                .map_err(|_| Error::new(Status::Closing, "ThreadsafeFunction is closed"))?,
+            ThreadsafeFunctionCallMode::NonBlocking => {
+                sender.try_send(message).map_err(|error| match error {
+                    std::sync::mpsc::TrySendError::Full(_) => {
+                        Error::new(Status::QueueFull, "ThreadsafeFunction queue is full")
+                    }
+                    std::sync::mpsc::TrySendError::Disconnected(_) => {
+                        Error::new(Status::Closing, "ThreadsafeFunction is closed")
+                    }
+                })?
+            }
+        }
+        Ok(ThreadsafeFunctionCall { state })
+    }
+
+    /// Submit using blocking backpressure and wait for the ArkTS result.
+    pub fn call_attached(&self, args: Args) -> Result<Return> {
+        self.call(args, ThreadsafeFunctionCallMode::Blocking)?
+            .wait()
+    }
+
+    /// Close the queue. Already queued calls are drained before the dispatcher exits.
+    pub fn close(&self) {
+        if !self.inner.closed.swap(true, Ordering::AcqRel)
+            && let Ok(mut sender) = self.inner.sender.lock()
+        {
+            sender.take();
+        }
+    }
+
+    /// Reports whether new calls are rejected.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::Acquire)
+    }
+
+    /// Returns whether the underlying callback carries owning VM information.
+    pub fn can_call_attached(&self) -> bool {
+        self.inner.callback.can_call_attached()
+    }
+}
 
 // FunctionRef can be sent across threads
 unsafe impl<Args, Return> Send for FunctionRef<Args, Return> {}
@@ -618,7 +934,7 @@ unsafe impl<Args, Return> Sync for FunctionRef<Args, Return> {}
 impl<Args, Return> FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     #[inline]
     fn managed(vm: AniVm, inner: GlobalRef) -> Self {
@@ -828,10 +1144,23 @@ where
     }
 }
 
+impl<Args, Return> TypeInfo for ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs,
+{
+    fn type_signature() -> &'static str {
+        function_type_signature_for_arity(Args::args_count())
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_fn_object"
+    }
+}
+
 impl<'env, Args, Return> ToAni<'env> for Function<'env, Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Output = sys::ani_fn_object;
 
@@ -843,7 +1172,7 @@ where
 impl<'env, Args, Return> ToAni<'env> for &Function<'env, Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Output = sys::ani_fn_object;
 
@@ -871,7 +1200,7 @@ impl<T> TypeInfo for FnArgs<T> {
 impl<'env, Args, Return> FromAni<'env> for Function<'env, Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Input = sys::ani_fn_object;
 
@@ -892,7 +1221,7 @@ where
 impl<'env, Args, Return> FromAni<'env> for FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Input = sys::ani_fn_object;
 
@@ -909,10 +1238,33 @@ where
     }
 }
 
+impl<'env, Args, Return> FromAni<'env> for ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    type Input = sys::ani_fn_object;
+
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let callback = unsafe { FunctionRef::from_ani(env, value) }?;
+        Self::new(callback, 1024)
+    }
+}
+
+impl<Args, Return> ToGlobalRefSource for ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    fn to_global_ref(&self, env: &Env<'_>) -> Result<GlobalRef> {
+        self.inner.callback.as_global_ref().clone_ref(env)
+    }
+}
+
 impl<'env, Args, Return> ToAni<'env> for FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Output = sys::ani_fn_object;
 
@@ -925,12 +1277,38 @@ where
 impl<'env, Args, Return> ToAni<'env> for &FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     type Output = sys::ani_fn_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        Ok(local.as_raw() as sys::ani_fn_object)
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_ref_from_global_ref(self.inner.callback.as_global_ref())?;
+        Ok(local.as_raw() as sys::ani_fn_object)
+    }
+}
+
+impl<'env, Args, Return> ToAni<'env> for &ThreadsafeFunction<Args, Return>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    type Output = sys::ani_fn_object;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        let local = env.local_ref_from_global_ref(self.inner.callback.as_global_ref())?;
         Ok(local.as_raw() as sys::ani_fn_object)
     }
 }

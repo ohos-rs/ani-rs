@@ -12,6 +12,7 @@ export native function borrowed_c_str_literal(): string;
 export native function borrowed_os_prefix(path: string, prefix: string): boolean;
 export native function borrowed_os_str_literal(): string;
 export native function borrowed_path_literal(): string;
+export native function char_identity(value: string): string;
 
 
 
@@ -131,6 +132,7 @@ __assert_eq_string(
   borrowed_c_str_literal(),
   "borrowed-c",
 );
+__assert_eq_string("unicode_scalar_char", char_identity("🦀"), "🦀");
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

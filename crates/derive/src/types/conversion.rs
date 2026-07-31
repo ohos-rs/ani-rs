@@ -114,6 +114,9 @@ fn generate_type_conversion(
     on_error_return: &TokenStream,
 ) -> TokenStream {
     match ani_type {
+        AniType::Primitive(
+            PrimitiveType::U8 | PrimitiveType::U32 | PrimitiveType::Isize | PrimitiveType::Usize,
+        ) => generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return),
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
         AniType::String(
             s @ (StringType::String
@@ -128,6 +131,14 @@ fn generate_type_conversion(
             ty,
             on_error_return,
         ),
+        AniType::Transparent(inner) if matches!(inner.as_ref(), AniType::String(_)) => {
+            generate_string_wrapper_from_ani_conversion(
+                param_name,
+                converted_name,
+                ty,
+                on_error_return,
+            )
+        }
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion(param_name, converted_name, ty, on_error_return)
         }
@@ -143,6 +154,14 @@ fn generate_type_conversion_with_custom_error(
     on_error: &TokenStream,
 ) -> TokenStream {
     match ani_type {
+        AniType::Primitive(
+            PrimitiveType::U8 | PrimitiveType::U32 | PrimitiveType::Isize | PrimitiveType::Usize,
+        ) => generate_generic_from_ani_conversion_with_custom_error(
+            param_name,
+            converted_name,
+            ty,
+            on_error,
+        ),
         AniType::Primitive(p) => generate_primitive_conversion(param_name, converted_name, p),
         AniType::String(
             s @ (StringType::String
@@ -162,6 +181,14 @@ fn generate_type_conversion_with_custom_error(
             ty,
             on_error,
         ),
+        AniType::Transparent(inner) if matches!(inner.as_ref(), AniType::String(_)) => {
+            generate_string_wrapper_from_ani_conversion_with_custom_error(
+                param_name,
+                converted_name,
+                ty,
+                on_error,
+            )
+        }
         _ if uses_typed_from_ani_param_conversion(ani_type) => {
             generate_generic_from_ani_conversion_with_custom_error(
                 param_name,
@@ -204,7 +231,9 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::Wrapper(WrapperType::Option(_))
             | AniType::Wrapper(WrapperType::Vec(_))
             | AniType::Wrapper(WrapperType::Ref(_))
+            | AniType::Transparent(_)
             | AniType::String(StringType::CString)
+            | AniType::String(StringType::Char)
             | AniType::String(StringType::CStr)
             | AniType::String(StringType::OsStr)
             | AniType::String(StringType::Path)
@@ -214,6 +243,8 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::String(StringType::BoxPath)
             | AniType::String(StringType::CowStr)
             | AniType::String(StringType::CowPath)
+            | AniType::String(StringType::Json)
+            | AniType::String(StringType::SerdeJsonValue)
     )
 }
 
@@ -227,15 +258,10 @@ fn generate_primitive_conversion(
         PrimitiveType::Bool => {
             quote! { let #converted_name = #param_name != 0; }
         }
-        PrimitiveType::U8 => quote! { let #converted_name = #param_name as u8; },
-        PrimitiveType::U16 => quote! { let #converted_name = #param_name as u16; },
-        PrimitiveType::U32 => quote! { let #converted_name = #param_name as u32; },
-        PrimitiveType::U64 => quote! { let #converted_name = #param_name as u64; },
-        PrimitiveType::Isize => quote! { let #converted_name = #param_name as isize; },
-        PrimitiveType::Usize => quote! { let #converted_name = #param_name as usize; },
-        PrimitiveType::Char => quote! {
-            let #converted_name = std::char::from_u32(#param_name as u32).unwrap_or('\0');
-        },
+        PrimitiveType::U16 => quote! { let #converted_name = #param_name; },
+        PrimitiveType::U8 | PrimitiveType::U32 | PrimitiveType::Isize | PrimitiveType::Usize => {
+            unreachable!("fallible primitives use FromAni")
+        }
         // Signed primitives are direct pass-through.
         _ => quote! { let #converted_name = #param_name; },
     }
@@ -705,6 +731,8 @@ fn is_to_ani_raw_string_type(ani_type: &AniType) -> bool {
             | AniType::String(StringType::BoxPath)
             | AniType::String(StringType::CowStr)
             | AniType::String(StringType::CowPath)
+            | AniType::String(StringType::Json)
+            | AniType::String(StringType::SerdeJsonValue)
     )
 }
 
@@ -732,15 +760,32 @@ fn generate_value_return_conversion(
     match ani_type {
         AniType::Primitive(p) => match p {
             PrimitiveType::Bool => quote! { if #value_expr { 1 } else { 0 } },
-            PrimitiveType::U8 => quote! { #value_expr as ani::sys::ani_byte },
-            PrimitiveType::U32 => quote! { #value_expr as ani::sys::ani_int },
-            PrimitiveType::U64 => quote! { #value_expr as ani::sys::ani_long },
-            PrimitiveType::Isize | PrimitiveType::Usize => {
-                quote! { #value_expr as ani::sys::ani_long }
+            PrimitiveType::U8
+            | PrimitiveType::U32
+            | PrimitiveType::Isize
+            | PrimitiveType::Usize => {
+                generate_to_ani_conversion(value_expr, on_default_error, false)
             }
-            PrimitiveType::Char => quote! { (#value_expr as u32) as ani::sys::ani_char },
             _ => quote! { #value_expr },
         },
+        AniType::String(StringType::Char) => {
+            generate_to_ani_conversion(value_expr, on_null_error, true)
+        }
+        AniType::Transparent(inner) => {
+            let on_error = if matches!(
+                inner.as_ref(),
+                AniType::Primitive(_) | AniType::NativePointer(_)
+            ) {
+                on_default_error
+            } else {
+                on_null_error
+            };
+            generate_to_ani_conversion(
+                value_expr,
+                on_error,
+                matches!(inner.as_ref(), AniType::String(_)),
+            )
+        }
         AniType::String(StringType::String | StringType::Str) => quote! {
             {
                 let env_wrapper = ani::env::Env::from_raw_unchecked(env);
@@ -754,6 +799,9 @@ fn generate_value_return_conversion(
             generate_to_ani_conversion(value_expr, on_null_error, true)
         }
         AniType::Unit => quote! {},
+        AniType::Promise(promise) if promise.native_task => {
+            generate_to_ani_conversion(value_expr, on_null_error, false)
+        }
         AniType::Promise(_) => quote! { #value_expr.into_raw() },
         _ if is_to_ani_object_raw_type(ani_type) => {
             generate_to_ani_conversion(value_expr, on_null_error, true)
@@ -782,6 +830,14 @@ fn generate_value_return_conversion(
 fn generate_result_error_fallback(ok_type: &AniType, original_ok_ty: Option<&Type>) -> TokenStream {
     match ok_type {
         AniType::Primitive(_) => quote! { Default::default() },
+        AniType::Transparent(inner)
+            if matches!(
+                inner.as_ref(),
+                AniType::Primitive(_) | AniType::NativePointer(_)
+            ) =>
+        {
+            quote! { Default::default() }
+        }
         AniType::Unit => quote! { return; },
         _ if is_to_ani_default_value_type(ok_type) => quote! { Default::default() },
         _ if uses_null_pointer_error_fallback(ok_type) => quote! { std::ptr::null_mut() },
@@ -999,13 +1055,30 @@ mod tests {
     }
 
     #[test]
-    fn param_conversion_usize_and_isize_use_long_casts() {
+    fn param_conversion_usize_and_isize_use_checked_from_ani() {
         let args: [FnArg; 2] = [parse_quote!(len: usize), parse_quote!(offset: isize)];
         let refs = args.iter().collect::<Vec<_>>();
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&refs, &on_error_return).to_string();
-        assert!(code.contains("let len_converted = len as usize"));
-        assert!(code.contains("let offset_converted = offset as isize"));
+        assert!(code.contains("usize as ani :: conversions :: FromAni"));
+        assert!(code.contains("isize as ani :: conversions :: FromAni"));
+        assert!(!code.contains("as usize"));
+        assert!(!code.contains("as isize"));
+    }
+
+    #[test]
+    fn unsigned_and_char_returns_use_lossless_conversion_traits() {
+        for output in [
+            parse_quote!(-> u8),
+            parse_quote!(-> u32),
+            parse_quote!(-> u64),
+            parse_quote!(-> u128),
+            parse_quote!(-> char),
+        ] {
+            let code = generate_return_conversion(&output).to_string();
+            assert!(code.contains("ToAni :: to_ani"));
+            assert!(!code.contains("as ani :: sys"));
+        }
     }
 
     #[test]

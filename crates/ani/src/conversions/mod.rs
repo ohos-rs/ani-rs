@@ -33,6 +33,8 @@ mod either;
 mod enum_item;
 mod fixed_array;
 mod function;
+#[cfg(feature = "serde-json")]
+mod json;
 mod null;
 mod object;
 mod optional;
@@ -42,8 +44,10 @@ mod reference;
 mod resource;
 mod result;
 mod string;
+mod task;
 mod traits;
 mod tuple_value;
+mod typed_array;
 mod undefined;
 
 // Re-export all public items
@@ -56,6 +60,8 @@ pub use either::*;
 pub use enum_item::*;
 pub use fixed_array::*;
 pub use function::*;
+#[cfg(feature = "serde-json")]
+pub use json::*;
 pub use null::*;
 pub use object::*;
 pub use optional::*;
@@ -64,6 +70,8 @@ pub use reference::*;
 pub use resource::*;
 pub use result::*;
 pub use string::*;
+pub use task::*;
 pub use traits::*;
 pub use tuple_value::*;
+pub use typed_array::*;
 pub use undefined::*;

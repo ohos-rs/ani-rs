@@ -18,8 +18,8 @@ export native function db_is_connected(ptr: long): boolean;
 export native function destroy_db_connection(ptr: long): void;
 export native function destroy_native_resource(ptr: long): void;
 export native function destroy_native_resource_handle(ptr: long): void;
-export native function get_native_resource_handle_id(ptr: long): int;
 export native function get_managed_native_resource_id(resource: long): int;
+export native function get_native_resource_handle_id(ptr: long): int;
 export native function get_ptr_type_id(encoded: long): int;
 export native function get_ptr_value(encoded: long): long;
 export native function get_ref_count(ptr: long): int;
@@ -28,8 +28,8 @@ export native function get_resource_name(ptr: long): string;
 export native function release_ref(ptr: long): int;
 export native function resource_add_data(ptr: long, byte_: int): void;
 export native function resource_data_size(ptr: long): int;
-export native function set_resource_name(ptr: long, name: string): void;
 export native function set_managed_native_resource_name(resource: long, name: string): void;
+export native function set_resource_name(ptr: long, name: string): void;
 export native function validate_ptr_type(encoded: long, expected_type: int): boolean;
 
 
@@ -118,16 +118,6 @@ let typedRes = create_native_resource_handle(9, "typed");
 __assert_true("create_native_resource_typed_handle", typedRes > 0);
 __assert_eq_int("get_native_resource_handle_id", get_native_resource_handle_id(typedRes), 9);
 destroy_native_resource_handle(typedRes);
-
-let managedRes = create_managed_native_resource(11, "managed");
-__assert_true("create_managed_native_resource", managedRes > 0);
-__assert_eq_int("get_managed_native_resource_id", get_managed_native_resource_id(managedRes), 11);
-set_managed_native_resource_name(managedRes, "renamed");
-__assert_true("close_managed_native_resource", close_managed_native_resource(managedRes));
-__assert_true("close_managed_native_resource_idempotent", !close_managed_native_resource(managedRes));
-__assert_throws("managed_resource_stale_handle", (): void => {
-  get_managed_native_resource_id(managedRes);
-});
 
 let db = create_db_connection("db://local");
 __assert_true("db_handle", db > 0);

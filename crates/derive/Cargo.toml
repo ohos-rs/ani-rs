@@ -2,6 +2,7 @@
 name = "ani-derive"
 version = "0.0.1-beta.1"
 edition = "2024"
+rust-version.workspace = true
 description = "Procedural macros for ani-rs, providing napi-rs like ergonomics for ArkTS native development"
 license = "Apache-2.0"
 repository = "https://github.com/ohos-rs/ani-rs"

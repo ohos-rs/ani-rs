@@ -291,6 +291,7 @@ define_opaque_type!(
 ///
 /// Global references are not limited by local reference frames and must be manually released
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct GlobalRef {
     raw: sys::ani_ref,
 }

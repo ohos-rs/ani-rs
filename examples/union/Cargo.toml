@@ -1,6 +1,8 @@
 [package]
 name = "ani-example-union"
 version = "0.1.0"
+publish = false
+license.workspace = true
 edition = "2021"
 
 [lib]

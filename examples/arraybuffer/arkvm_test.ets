@@ -6,8 +6,12 @@
 export native function buffer_length(buf: ArrayBuffer): int;
 export native function concat_buffers(a: ArrayBuffer, b: ArrayBuffer): ArrayBuffer;
 export native function create_buffer(size: int): ArrayBuffer;
+export native function first_byte(buffer: ArrayBuffer): short;
+export native function make_u16_array(): ArrayBuffer;
 export native function process_buffer(buf: ArrayBuffer): int;
+export native function replace_first_byte(buffer: ArrayBuffer, value: short): ArrayBuffer;
 export native function sum_bytes(buf: ArrayBuffer): long;
+export native function sum_u16_array(values: ArrayBuffer): long;
 
 
 
@@ -89,6 +93,10 @@ __assert_eq_int("buffer_length", buffer_length(bufA), 8);
 let merged = concat_buffers(bufA, bufB);
 __assert_eq_int("concat_buffers_length", buffer_length(merged), 12);
 __assert_true("process_buffer_non_negative", process_buffer(merged) >= 0);
+let mutated = replace_first_byte(bufA, 255 as short);
+__assert_eq_int("arraybuffer_copy_on_write", first_byte(mutated), 255);
+let typed = make_u16_array();
+__assert_eq_long("typed_array_roundtrip", sum_u16_array(typed), 65794);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

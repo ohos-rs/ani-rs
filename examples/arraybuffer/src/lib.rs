@@ -7,7 +7,7 @@
 //! - **ArrayBuffer** — owned buffer; use when you need to own data or return a buffer to ANI
 //!   (ToAni copies data into a new ANI ArrayBuffer).
 
-use ani::prelude::{ArrayBuffer, ArrayBufferSlice};
+use ani::prelude::{ArrayBuffer, ArrayBufferSlice, Uint16Array};
 use ani_derive::ani;
 
 // ============================================================================
@@ -62,6 +62,36 @@ pub fn concat_buffers(a: ArrayBufferSlice<'_>, b: ArrayBufferSlice<'_>) -> Array
     ArrayBuffer::new(out)
 }
 
+/// Mutate an ANI-backed input. `ArrayBuffer` applies copy-on-write before the
+/// Rust mutation and returns a runtime-owned buffer to ArkTS.
+#[ani]
+pub fn replace_first_byte(mut buffer: ArrayBuffer, value: u8) -> ArrayBuffer {
+    if let Some(first) = buffer.as_mut_slice().first_mut() {
+        *first = value;
+    }
+    buffer
+}
+
+#[ani]
+pub fn first_byte(buffer: ArrayBufferSlice<'_>) -> u8 {
+    buffer.first().copied().unwrap_or_default()
+}
+
+/// Create a typed numeric buffer with a stable little-endian representation.
+#[ani]
+pub fn make_u16_array() -> Uint16Array {
+    Uint16Array::new(vec![1, 0x0102, u16::MAX])
+}
+
+#[ani]
+pub fn sum_u16_array(values: Uint16Array) -> i64 {
+    values
+        .as_slice()
+        .iter()
+        .map(|value| i64::from(*value))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +126,12 @@ mod tests {
     fn test_create_buffer_negative() {
         let buf = create_buffer(-1);
         assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn typed_array_and_mutation_logic_work() {
+        let mut buffer = replace_first_byte(ArrayBuffer::new(vec![1, 2, 3]), 255);
+        assert_eq!(buffer.as_mut_slice(), [255, 2, 3]);
+        assert_eq!(sum_u16_array(make_u16_array()), 1 + 0x0102 + 65_535);
     }
 }

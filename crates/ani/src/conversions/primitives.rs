@@ -11,7 +11,7 @@
 //! - u8, u16, u32, u64 etc.
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result, Status};
 use crate::sys;
 
 use super::traits::{FromAni, FromAniDirect, ToAni, ToAniDirect, TypeInfo};
@@ -113,15 +113,15 @@ impl FromAniDirect for i8 {
 }
 
 // ============================================================================
-// u8 - handled as byte
+// u8 - represented as short so every value is lossless
 // ============================================================================
 
 impl TypeInfo for u8 {
     fn type_signature() -> &'static str {
-        "B"
+        "S"
     }
     fn ani_c_type() -> &'static str {
-        "ani_byte"
+        "ani_short"
     }
     fn is_primitive() -> bool {
         true
@@ -129,34 +129,31 @@ impl TypeInfo for u8 {
 }
 
 impl<'env> ToAni<'env> for u8 {
-    type Output = sys::ani_byte;
+    type Output = sys::ani_short;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as i8)
+        Ok(self.into())
     }
 }
 
 impl ToAniDirect for u8 {
-    type Output = sys::ani_byte;
+    type Output = sys::ani_short;
 
     fn to_ani_direct(self) -> Self::Output {
-        self as i8
+        self.into()
     }
 }
 
 impl<'env> FromAni<'env> for u8 {
-    type Input = sys::ani_byte;
+    type Input = sys::ani_short;
 
     unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(value as u8)
-    }
-}
-
-impl FromAniDirect for u8 {
-    type Input = sys::ani_byte;
-
-    fn from_ani_direct(value: Self::Input) -> Self {
-        value as u8
+        u8::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("ANI short {value} does not fit in Rust u8"),
+            )
+        })
     }
 }
 
@@ -257,46 +254,6 @@ impl FromAniDirect for u16 {
 }
 
 // ============================================================================
-// char - handled as u16 (ANI char)
-// ============================================================================
-
-impl TypeInfo for char {
-    fn type_signature() -> &'static str {
-        "C"
-    }
-    fn ani_c_type() -> &'static str {
-        "ani_char"
-    }
-    fn is_primitive() -> bool {
-        true
-    }
-}
-
-impl<'env> ToAni<'env> for char {
-    type Output = sys::ani_char;
-
-    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as u16)
-    }
-}
-
-impl ToAniDirect for char {
-    type Output = sys::ani_char;
-
-    fn to_ani_direct(self) -> Self::Output {
-        self as u16
-    }
-}
-
-impl<'env> FromAni<'env> for char {
-    type Input = sys::ani_char;
-
-    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(char::from_u32(value as u32).unwrap_or('\0'))
-    }
-}
-
-// ============================================================================
 // i32 (int) - I
 // ============================================================================
 
@@ -345,15 +302,15 @@ impl FromAniDirect for i32 {
 }
 
 // ============================================================================
-// u32 - handled as int (note: overflow possible)
+// u32 - represented as long so every value is lossless
 // ============================================================================
 
 impl TypeInfo for u32 {
     fn type_signature() -> &'static str {
-        "I"
+        "J"
     }
     fn ani_c_type() -> &'static str {
-        "ani_int"
+        "ani_long"
     }
     fn is_primitive() -> bool {
         true
@@ -361,34 +318,31 @@ impl TypeInfo for u32 {
 }
 
 impl<'env> ToAni<'env> for u32 {
-    type Output = sys::ani_int;
+    type Output = sys::ani_long;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as i32)
+        Ok(self.into())
     }
 }
 
 impl ToAniDirect for u32 {
-    type Output = sys::ani_int;
+    type Output = sys::ani_long;
 
     fn to_ani_direct(self) -> Self::Output {
-        self as i32
+        self.into()
     }
 }
 
 impl<'env> FromAni<'env> for u32 {
-    type Input = sys::ani_int;
+    type Input = sys::ani_long;
 
     unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(value as u32)
-    }
-}
-
-impl FromAniDirect for u32 {
-    type Input = sys::ani_int;
-
-    fn from_ani_direct(value: Self::Input) -> Self {
-        value as u32
+        u32::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("ANI long {value} does not fit in Rust u32"),
+            )
+        })
     }
 }
 
@@ -441,54 +395,6 @@ impl FromAniDirect for i64 {
 }
 
 // ============================================================================
-// u64 - handled as long
-// ============================================================================
-
-impl TypeInfo for u64 {
-    fn type_signature() -> &'static str {
-        "J"
-    }
-    fn ani_c_type() -> &'static str {
-        "ani_long"
-    }
-    fn is_primitive() -> bool {
-        true
-    }
-}
-
-impl<'env> ToAni<'env> for u64 {
-    type Output = sys::ani_long;
-
-    fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as i64)
-    }
-}
-
-impl ToAniDirect for u64 {
-    type Output = sys::ani_long;
-
-    fn to_ani_direct(self) -> Self::Output {
-        self as i64
-    }
-}
-
-impl<'env> FromAni<'env> for u64 {
-    type Input = sys::ani_long;
-
-    unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(value as u64)
-    }
-}
-
-impl FromAniDirect for u64 {
-    type Input = sys::ani_long;
-
-    fn from_ani_direct(value: Self::Input) -> Self {
-        value as u64
-    }
-}
-
-// ============================================================================
 // isize / usize - platform-dependent size
 // ============================================================================
 
@@ -508,15 +414,8 @@ impl<'env> ToAni<'env> for isize {
     type Output = sys::ani_long;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as i64)
-    }
-}
-
-impl ToAniDirect for isize {
-    type Output = sys::ani_long;
-
-    fn to_ani_direct(self) -> Self::Output {
-        self as i64
+        i64::try_from(self)
+            .map_err(|_| Error::new(Status::OutOfRange, "Rust isize does not fit in ANI long"))
     }
 }
 
@@ -524,7 +423,12 @@ impl<'env> FromAni<'env> for isize {
     type Input = sys::ani_long;
 
     unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(value as isize)
+        isize::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("ANI long {value} does not fit in Rust isize"),
+            )
+        })
     }
 }
 
@@ -544,15 +448,8 @@ impl<'env> ToAni<'env> for usize {
     type Output = sys::ani_long;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self as i64)
-    }
-}
-
-impl ToAniDirect for usize {
-    type Output = sys::ani_long;
-
-    fn to_ani_direct(self) -> Self::Output {
-        self as i64
+        i64::try_from(self)
+            .map_err(|_| Error::new(Status::OutOfRange, "Rust usize does not fit in ANI long"))
     }
 }
 
@@ -560,7 +457,12 @@ impl<'env> FromAni<'env> for usize {
     type Input = sys::ani_long;
 
     unsafe fn from_ani(_env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        Ok(value as usize)
+        usize::try_from(value).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                format!("ANI long {value} does not fit in Rust usize"),
+            )
+        })
     }
 }
 
@@ -726,7 +628,20 @@ mod tests {
         assert_eq!(i16::type_signature(), "S");
         assert_eq!(i32::type_signature(), "I");
         assert_eq!(i64::type_signature(), "J");
+        assert_eq!(u8::type_signature(), "S");
+        assert_eq!(u16::type_signature(), "C");
+        assert_eq!(u32::type_signature(), "J");
+        assert_eq!(u64::type_signature(), "Lstd/core/BigInt;");
+        assert_eq!(i128::type_signature(), "Lstd/core/BigInt;");
+        assert_eq!(u128::type_signature(), "Lstd/core/BigInt;");
+        assert_eq!(char::type_signature(), "Lstd/core/String;");
         assert_eq!(f32::type_signature(), "F");
         assert_eq!(f64::type_signature(), "D");
+    }
+
+    #[test]
+    fn unsigned_direct_conversions_widen_without_wrapping() {
+        assert_eq!(u8::MAX.to_ani_direct(), 255i16);
+        assert_eq!(u32::MAX.to_ani_direct(), 4_294_967_295i64);
     }
 }

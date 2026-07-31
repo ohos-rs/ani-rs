@@ -1,6 +1,6 @@
 //! Record Example - Handling simple Record
 //!
-//! Demonstrates how to handle ArkTS Record<K, V> type
+//! Demonstrates how to handle the ArkTS `Record<K, V>` type.
 //! Record is similar to HashMap/Dictionary
 
 use ani_derive::ani;

@@ -853,6 +853,8 @@ fn merge_bindgen_attrs(
         getter: extra.getter.clone().or_else(|| base.getter.clone()),
         setter: extra.setter.clone().or_else(|| base.setter.clone()),
         is_async: base.is_async || extra.is_async,
+        transparent: base.transparent || extra.transparent,
+        array: base.array || extra.array,
     }
 }
 

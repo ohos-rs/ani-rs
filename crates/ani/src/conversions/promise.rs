@@ -41,8 +41,8 @@
 
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString};
+use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef};
 use crate::vm::AniVm;
 use crate::{ani_call, ani_call_2ret};
 
@@ -346,15 +346,31 @@ impl_primitive_promise_future_value!(bool, i8, i16, u16, i32, i64, f32, f64);
 
 impl PromiseFutureValue for char {
     fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
-        let value = u16::from_promise_ref(env, value)?;
-        char::from_u32(u32::from(value)).ok_or_else(|| {
-            Error::new(
-                Status::InvalidType,
-                format!("Promise resolved with invalid char code unit {value:#06x}"),
-            )
-        })
+        let value = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+        unsafe { Self::from_ani(env, value) }
     }
 }
+
+macro_rules! impl_checked_primitive_promise_future_value {
+    ($ty:ty, $ani_ty:ty) => {
+        impl PromiseFutureValue for $ty {
+            fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
+                let value = <$ani_ty>::from_promise_ref(env, value)?;
+                <$ty>::try_from(value).map_err(|_| {
+                    Error::new(
+                        Status::OutOfRange,
+                        format!("Promise value {value} does not fit in {}", stringify!($ty)),
+                    )
+                })
+            }
+        }
+    };
+}
+
+impl_checked_primitive_promise_future_value!(u8, i16);
+impl_checked_primitive_promise_future_value!(u32, i64);
+impl_checked_primitive_promise_future_value!(usize, i64);
+impl_checked_primitive_promise_future_value!(isize, i64);
 
 impl PromiseFutureValue for String {
     fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
@@ -369,15 +385,58 @@ impl PromiseFutureValue for super::BigInt {
     }
 }
 
+macro_rules! impl_bigint_promise_future_value {
+    ($ty:ty, $method:ident) => {
+        impl PromiseFutureValue for $ty {
+            fn from_promise_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<Self> {
+                super::BigInt::from_promise_ref(env, value)?.$method()
+            }
+        }
+    };
+}
+
+impl_bigint_promise_future_value!(u64, to_u64);
+impl_bigint_promise_future_value!(i128, to_i128);
+impl_bigint_promise_future_value!(u128, to_u128);
+
 impl PromiseFutureValue for () {
     fn from_promise_ref<'env>(_env: &Env<'env>, _value: AniRef<'env>) -> Result<Self> {
         Ok(())
     }
 }
 
-struct PromiseWakeState {
+struct PromiseFutureState<T> {
+    vm: AniVm,
+    promise: Mutex<Option<GlobalRef>>,
     cancelled: AtomicBool,
-    wake_scheduled: AtomicBool,
+    interval_ms: AtomicU64,
+    result: Mutex<Option<Result<T>>>,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl<T> PromiseFutureState<T> {
+    fn finish(&self, result: Result<T>) {
+        if let Ok(mut slot) = self.result.lock() {
+            *slot = Some(result);
+        }
+        if let Ok(mut waker) = self.waker.lock()
+            && let Some(waker) = waker.take()
+        {
+            waker.wake();
+        }
+    }
+
+    fn release_promise(&self) -> Result<()> {
+        let global = self
+            .promise
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "Promise reference lock poisoned"))?
+            .take();
+        match global {
+            Some(global) => self.vm.with_attached(|env| env.delete_global_ref(global)),
+            None => Ok(()),
+        }
+    }
 }
 
 enum PromisePoll<T> {
@@ -389,33 +448,42 @@ enum PromisePoll<T> {
 /// Promise.
 ///
 /// ANI currently exposes Promise creation and settlement but no native
-/// continuation-registration API. This implementation therefore checks the
-/// runtime Promise state on a short timer. It never blocks an executor thread,
-/// retains the Promise with a global reference, and automatically attaches
-/// whichever Rust thread polls it.
+/// continuation-registration API. A single background observer therefore
+/// checks the runtime Promise state on a short timer and wakes the Rust task
+/// only when the Promise settles or is cancelled. It never blocks or repeatedly
+/// reschedules the executor, retains the Promise with a global reference, and
+/// automatically attaches the observer to the owning VM.
 pub struct PromiseFuture<T> {
-    vm: AniVm,
-    promise: Option<crate::types::GlobalRef>,
-    wake_state: Arc<PromiseWakeState>,
-    poll_interval: Duration,
+    state: Arc<PromiseFutureState<T>>,
     completed: bool,
-    marker: PhantomData<fn() -> T>,
 }
 
 impl<T: PromiseFutureValue> PromiseFuture<T> {
     /// Creates a future and promotes the Promise to a global ANI reference.
     pub fn new<'env>(env: &Env<'env>, promise: PromiseRaw<'env, T>) -> Result<Self> {
         let promise_ref = unsafe { AniRef::from_raw(promise.into_raw() as sys::ani_ref) };
-        Ok(Self {
+        let state = Arc::new(PromiseFutureState {
             vm: env.get_vm()?,
-            promise: Some(env.create_global_ref(&promise_ref)?),
-            wake_state: Arc::new(PromiseWakeState {
-                cancelled: AtomicBool::new(false),
-                wake_scheduled: AtomicBool::new(false),
-            }),
-            poll_interval: DEFAULT_PROMISE_POLL_INTERVAL,
+            promise: Mutex::new(Some(env.create_global_ref(&promise_ref)?)),
+            result: Mutex::new(None),
+            waker: Mutex::new(None),
+            interval_ms: AtomicU64::new(DEFAULT_PROMISE_POLL_INTERVAL.as_millis() as u64),
+            cancelled: AtomicBool::new(false),
+        });
+        let observer = Arc::clone(&state);
+        if let Err(error) = std::thread::Builder::new()
+            .name("ani-promise-observer".to_string())
+            .spawn(move || observe_promise(observer))
+        {
+            let _ = state.release_promise();
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!("failed to spawn Promise observer: {error}"),
+            ));
+        }
+        Ok(Self {
+            state,
             completed: false,
-            marker: PhantomData,
         })
     }
 
@@ -423,8 +491,11 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
     ///
     /// Values below one millisecond are clamped to one millisecond to avoid a
     /// busy loop.
-    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
-        self.poll_interval = interval.max(Duration::from_millis(1));
+    pub fn with_poll_interval(self, interval: Duration) -> Self {
+        self.state.interval_ms.store(
+            interval.max(Duration::from_millis(1)).as_millis() as u64,
+            Ordering::Release,
+        );
         self
     }
 
@@ -433,67 +504,71 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
     /// Cancellation is idempotent and does not abort the ArkTS operation
     /// itself because ANI has no Promise cancellation primitive.
     pub fn cancel(&mut self) -> Result<bool> {
-        if self.wake_state.cancelled.swap(true, Ordering::AcqRel) {
+        if self.state.cancelled.swap(true, Ordering::AcqRel) {
             return Ok(false);
         }
-        self.release_promise()?;
         Ok(true)
     }
 
     /// Returns whether the Rust-side wait has been cancelled.
     pub fn is_cancelled(&self) -> bool {
-        self.wake_state.cancelled.load(Ordering::Acquire)
+        self.state.cancelled.load(Ordering::Acquire)
     }
+}
 
-    fn release_promise(&mut self) -> Result<()> {
-        let Some(global) = self.promise.take() else {
-            return Ok(());
-        };
-        self.vm.with_attached(|env| env.delete_global_ref(global))
-    }
-
-    fn inspect(&self) -> Result<PromisePoll<T>> {
-        let global = self.promise.as_ref().ok_or_else(|| {
-            Error::new(
-                Status::GenericFailure,
-                "Promise future no longer owns a Promise",
-            )
-        })?;
-        self.vm.with_attached(|env| {
-            let promise = env.local_object_from_global_ref(global)?;
-            match env.get_field_by_name_int(&promise, "state")? {
-                PROMISE_STATE_PENDING | PROMISE_STATE_LINKED => Ok(PromisePoll::Pending),
-                PROMISE_STATE_RESOLVED => {
-                    let value = env.get_field_by_name_ref(&promise, "value")?;
-                    Ok(PromisePoll::Ready(T::from_promise_ref(env, value)))
-                }
-                PROMISE_STATE_REJECTED => {
-                    let value = env.get_field_by_name_ref(&promise, "value")?;
-                    Ok(PromisePoll::Ready(Err(promise_rejection_error(env, value))))
-                }
-                state => Ok(PromisePoll::Ready(Err(Error::new(
-                    Status::Error,
-                    format!("ArkTS Promise reported unknown state {state}"),
-                )))),
+fn inspect_promise<T: PromiseFutureValue>(state: &PromiseFutureState<T>) -> Result<PromisePoll<T>> {
+    let promise = state
+        .promise
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "Promise reference lock poisoned"))?;
+    let global = promise.as_ref().ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            "Promise observer no longer owns a Promise",
+        )
+    })?;
+    state.vm.with_attached(|env| {
+        let promise = env.local_object_from_global_ref(global)?;
+        match env.get_field_by_name_int(&promise, "state")? {
+            PROMISE_STATE_PENDING | PROMISE_STATE_LINKED => Ok(PromisePoll::Pending),
+            PROMISE_STATE_RESOLVED => {
+                let value = env.get_field_by_name_ref(&promise, "value")?;
+                Ok(PromisePoll::Ready(T::from_promise_ref(env, value)))
             }
-        })
-    }
-
-    fn schedule_wake(&self, waker: &Waker) {
-        if self.wake_state.wake_scheduled.swap(true, Ordering::AcqRel) {
-            return;
+            PROMISE_STATE_REJECTED => {
+                let value = env.get_field_by_name_ref(&promise, "value")?;
+                Ok(PromisePoll::Ready(Err(promise_rejection_error(env, value))))
+            }
+            value => Ok(PromisePoll::Ready(Err(Error::new(
+                Status::Error,
+                format!("ArkTS Promise reported unknown state {value}"),
+            )))),
         }
-        let state = Arc::clone(&self.wake_state);
-        let waker = waker.clone();
-        let interval = self.poll_interval;
-        std::thread::spawn(move || {
-            std::thread::sleep(interval);
-            state.wake_scheduled.store(false, Ordering::Release);
-            if !state.cancelled.load(Ordering::Acquire) {
-                waker.wake();
+    })
+}
+
+fn observe_promise<T: PromiseFutureValue>(state: Arc<PromiseFutureState<T>>) {
+    let result = loop {
+        if state.cancelled.load(Ordering::Acquire) {
+            break Err(Error::new(
+                Status::Cancelled,
+                "Promise future was cancelled",
+            ));
+        }
+        match inspect_promise(&state) {
+            Ok(PromisePoll::Pending) => {
+                let interval = Duration::from_millis(state.interval_ms.load(Ordering::Acquire));
+                std::thread::sleep(interval);
             }
-        });
-    }
+            Ok(PromisePoll::Ready(result)) => break result,
+            Err(error) => break Err(error),
+        }
+    };
+    let result = match state.release_promise() {
+        Ok(()) => result,
+        Err(error) => Err(error),
+    };
+    state.finish(result);
 }
 
 impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
@@ -501,41 +576,31 @@ impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
 
     fn poll(mut self: std::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         assert!(!self.completed, "PromiseFuture polled after completion");
-        if self.is_cancelled() {
+        let ready = if let Ok(mut result) = self.state.result.lock() {
+            let ready = result.take();
+            // Publish the waker while holding the result lock so completion
+            // cannot occur between the empty check and waker registration.
+            if ready.is_none()
+                && let Ok(mut waker) = self.state.waker.lock()
+            {
+                *waker = Some(context.waker().clone());
+            }
+            ready
+        } else {
+            None
+        };
+        if let Some(result) = ready {
             self.completed = true;
-            return Poll::Ready(Err(Error::new(
-                Status::GenericFailure,
-                "Promise future was cancelled",
-            )));
-        }
-        match self.inspect() {
-            Ok(PromisePoll::Pending) => {
-                self.schedule_wake(context.waker());
-                Poll::Pending
-            }
-            Ok(PromisePoll::Ready(result)) => {
-                self.completed = true;
-                if let Err(cleanup_error) = self.release_promise() {
-                    return Poll::Ready(Err(cleanup_error));
-                }
-                Poll::Ready(result)
-            }
-            Err(error) => {
-                self.completed = true;
-                let _ = self.release_promise();
-                Poll::Ready(Err(error))
-            }
+            Poll::Ready(result)
+        } else {
+            Poll::Pending
         }
     }
 }
 
 impl<T> Drop for PromiseFuture<T> {
     fn drop(&mut self) {
-        self.wake_state.cancelled.store(true, Ordering::Release);
-        let Some(global) = self.promise.take() else {
-            return;
-        };
-        let _ = self.vm.with_attached(|env| env.delete_global_ref(global));
+        self.state.cancelled.store(true, Ordering::Release);
     }
 }
 
@@ -658,7 +723,36 @@ macro_rules! impl_boxed_promise_value {
     };
 }
 
-impl_boxed_promise_value!(bool, i8, i16, u16, char, i32, i64, f32, f64);
+impl_boxed_promise_value!(bool, i8, i16, u16, i32, i64, f32, f64);
+
+impl<'env> PromiseValue<'env> for char {
+    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;
+        Ok(value.into())
+    }
+}
+
+macro_rules! impl_checked_boxed_promise_value {
+    ($ty:ty, $ani_ty:ty) => {
+        impl<'env> PromiseValue<'env> for $ty {
+            fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+                let value = <$ani_ty>::try_from(self).map_err(|_| {
+                    Error::new(
+                        Status::OutOfRange,
+                        concat!("Rust ", stringify!($ty), " does not fit in ArkTS primitive"),
+                    )
+                })?;
+                let boxed = <$ani_ty as crate::conversions::Boxable<'env>>::box_value(value, env)?;
+                Ok(boxed.into())
+            }
+        }
+    };
+}
+
+impl_checked_boxed_promise_value!(u8, i16);
+impl_checked_boxed_promise_value!(u32, i64);
+impl_checked_boxed_promise_value!(usize, i64);
+impl_checked_boxed_promise_value!(isize, i64);
 
 impl<'env> PromiseValue<'env> for String {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
@@ -686,10 +780,24 @@ impl<'env> PromiseValue<'env> for super::BigInt {
     }
 }
 
+macro_rules! impl_bigint_promise_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl<'env> PromiseValue<'env> for $ty {
+                fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
+                    super::BigInt::from(self).into_promise_ref(env)
+                }
+            }
+        )+
+    };
+}
+
+impl_bigint_promise_value!(u64, i128, u128);
+
 impl<'env, Args, Return> PromiseValue<'env> for Function<'env, Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
         let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;
@@ -700,7 +808,7 @@ where
 impl<'env, Args, Return> PromiseValue<'env> for FunctionRef<Args, Return>
 where
     Args: ToAniArgs,
-    Return: for<'a> FromAni<'a>,
+    Return: for<'a> FromAni<'a> + TypeInfo,
 {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
         let value = <Self as ConversionToAni<'env>>::to_ani(self, env)?;

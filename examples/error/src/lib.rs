@@ -104,7 +104,7 @@ fn authenticate(username: &str, password: &str) -> std::result::Result<String, E
 }
 
 /// A wrapper function that can be exported to ArkTS.
-/// It converts the custom error to a standard Result<T>.
+/// It converts the custom error to a standard `Result<T>`.
 #[ani]
 fn login(username: String, password: String) -> Result<String> {
     authenticate(&username, &password).map_err(|e| {
