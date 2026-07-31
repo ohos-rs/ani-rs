@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::env::Env;
-use crate::error::{Error, Result, Status};
+use crate::error::{AniErrorPayload, Error, Result, Status};
 use crate::sys;
 
 use super::{PromiseRaw, PromiseValue, ToAni, TypeInfo};
@@ -50,16 +50,25 @@ pub trait Task: Send + Sized + 'static {
     type Output: Send + 'static;
     /// ArkTS value used to resolve the resulting Promise.
     type JsValue: for<'env> PromiseValue<'env>;
+    /// Structured application error retained across the scheduler boundary.
+    type Error: AniErrorPayload;
 
     /// Performs worker-thread work. Implementations should periodically call
     /// [`CancellationToken::check`] for cooperative cancellation.
-    fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output>;
+    fn compute(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<Self::Output, Self::Error>;
 
     /// Converts worker output while attached to the owning ANI VM.
-    fn resolve<'env>(self, env: &Env<'env>, output: Self::Output) -> Result<Self::JsValue>;
+    fn resolve<'env>(
+        self,
+        env: &Env<'env>,
+        output: Self::Output,
+    ) -> std::result::Result<Self::JsValue, Self::Error>;
 }
 
-/// A napi-rs-style background task that converts directly to `Promise<Object>`.
+/// A scheduler-backed background task that converts directly to `Promise<Object>`.
 pub struct AsyncTask<T: Task, V = <T as Task>::JsValue> {
     task: T,
     cancellation: CancellationToken,
@@ -101,34 +110,27 @@ where
         let cancellation = self.cancellation;
         let mut task = self.task;
 
-        std::thread::Builder::new()
-            .name("ani-async-task".to_string())
-            .spawn(move || {
-                let computed = catch_unwind(AssertUnwindSafe(|| {
-                    cancellation.check()?;
-                    let output = task.compute(&cancellation)?;
-                    cancellation.check()?;
-                    Ok(output)
-                }));
+        crate::scheduler::shared().schedule(move || {
+            let computed = catch_unwind(AssertUnwindSafe(|| {
+                let output = task.compute(&cancellation)?;
+                Ok::<T::Output, T::Error>(output)
+            }));
 
-                let _ = vm.with_attached(|env| match computed {
-                    Ok(Ok(output)) => match task.resolve(env, output) {
-                        Ok(value) => deferred.resolve_value(env, value),
-                        Err(error) => deferred.reject_with_error(env, error),
-                    },
-                    Ok(Err(error)) => deferred.reject_with_error(env, error),
-                    Err(payload) => deferred.reject(
-                        env,
+            let _ = vm.with_attached(|env| match computed {
+                Ok(Ok(output)) => match task.resolve(env, output) {
+                    Ok(value) => deferred.resolve_value(env, value),
+                    Err(error) => deferred.reject_with_payload(env, error),
+                },
+                Ok(Err(error)) => deferred.reject_with_payload(env, error),
+                Err(payload) => deferred.reject_with_error(
+                    env,
+                    Error::new(
+                        Status::GenericFailure,
                         format!("panic in AsyncTask: {}", panic_message(payload)),
                     ),
-                });
-            })
-            .map_err(|error| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("failed to spawn AsyncTask worker: {error}"),
-                )
-            })?;
+                ),
+            });
+        })?;
 
         Ok(promise)
     }

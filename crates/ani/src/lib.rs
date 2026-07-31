@@ -55,6 +55,9 @@ pub mod conversions;
 pub mod env;
 pub mod error;
 pub mod module_register;
+pub mod platform;
+pub mod runtime;
+pub mod scheduler;
 pub mod tokio;
 pub mod types;
 pub mod vm;
@@ -67,7 +70,10 @@ pub mod vm;
 /// ```
 pub mod prelude {
     pub use crate::env::{Env, LocalScopeGuard};
-    pub use crate::error::{BusinessError, Error, Result, Status, check_status};
+    pub use crate::error::{
+        AniErrorPayload, BusinessError, DynAniError, Error, Result, Status, check_status,
+    };
+    pub use crate::runtime::{RuntimeMetrics, assert_no_runtime_leaks, runtime_metrics};
     pub use crate::types::{
         AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
         AniEnum, AniEnumItem, AniError, AniField, AniFixedArray, AniFixedArrayBoolean,

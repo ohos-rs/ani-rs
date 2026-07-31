@@ -1,6 +1,6 @@
 //! Promise support for ANI
 //!
-//! This module provides Promise types similar to napi-rs design:
+//! This module provides Promise types with an extensible structured rejection contract:
 //!
 //! - [`PromiseRaw`] - Raw Promise value with lifetime, for synchronous contexts
 //! - [`Deferred`] - Deferred resolver for async Promise resolution
@@ -48,7 +48,7 @@ use std::time::Duration;
 
 use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
-use crate::error::{Error, Result, Status};
+use crate::error::{AniErrorPayload, Error, Result, Status};
 use crate::sys;
 use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef};
 use crate::vm::AniVm;
@@ -68,7 +68,7 @@ const DEFAULT_PROMISE_POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// `PromiseRaw<'env>` represents a raw Promise value. It contains a lifetime
 /// so it can only be used in synchronous contexts.
 ///
-/// This is similar to napi-rs's `PromiseRaw` type.
+/// Rejections may carry any [`AniErrorPayload`] without string erasure.
 ///
 /// # Examples
 ///
@@ -268,11 +268,18 @@ impl<'env, T> PromiseRaw<'env, T> {
     }
 
     /// Create a new Promise and immediately reject it with a typed [`Error`].
-    pub fn reject_with_error<S: AsRef<str> + std::fmt::Debug>(
-        env: &Env<'env>,
-        error: Error<S>,
-    ) -> Result<Self> {
-        Self::reject(env, error.to_string())
+    pub fn reject_with_error<S>(env: &Env<'env>, error: Error<S>) -> Result<Self>
+    where
+        S: AsRef<str> + std::fmt::Debug + Send + Sync + 'static,
+    {
+        Self::reject_with_payload(env, error)
+    }
+
+    /// Create a Promise rejected with an application-defined error payload.
+    pub fn reject_with_payload<E: AniErrorPayload>(env: &Env<'env>, error: E) -> Result<Self> {
+        let (deferred, promise) = Self::deferred(env)?;
+        deferred.reject_with_payload(env, error)?;
+        Ok(promise)
     }
 
     /// Create a new Promise with a deferred resolver
@@ -471,15 +478,9 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
             cancelled: AtomicBool::new(false),
         });
         let observer = Arc::clone(&state);
-        if let Err(error) = std::thread::Builder::new()
-            .name("ani-promise-observer".to_string())
-            .spawn(move || observe_promise(observer))
-        {
+        if let Err(error) = crate::scheduler::shared().schedule(move || observe_promise(observer)) {
             let _ = state.release_promise();
-            return Err(Error::new(
-                Status::GenericFailure,
-                format!("failed to spawn Promise observer: {error}"),
-            ));
+            return Err(error);
         }
         Ok(Self {
             state,
@@ -548,22 +549,32 @@ fn inspect_promise<T: PromiseFutureValue>(state: &PromiseFutureState<T>) -> Resu
 }
 
 fn observe_promise<T: PromiseFutureValue>(state: Arc<PromiseFutureState<T>>) {
-    let result = loop {
-        if state.cancelled.load(Ordering::Acquire) {
-            break Err(Error::new(
+    if state.cancelled.load(Ordering::Acquire) {
+        finish_promise_observer(
+            state,
+            Err(Error::new(
                 Status::Cancelled,
                 "Promise future was cancelled",
-            ));
-        }
-        match inspect_promise(&state) {
-            Ok(PromisePoll::Pending) => {
-                let interval = Duration::from_millis(state.interval_ms.load(Ordering::Acquire));
-                std::thread::sleep(interval);
+            )),
+        );
+        return;
+    }
+    match inspect_promise(&state) {
+        Ok(PromisePoll::Pending) => {
+            let interval = Duration::from_millis(state.interval_ms.load(Ordering::Acquire));
+            let next = Arc::clone(&state);
+            if let Err(error) =
+                crate::scheduler::shared().schedule_after(interval, move || observe_promise(next))
+            {
+                finish_promise_observer(state, Err(error));
             }
-            Ok(PromisePoll::Ready(result)) => break result,
-            Err(error) => break Err(error),
         }
-    };
+        Ok(PromisePoll::Ready(result)) => finish_promise_observer(state, result),
+        Err(error) => finish_promise_observer(state, Err(error)),
+    }
+}
+
+fn finish_promise_observer<T>(state: Arc<PromiseFutureState<T>>, result: Result<T>) {
     let result = match state.release_promise() {
         Ok(()) => result,
         Err(error) => Err(error),
@@ -613,7 +624,17 @@ fn promise_rejection_error(env: &Env<'_>, value: AniRef<'_>) -> Error {
             env.get_string(&message)
         })
         .unwrap_or_else(|_| "ArkTS Promise rejected".to_string());
-    Error::new(Status::GenericFailure, reason)
+    let status = env
+        .get_property_by_name_ref(&error_object, "name")
+        .and_then(|status| {
+            let status = unsafe { AniString::from_raw(status.as_raw() as sys::ani_string) };
+            env.get_string(&status)
+        })
+        .unwrap_or_else(|_| "GenericFailure".to_string());
+    let code = env.get_property_by_name_int(&error_object, "code").ok();
+    let mut error = Error::new(Status::GenericFailure, reason).with_status_name(status);
+    error.code = code;
+    error
 }
 
 /// Deferred resolver for Promise
@@ -695,12 +716,17 @@ impl AniResolver {
     }
 
     /// Reject the associated Promise with a typed [`Error`].
-    pub fn reject_with_error<S: AsRef<str> + std::fmt::Debug>(
-        &self,
-        env: &Env<'_>,
-        error: Error<S>,
-    ) -> Result<()> {
-        self.reject_message(env, error.to_string())
+    pub fn reject_with_error<S>(&self, env: &Env<'_>, error: Error<S>) -> Result<()>
+    where
+        S: AsRef<str> + std::fmt::Debug + Send + Sync + 'static,
+    {
+        self.reject_with_payload(env, &error)
+    }
+
+    /// Reject with any application-defined structured error payload.
+    pub fn reject_with_payload(&self, env: &Env<'_>, error: &dyn AniErrorPayload) -> Result<()> {
+        let error = crate::error::payload_to_ani_error(env, error)?;
+        self.reject_error(env, &error)
     }
 
     /// Wrap this raw resolver in a typed [`Deferred<T>`] facade.
@@ -933,12 +959,16 @@ impl<T> Deferred<T> {
     ///
     /// * `env` - The ANI environment
     /// * `error` - The Error to reject with
-    pub fn reject_with_error<S: AsRef<str> + std::fmt::Debug>(
-        self,
-        env: &Env<'_>,
-        error: Error<S>,
-    ) -> Result<()> {
+    pub fn reject_with_error<S>(self, env: &Env<'_>, error: Error<S>) -> Result<()>
+    where
+        S: AsRef<str> + std::fmt::Debug + Send + Sync + 'static,
+    {
         self.resolver.reject_with_error(env, error)
+    }
+
+    /// Reject the Promise with a custom structured error payload.
+    pub fn reject_with_payload<E: AniErrorPayload>(self, env: &Env<'_>, error: E) -> Result<()> {
+        self.resolver.reject_with_payload(env, &error)
     }
 
     /// Get the raw resolver

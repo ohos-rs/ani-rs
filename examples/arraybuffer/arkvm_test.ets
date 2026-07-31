@@ -7,11 +7,11 @@ export native function buffer_length(buf: ArrayBuffer): int;
 export native function concat_buffers(a: ArrayBuffer, b: ArrayBuffer): ArrayBuffer;
 export native function create_buffer(size: int): ArrayBuffer;
 export native function first_byte(buffer: ArrayBuffer): short;
-export native function make_u16_array(): ArrayBuffer;
+export native function make_u16_array(): Uint16Array;
 export native function process_buffer(buf: ArrayBuffer): int;
 export native function replace_first_byte(buffer: ArrayBuffer, value: short): ArrayBuffer;
 export native function sum_bytes(buf: ArrayBuffer): long;
-export native function sum_u16_array(values: ArrayBuffer): long;
+export native function sum_u16_array(values: Uint16Array): long;
 
 
 
@@ -97,6 +97,11 @@ let mutated = replace_first_byte(bufA, 255 as short);
 __assert_eq_int("arraybuffer_copy_on_write", first_byte(mutated), 255);
 let typed = make_u16_array();
 __assert_eq_long("typed_array_roundtrip", sum_u16_array(typed), 65794);
+let typedInput = new Uint16Array(3);
+typedInput[0] = 4;
+typedInput[1] = 5;
+typedInput[2] = 6;
+__assert_eq_long("typed_array_native_input", sum_u16_array(typedInput), 15);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

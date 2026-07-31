@@ -1,17 +1,24 @@
-//! Typed numeric arrays backed by ANI `ArrayBuffer` values.
+//! Native ArkTS typed-array conversions.
 
 use std::marker::PhantomData;
 
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
+use crate::types::{AniArrayBuffer, AniObject};
 
-use super::{ArrayBuffer, FromAni, ToAni, TypeInfo};
+use super::{FromAni, ToAni, TypeInfo};
 
 /// A fixed-width numeric element that can be encoded into an ArrayBuffer.
 pub trait TypedArrayElement: Copy + Send + Sync + 'static {
     /// Number of bytes in one element.
     const WIDTH: usize;
+
+    /// ArkTS typed-array class descriptor.
+    const CLASS_NAME: &'static str;
+
+    /// ANI type signature for the native typed-array class.
+    const TYPE_SIGNATURE: &'static str;
 
     /// Appends one value using the platform-independent little-endian layout.
     fn encode(self, output: &mut Vec<u8>);
@@ -21,10 +28,12 @@ pub trait TypedArrayElement: Copy + Send + Sync + 'static {
 }
 
 macro_rules! impl_typed_array_element {
-    ($($ty:ty),+ $(,)?) => {
+    ($($ty:ty => ($class:literal, $signature:literal)),+ $(,)?) => {
         $(
             impl TypedArrayElement for $ty {
                 const WIDTH: usize = std::mem::size_of::<Self>();
+                const CLASS_NAME: &'static str = $class;
+                const TYPE_SIGNATURE: &'static str = $signature;
 
                 fn encode(self, output: &mut Vec<u8>) {
                     output.extend_from_slice(&self.to_le_bytes());
@@ -38,9 +47,20 @@ macro_rules! impl_typed_array_element {
     };
 }
 
-impl_typed_array_element!(i8, u8, i16, u16, i32, u32, i64, u64, f32, f64);
+impl_typed_array_element!(
+    i8 => ("std.core.Int8Array", "Lstd/core/Int8Array;"),
+    u8 => ("std.core.Uint8Array", "Lstd/core/Uint8Array;"),
+    i16 => ("std.core.Int16Array", "Lstd/core/Int16Array;"),
+    u16 => ("std.core.Uint16Array", "Lstd/core/Uint16Array;"),
+    i32 => ("std.core.Int32Array", "Lstd/core/Int32Array;"),
+    u32 => ("std.core.Uint32Array", "Lstd/core/Uint32Array;"),
+    i64 => ("std.core.BigInt64Array", "Lstd/core/BigInt64Array;"),
+    u64 => ("std.core.BigUint64Array", "Lstd/core/BigUint64Array;"),
+    f32 => ("std.core.Float32Array", "Lstd/core/Float32Array;"),
+    f64 => ("std.core.Float64Array", "Lstd/core/Float64Array;"),
+);
 
-/// An owned typed numeric view transported through ANI as an ArrayBuffer.
+/// An owned typed numeric array transported as its native ArkTS typed-array class.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TypedArray<T: TypedArrayElement> {
     values: Vec<T>,
@@ -124,28 +144,184 @@ impl<T: TypedArrayElement> From<Vec<T>> for TypedArray<T> {
 
 impl<T: TypedArrayElement> TypeInfo for TypedArray<T> {
     fn type_signature() -> &'static str {
-        "Lescompat/ArrayBuffer;"
+        T::TYPE_SIGNATURE
     }
 
     fn ani_c_type() -> &'static str {
-        "ani_arraybuffer"
+        "ani_object"
     }
 }
 
 impl<'env, T: TypedArrayElement> ToAni<'env> for TypedArray<T> {
-    type Output = sys::ani_arraybuffer;
+    type Output = sys::ani_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        ArrayBuffer::new(self.encode_bytes()).to_ani(env)
+        let length = i32::try_from(self.values.len()).map_err(|_| {
+            Error::new(
+                Status::OutOfRange,
+                "typed array length exceeds ArkTS int range",
+            )
+        })?;
+        let class = env.find_class(T::CLASS_NAME).map_err(|error| {
+            Error::with_cause(
+                error.status,
+                format!("failed to find typed-array class {}", T::CLASS_NAME),
+                error,
+            )
+        })?;
+        let constructor = env.find_constructor(&class, "i:").map_err(|error| {
+            Error::with_cause(
+                error.status,
+                format!("failed to find {} length constructor", T::CLASS_NAME),
+                error,
+            )
+        })?;
+        let object = env
+            .new_object(&class, &constructor, &[sys::ani_value { i: length }])
+            .map_err(|error| {
+                Error::with_cause(
+                    error.status,
+                    format!("failed to construct {}", T::CLASS_NAME),
+                    error,
+                )
+            })?;
+        let buffer_ref = env
+            .get_property_by_name_ref(&object, "buffer")
+            .map_err(|error| {
+                Error::with_cause(
+                    error.status,
+                    format!("failed to read {}.buffer", T::CLASS_NAME),
+                    error,
+                )
+            })?;
+        let buffer =
+            unsafe { AniArrayBuffer::from_raw(buffer_ref.as_raw() as sys::ani_arraybuffer) };
+        let (data, byte_length) = env.get_arraybuffer_info(&buffer)?;
+        let bytes = self.encode_bytes();
+        if byte_length != bytes.len() {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!(
+                    "{} allocated {byte_length} bytes for {} Rust bytes",
+                    T::CLASS_NAME,
+                    bytes.len()
+                ),
+            ));
+        }
+        if !bytes.is_empty() {
+            if data.is_null() {
+                return Err(Error::new(
+                    Status::GenericFailure,
+                    "typed array buffer is null",
+                ));
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast::<u8>(), bytes.len())
+            };
+        }
+        Ok(object.into_raw())
     }
 }
 
 impl<'env, T: TypedArrayElement> FromAni<'env> for TypedArray<T> {
-    type Input = sys::ani_arraybuffer;
+    type Input = sys::ani_object;
 
     unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
-        let buffer = unsafe { ArrayBuffer::from_ani(env, value) }?;
-        Self::decode_bytes(buffer.as_slice())
+        let view = unsafe { TypedArraySlice::<T>::from_ani(env, value) }?;
+        Ok(Self::new(view.as_slice().to_vec()))
+    }
+}
+
+/// Zero-copy, read-only view of an ArkTS typed array valid for the ANI scope.
+pub struct TypedArraySlice<'env, T: TypedArrayElement> {
+    data: &'env [T],
+    marker: PhantomData<&'env AniObject<'env>>,
+}
+
+impl<'env, T: TypedArrayElement> TypedArraySlice<'env, T> {
+    /// Returns the borrowed element slice.
+    pub fn as_slice(&self) -> &'env [T] {
+        self.data
+    }
+
+    /// Copies this view into an owned typed array.
+    pub fn to_owned(&self) -> TypedArray<T> {
+        TypedArray::new(self.data.to_vec())
+    }
+
+    /// Number of elements.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Whether no elements are present.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl<T: TypedArrayElement> TypeInfo for TypedArraySlice<'_, T> {
+    fn type_signature() -> &'static str {
+        T::TYPE_SIGNATURE
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_object"
+    }
+}
+
+impl<'env, T: TypedArrayElement> FromAni<'env> for TypedArraySlice<'env, T> {
+    type Input = sys::ani_object;
+
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        if value.is_null() {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "typed array cannot be null",
+            ));
+        }
+        let object = unsafe { AniObject::from_raw(value) };
+        let class = env.find_class(T::CLASS_NAME)?;
+        if !env.object_instance_of(&object, &class)? {
+            return Err(Error::new(
+                Status::InvalidType,
+                format!("expected {}", T::CLASS_NAME),
+            ));
+        }
+        let byte_offset = usize::try_from(env.get_property_by_name_int(&object, "byteOffset")?)
+            .map_err(|_| Error::new(Status::OutOfRange, "negative typed-array byteOffset"))?;
+        let byte_length = usize::try_from(env.get_property_by_name_int(&object, "byteLength")?)
+            .map_err(|_| Error::new(Status::OutOfRange, "negative typed-array byteLength"))?;
+        if !byte_length.is_multiple_of(T::WIDTH) {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "typed-array byteLength is not a multiple of its element width",
+            ));
+        }
+        let buffer_ref = env.get_property_by_name_ref(&object, "buffer")?;
+        let buffer =
+            unsafe { AniArrayBuffer::from_raw(buffer_ref.as_raw() as sys::ani_arraybuffer) };
+        let (base, buffer_length) = env.get_arraybuffer_info(&buffer)?;
+        let end = byte_offset
+            .checked_add(byte_length)
+            .ok_or_else(|| Error::new(Status::OutOfRange, "typed-array byte range overflow"))?;
+        if end > buffer_length || (byte_length != 0 && base.is_null()) {
+            return Err(Error::new(
+                Status::OutOfRange,
+                "typed-array view exceeds its backing ArrayBuffer",
+            ));
+        }
+        let data = unsafe { base.cast::<u8>().add(byte_offset).cast::<T>() };
+        if byte_length != 0 && !(data as usize).is_multiple_of(std::mem::align_of::<T>()) {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "typed-array data is misaligned",
+            ));
+        }
+        Ok(Self {
+            data: unsafe { std::slice::from_raw_parts(data, byte_length / T::WIDTH) },
+            marker: PhantomData,
+        })
     }
 }
 
@@ -193,6 +369,16 @@ mod tests {
                 .unwrap_err()
                 .status,
             Status::InvalidArgs
+        );
+    }
+
+    #[test]
+    fn aliases_expose_native_arkts_classes() {
+        assert_eq!(Uint8Array::type_signature(), "Lstd/core/Uint8Array;");
+        assert_eq!(Float64Array::ani_c_type(), "ani_object");
+        assert_eq!(
+            <u16 as TypedArrayElement>::CLASS_NAME,
+            "std.core.Uint16Array"
         );
     }
 }

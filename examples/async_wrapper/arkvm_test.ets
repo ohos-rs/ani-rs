@@ -42,6 +42,18 @@ export class AsyncWidget {
   native this_handle_ready(): Promise<boolean>;
 }
 
+export class CounterAsyncIterator {
+  native constructor();
+  native __ani_native_next(): Promise<int | null>;
+  async next(): Promise<IteratorResult<int>> {
+    let __ani_result = await this.__ani_native_next();
+    if (__ani_result == null) {
+      return new IteratorResult<int>();
+    }
+    return new IteratorResult<int>(__ani_result);
+  }
+}
+
 export namespace example {
   export class MyClass {
     static native create(_name: string): long;
@@ -61,7 +73,10 @@ export native function async_square(n: int): int;
 export native function background_square(input: int): Promise<int>;
 export native function batch_compute(count: int): long;
 export native function cancel_arkts_promise_wait(promise: Promise<string>): boolean;
+export native function custom_async_error(operation: string): Promise<string>;
 export native function env_roundtrip(value: string): Promise<string>;
+export native function fail_async_iterator(operation: string): void;
+export native function finish_async_iterator(): void;
 export native function promise_delayed(delay_ms: int, value: string): long;
 export native function promise_env_rejected(message: string): Promise<string>;
 export native function promise_env_resolved(value: string): Promise<string>;
@@ -73,6 +88,7 @@ export native function promise_resolve_string(value: string): long;
 export native function promise_resolver_into_deferred(value: string): Promise<string>;
 export native function promise_resolver_reject_message(message: string): Promise<void>;
 export native function promise_resolver_resolve_value(value: string): Promise<string>;
+export native function push_async_iterator_value(value: int): void;
 export native function signature_override_echo(value: string): Promise<string>;
 export native function tokio_await_arkts_promise(promise: Promise<string>): Promise<string>;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
@@ -276,6 +292,49 @@ function main(): void {
   __assert_eq_string("async_receiver_describe", widgetDesc, "widget:3");
   let thisReady: boolean = waitForCompletion(() => widget.this_handle_ready());
   __assert_true("async_this_injection", thisReady);
+
+  let customErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await custom_async_error("qemu-custom-error");
+      return false;
+    } catch (value) {
+      let error = value as Error;
+      __assert_eq_string("custom_async_error_status", error.name, "AsyncDomainFailure");
+      __assert_eq_string("custom_async_error_message", error.message, "domain-specific asynchronous failure");
+      let context = error.cause as Record<string, Object>;
+      let metadata = context["metadata"] as Record<string, string>;
+      let operation = metadata["operation"];
+      __assert_true("custom_async_error_metadata", operation != undefined && operation == "qemu-custom-error");
+      __assert_eq_int("custom_async_error_code", error.code, 71001);
+      return true;
+    }
+  });
+  __assert_true("custom_async_error_rejected", customErrorOk);
+
+  let iterator = new CounterAsyncIterator();
+  push_async_iterator_value(10);
+  push_async_iterator_value(20);
+  finish_async_iterator();
+  let iteratorFirst: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  let iteratorSecond: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  let iteratorEnd: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  __assert_true("async_iterator_first_not_done", !iteratorFirst.done);
+  __assert_eq_int("async_iterator_first", iteratorFirst.value as int, 10);
+  __assert_eq_int("async_iterator_second", iteratorSecond.value as int, 20);
+  __assert_true("async_iterator_done", iteratorEnd.done);
+
+  let failingIterator = new CounterAsyncIterator();
+  fail_async_iterator("stream-next");
+  let streamErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await failingIterator.next();
+      return false;
+    } catch (value) {
+      __assert_eq_int("async_iterator_custom_error", (value as Error).code, 71001);
+      return true;
+    }
+  });
+  __assert_true("async_iterator_custom_error_rejected", streamErrorOk);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);

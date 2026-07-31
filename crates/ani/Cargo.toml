@@ -1,6 +1,6 @@
 [package]
 name = "ani"
-version = "0.0.1-alpha.1"
+version = "0.0.2-alpha.1"
 edition = "2024"
 rust-version.workspace = true
 description = "ANI bindings for Rust - like napi-rs for ArkTS-Static"
@@ -11,12 +11,15 @@ categories = ["api-bindings", "development-tools::ffi"]
 
 [features]
 default = ["api24"]
-# Use ANI primitive boxing/unboxing APIs introduced in OpenHarmony API 24.
-# Disable default features to retain the legacy wrapper-class implementation.
+# Minimum-runtime contracts. `api26` is the release-validation profile and
+# includes every ANI operation available in the pinned API 26 header.  The ANI
+# ABI itself only added primitive boxing/unboxing after API 23, in API 24.
+api23 = []
 api24 = []
+api26 = ["api24"]
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
-# Serialize typed Rust values through a deterministic ArkTS JSON string boundary.
+# Map serde values to native ArkTS Record/Array/boxed primitive object graphs.
 serde-json = ["dep:serde", "dep:serde_json"]
 # Ergonomic alias matching napi-rs async exports.
 async = ["tokio_rt"]

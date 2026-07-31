@@ -225,6 +225,8 @@ pub enum AniType {
     EnumItem,
     /// ArrayBuffer - binary data buffer type
     ArrayBuffer,
+    /// Native ArkTS typed-array class name.
+    TypedArray(String),
     /// Tuple type (for function arguments)
     Tuple(Vec<AniType>),
     /// NativePointer<T> - typed native pointer wrapper exposed as ArkTS `long`
@@ -554,23 +556,13 @@ impl AniType {
             return AniType::EnumItem;
         }
 
-        // Check for ArrayBuffer types
+        // Check for ArrayBuffer and native TypedArray types.
+        if let Some(class_name) = parse_typed_array_class(&ident, &segment.arguments) {
+            return AniType::TypedArray(class_name.to_string());
+        }
         if matches!(
             ident.as_str(),
-            "ArrayBuffer"
-                | "ArrayBufferSlice"
-                | "AniArrayBuffer"
-                | "TypedArray"
-                | "Int8Array"
-                | "Uint8Array"
-                | "Int16Array"
-                | "Uint16Array"
-                | "Int32Array"
-                | "Uint32Array"
-                | "BigInt64Array"
-                | "BigUint64Array"
-                | "Float32Array"
-                | "Float64Array"
+            "ArrayBuffer" | "ArrayBufferSlice" | "AniArrayBuffer"
         ) {
             return AniType::ArrayBuffer;
         }
@@ -667,7 +659,7 @@ impl AniType {
         // Check for generic wrapper types
 
         match ident.as_str() {
-            "Option" => {
+            "Option" | "AsyncIteratorValue" => {
                 let inner = extract_first_generic_type(&segment.arguments)
                     .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params)))
                     .unwrap_or_else(|| {
@@ -839,6 +831,7 @@ impl AniType {
             AniType::EnumItem => quote! { ani::sys::ani_enum_item },
 
             AniType::ArrayBuffer => quote! { ani::sys::ani_arraybuffer },
+            AniType::TypedArray(_) => quote! { ani::sys::ani_object },
             AniType::Tuple(_) => quote! { ani::sys::ani_object },
             AniType::NativePointer(_) => quote! { ani::sys::ani_long },
             AniType::FixedArray(p) => p.to_fixed_array_ani_c_type(),
@@ -1044,6 +1037,7 @@ impl AniType {
             }
 
             AniType::ArrayBuffer => "Lstd/core/ArrayBuffer;".to_string(),
+            AniType::TypedArray(class_name) => format!("Lstd/core/{class_name};"),
             AniType::NativePointer(_) => "J".to_string(),
             AniType::FixedArray(p) => format!("A{{{}}}", p.to_new_primitive_signature()),
             AniType::TypeParam(_) => "Lstd/core/Object;".to_string(),
@@ -1078,6 +1072,7 @@ impl AniType {
                 "C{std.core.Object}".to_string()
             }
             AniType::ArrayBuffer => "C{std.core.ArrayBuffer}".to_string(),
+            AniType::TypedArray(class_name) => format!("C{{std.core.{class_name}}}"),
             AniType::NativePointer(_) => PrimitiveType::I64.to_boxed_new_signature().to_string(),
             AniType::FixedArray(p) => format!("A{{{}}}", p.to_new_primitive_signature()),
             AniType::TypeParam(_) => "C{std.core.Object}".to_string(),
@@ -1346,6 +1341,39 @@ fn parse_set_type(args: &PathArguments, type_params: &HashSet<String>) -> Option
             type_params,
         )),
     })
+}
+
+fn parse_typed_array_class<'a>(ident: &str, args: &'a PathArguments) -> Option<&'a str> {
+    match ident {
+        "Int8Array" => Some("Int8Array"),
+        "Uint8Array" => Some("Uint8Array"),
+        "Int16Array" => Some("Int16Array"),
+        "Uint16Array" => Some("Uint16Array"),
+        "Int32Array" => Some("Int32Array"),
+        "Uint32Array" => Some("Uint32Array"),
+        "BigInt64Array" => Some("BigInt64Array"),
+        "BigUint64Array" => Some("BigUint64Array"),
+        "Float32Array" => Some("Float32Array"),
+        "Float64Array" => Some("Float64Array"),
+        "TypedArray" | "TypedArraySlice" => {
+            let inner = extract_first_generic_type(args)?;
+            let Type::Path(path) = inner else { return None };
+            match path.path.segments.last()?.ident.to_string().as_str() {
+                "i8" => Some("Int8Array"),
+                "u8" => Some("Uint8Array"),
+                "i16" => Some("Int16Array"),
+                "u16" => Some("Uint16Array"),
+                "i32" => Some("Int32Array"),
+                "u32" => Some("Uint32Array"),
+                "i64" => Some("BigInt64Array"),
+                "u64" => Some("BigUint64Array"),
+                "f32" => Some("Float32Array"),
+                "f64" => Some("Float64Array"),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn type_path_qualified_name(type_path: &TypePath) -> String {

@@ -11,6 +11,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ohos-rs/ani-rs"
 
 [workspace.dependencies]
-ani = { path = "crates/ani", version = "0.0.1-alpha.1" }
+ani = { path = "crates/ani", version = "0.0.2-alpha.1" }
 ani-sys = { path = "crates/sys", version = "0.0.1-alpha.1" }
 ani-derive = { path = "crates/derive", version = "0.0.1-beta.1" }

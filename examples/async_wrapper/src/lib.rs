@@ -1,6 +1,9 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
-use ani::conversions::{Deferred, PromiseRaw, RefContainer, ThreadsafeFunction};
+use ani::conversions::{
+    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, PromiseRaw, RefContainer, StreamNextTask,
+    StreamSender, ThreadsafeFunction,
+};
 use ani::prelude::*;
 use ani_derive::{ani, AniClass};
 use std::sync::{
@@ -9,6 +12,35 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+
+#[derive(Debug)]
+pub struct AsyncDomainError {
+    operation: String,
+}
+
+impl std::fmt::Display for AsyncDomainError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "async operation {} failed", self.operation)
+    }
+}
+
+impl std::error::Error for AsyncDomainError {}
+
+impl AniErrorPayload for AsyncDomainError {
+    fn ani_status(&self) -> &str {
+        "AsyncDomainFailure"
+    }
+    fn ani_code(&self) -> i32 {
+        71001
+    }
+    fn ani_message(&self) -> &str {
+        "domain-specific asynchronous failure"
+    }
+    fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
+        visitor("operation", &self.operation);
+        visitor("retryable", "false");
+    }
+}
 
 fn expensive_computation(input: i32) -> i32 {
     thread::sleep(Duration::from_millis(100));
@@ -23,6 +55,12 @@ fn fetch_data(url: &str) -> String {
 static ASYNC_CTOR_TOTAL: AtomicI32 = AtomicI32::new(0);
 static ASYNC_CTOR_NOTE: OnceLock<Mutex<String>> = OnceLock::new();
 static ASYNC_ACCESSOR_NOTE: OnceLock<Mutex<String>> = OnceLock::new();
+struct CounterAsyncIteratorState {
+    sender: Option<StreamSender<i32, AsyncDomainError>>,
+    stream: AsyncStream<i32, AsyncDomainError>,
+}
+
+static ASYNC_ITERATOR_STATE: OnceLock<Mutex<Option<CounterAsyncIteratorState>>> = OnceLock::new();
 
 fn async_ctor_note_store() -> &'static Mutex<String> {
     ASYNC_CTOR_NOTE.get_or_init(|| Mutex::new(String::new()))
@@ -30,6 +68,76 @@ fn async_ctor_note_store() -> &'static Mutex<String> {
 
 fn async_accessor_note_store() -> &'static Mutex<String> {
     ASYNC_ACCESSOR_NOTE.get_or_init(|| Mutex::new(String::new()))
+}
+
+fn async_iterator_store() -> &'static Mutex<Option<CounterAsyncIteratorState>> {
+    ASYNC_ITERATOR_STATE.get_or_init(|| Mutex::new(None))
+}
+
+#[ani(class = "CounterAsyncIterator", constructor)]
+pub fn counter_async_iterator_new() -> Result<()> {
+    let (sender, stream) = ani::conversions::stream_channel_with_error(16)?;
+    *async_iterator_store()
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))? =
+        Some(CounterAsyncIteratorState {
+            sender: Some(sender),
+            stream,
+        });
+    Ok(())
+}
+
+#[ani(class = "CounterAsyncIterator", name = "next")]
+pub fn counter_async_iterator_next(
+) -> AsyncTask<StreamNextTask<i32, AsyncDomainError>, AsyncIteratorValue<i32>> {
+    async_iterator_store()
+        .lock()
+        .expect("async iterator lock poisoned")
+        .as_ref()
+        .expect("CounterAsyncIterator constructor must run first")
+        .stream
+        .next_task()
+}
+
+#[ani]
+pub fn push_async_iterator_value(value: i32) -> Result<()> {
+    async_iterator_store()
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?
+        .as_ref()
+        .ok_or_else(|| Error::new(Status::NotFound, "CounterAsyncIterator is not initialized"))?
+        .sender
+        .as_ref()
+        .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
+        .send(value)
+}
+
+#[ani]
+pub fn finish_async_iterator() -> Result<()> {
+    let mut state = async_iterator_store()
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?;
+    let Some(state) = state.as_mut() else {
+        return Err(Error::new(
+            Status::NotFound,
+            "CounterAsyncIterator is not initialized",
+        ));
+    };
+    state.sender.take();
+    Ok(())
+}
+
+#[ani]
+pub fn fail_async_iterator(operation: String) -> Result<()> {
+    async_iterator_store()
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?
+        .as_ref()
+        .ok_or_else(|| Error::new(Status::NotFound, "CounterAsyncIterator is not initialized"))?
+        .sender
+        .as_ref()
+        .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
+        .send_error(AsyncDomainError { operation })
 }
 
 #[derive(Debug, Default, PartialEq, Eq, AniClass)]
@@ -447,6 +555,7 @@ pub struct SquareTask {
 impl Task for SquareTask {
     type Output = i32;
     type JsValue = i32;
+    type Error = Error;
 
     fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output> {
         cancellation.check()?;
@@ -485,6 +594,13 @@ pub async fn tokio_fetch_text_async(url: String) -> Result<String> {
 pub async fn tokio_fail_async(message: String) -> Result<String> {
     tokio::time::sleep(Duration::from_millis(5)).await;
     Err(Error::new(Status::InvalidArgs, message))
+}
+
+#[ani(async)]
+pub async fn custom_async_error(
+    operation: String,
+) -> std::result::Result<String, AsyncDomainError> {
+    Err(AsyncDomainError { operation })
 }
 
 #[ani(async)]

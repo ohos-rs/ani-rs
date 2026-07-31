@@ -868,6 +868,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         | AniType::TupleValue
         | AniType::EnumItem
         | AniType::ArrayBuffer
+        | AniType::TypedArray(_)
         | AniType::Function(_)
         | AniType::FnArgs(_)
         | AniType::Unknown(_) => format!("null as {}", ets_type),
@@ -980,6 +981,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         AniType::TupleValue => "TupleValue".to_string(),
         AniType::EnumItem => "EnumItem".to_string(),
         AniType::ArrayBuffer => "ArrayBuffer".to_string(),
+        AniType::TypedArray(class_name) => class_name.clone(),
         AniType::NativePointer(_) => "long".to_string(),
         AniType::FixedArray(p) => value_array_type_name(p).to_string(),
         AniType::TypeParam(name) => name.clone(),
@@ -1693,6 +1695,31 @@ pub fn generate_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> 
     format!(
         "native __ani_native_next(): {};\nnext(): IteratorResult<{}> {{\n  let __ani_result = this.__ani_native_next();\n  if (__ani_result == null) {{\n    return new IteratorResult<{}>();\n  }}\n  return new IteratorResult<{}>(__ani_result);\n}}",
         native_ty, item_ty, item_ty, item_ty,
+    )
+}
+
+pub fn generate_async_iterator_next_ets_binding(sig: &Signature, skip_first: bool) -> String {
+    let params = collect_exposed_params(sig, skip_first);
+    debug_assert!(
+        params.is_empty(),
+        "async iterator next should not expose parameters"
+    );
+    let ret_spec = exposed_return_spec(sig);
+    let item_ty = match &sig.output {
+        ReturnType::Type(_, ty) => match AniType::from_syn_type(ty) {
+            AniType::Promise(promise) => match promise.inner.as_deref() {
+                Some(AniType::Wrapper(WrapperType::Option(inner))) => {
+                    ets_public_type_for_ani_type(inner)
+                }
+                _ => "Object".to_string(),
+            },
+            _ => "Object".to_string(),
+        },
+        ReturnType::Default => "Object".to_string(),
+    };
+    format!(
+        "native __ani_native_next(): {};\nasync next(): Promise<IteratorResult<{}>> {{\n  let __ani_result = await this.__ani_native_next();\n  if (__ani_result == null) {{\n    return new IteratorResult<{}>();\n  }}\n  return new IteratorResult<{}>(__ani_result);\n}}",
+        ret_spec.surface.native_ty, item_ty, item_ty, item_ty,
     )
 }
 

@@ -2,6 +2,8 @@
 repository = "https://gitcode.com/openharmony/interface_sdk_c"
 revision = "860f3d9974f6fa61b8e4c2ebd3fd3bc7cdcff921"
 path = "ani/ani.h"
-minimum_api_level = 24
+minimum_api_level = 23
+default_api_level = 24
+header_api_level = 26
 validated_qemu_release = "ohos-qemu-vpn-20260728"
 bindgen = "0.72.1"

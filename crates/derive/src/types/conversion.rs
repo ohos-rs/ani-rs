@@ -220,6 +220,7 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
             | AniType::Set(_)
             | AniType::Map(_)
             | AniType::ArrayBuffer
+            | AniType::TypedArray(_)
             | AniType::Tuple(_)
             | AniType::AnyValue
             | AniType::TupleValue
@@ -503,7 +504,7 @@ fn generate_generic_from_ani_conversion_with_custom_error(
 fn generate_param_conversion_error(on_error_return: &TokenStream) -> TokenStream {
     quote! {
         let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        unsafe { ani::error::throw_error_payload(env_wrapper.as_raw(), &e) };
         #on_error_return
     }
 }
@@ -511,7 +512,7 @@ fn generate_param_conversion_error(on_error_return: &TokenStream) -> TokenStream
 fn generate_return_conversion_error(on_error_return: TokenStream) -> TokenStream {
     quote! {
         let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        unsafe { ani::error::throw_error_payload(env_wrapper.as_raw(), &e) };
         #on_error_return
     }
 }
@@ -705,6 +706,7 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
             | AniType::TupleValue
             | AniType::EnumItem
             | AniType::ArrayBuffer
+            | AniType::TypedArray(_)
             | AniType::Either(_)
             | AniType::Null
             | AniType::Undefined

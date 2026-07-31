@@ -3,8 +3,8 @@ use syn::Signature;
 use crate::codegen::RegisterTarget;
 use crate::types::{
     EtsDeclKind, emit_compile_ets_class_member, emit_compile_ets_rendered_decl,
-    generate_ctor_ets_binding, generate_fn_ets_binding, generate_getter_ets_decl,
-    generate_iterator_next_ets_binding, generate_setter_ets_decl,
+    generate_async_iterator_next_ets_binding, generate_ctor_ets_binding, generate_fn_ets_binding,
+    generate_getter_ets_decl, generate_iterator_next_ets_binding, generate_setter_ets_decl,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -26,6 +26,7 @@ pub enum ClassOpKind {
     IndexSetter,
     IteratorFactory { iterator_class: String },
     IteratorNext { item_type: String },
+    AsyncIteratorNext { item_type: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,6 +216,9 @@ impl ClassOpDescriptor {
     pub fn render_ets_binding(&self, sig: &Signature, skip_first: bool) -> String {
         match &self.kind {
             ClassOpKind::IteratorNext { .. } => generate_iterator_next_ets_binding(sig, skip_first),
+            ClassOpKind::AsyncIteratorNext { .. } => {
+                generate_async_iterator_next_ets_binding(sig, skip_first)
+            }
             _ => generate_fn_ets_binding(
                 EtsDeclKind::Class,
                 sig,
@@ -233,6 +237,7 @@ impl ClassOpKind {
             ClassOpKind::IndexSetter => "$_set",
             ClassOpKind::IteratorFactory { .. } => "$_iterator",
             ClassOpKind::IteratorNext { .. } => "next",
+            ClassOpKind::AsyncIteratorNext { .. } => "next",
         }
     }
 

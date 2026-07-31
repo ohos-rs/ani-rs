@@ -22,7 +22,7 @@ mod imp {
 
     use crate::conversions::{Deferred, PromiseRaw, PromiseValue};
     use crate::env::Env;
-    use crate::error::{Error, Result, Status};
+    use crate::error::{AniErrorPayload, Error, Result, Status};
 
     static TOKIO_RUNTIME: Mutex<Option<Arc<::tokio::runtime::Runtime>>> = Mutex::new(None);
     static LOCAL_WORKER: Mutex<Option<LocalWorker>> = Mutex::new(None);
@@ -200,7 +200,7 @@ mod imp {
         T: for<'vm> PromiseValue<'vm>,
         Build: FnOnce() -> F + Send + 'static,
         F: Future<Output = std::result::Result<T, E>> + 'static,
-        E: std::fmt::Display,
+        E: AniErrorPayload,
     {
         let vm = env.get_vm()?;
         let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
@@ -278,7 +278,7 @@ mod imp {
     where
         T: Send + 'static + for<'vm> PromiseValue<'vm>,
         F: Future<Output = std::result::Result<T, E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: AniErrorPayload,
     {
         spawn_future_result_factory(env, move || future)
     }
@@ -290,13 +290,13 @@ mod imp {
     ) -> Result<()>
     where
         T: for<'vm> PromiseValue<'vm>,
-        E: std::fmt::Display,
+        E: AniErrorPayload,
     {
         let guard = vm.attach_current_thread_scoped()?;
         let env = guard.env();
         match outcome {
             Ok(value) => deferred.resolve_value(env, value),
-            Err(error) => deferred.reject(env, error.to_string()),
+            Err(error) => deferred.reject_with_payload(env, error),
         }
     }
 }
@@ -307,7 +307,7 @@ mod imp {
 
     use crate::conversions::{PromiseRaw, PromiseValue};
     use crate::env::Env;
-    use crate::error::{Error, Result, Status};
+    use crate::error::{AniErrorPayload, Error, Result, Status};
 
     const MISSING_TOKIO_RT: &str =
         "async bindings require enabling `ani` feature `async` (or `tokio_rt`)";
@@ -335,7 +335,7 @@ mod imp {
     where
         T: Send + 'static + for<'vm> PromiseValue<'vm>,
         F: Future<Output = std::result::Result<T, E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: AniErrorPayload,
     {
         let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
         deferred.reject(env, MISSING_TOKIO_RT)?;
@@ -366,7 +366,7 @@ mod imp {
         T: for<'vm> PromiseValue<'vm>,
         Build: FnOnce() -> F + Send + 'static,
         F: Future<Output = std::result::Result<T, E>> + 'static,
-        E: std::fmt::Display,
+        E: AniErrorPayload,
     {
         let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
         deferred.reject(env, MISSING_TOKIO_RT)?;

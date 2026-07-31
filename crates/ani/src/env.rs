@@ -11,12 +11,39 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr;
 use std::slice;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::conversions::{Deferred, PromiseRaw};
 use crate::error::{BusinessError, Error, Result, Status, check_status};
 use crate::sys;
 use crate::types::*;
 use crate::vm::AniVm;
+
+static LIVE_GLOBAL_REFERENCES: AtomicUsize = AtomicUsize::new(0);
+static LIVE_WEAK_REFERENCES: AtomicUsize = AtomicUsize::new(0);
+
+/// Reference counts owned through the safe `Env` API, used by leak gates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReferenceMetrics {
+    /// Live global references.
+    pub global: usize,
+    /// Live weak references.
+    pub weak: usize,
+}
+
+/// Snapshot safe-reference ownership counters.
+pub fn reference_metrics() -> ReferenceMetrics {
+    ReferenceMetrics {
+        global: LIVE_GLOBAL_REFERENCES.load(Ordering::Acquire),
+        weak: LIVE_WEAK_REFERENCES.load(Ordering::Acquire),
+    }
+}
+
+fn decrement_tracked_reference(counter: &AtomicUsize) {
+    let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        value.checked_sub(1)
+    });
+}
 
 // ============================================================================
 // ANI API Call Macros (__ani_interaction_api)
@@ -3927,18 +3954,24 @@ impl<'local> Env<'local> {
 
     /// Create a global reference
     pub fn create_global_ref<'a>(&self, obj: &AniRef<'a>) -> Result<GlobalRef> {
-        ani_call_wrap!(
-            self,
-            GlobalReference_Create,
-            sys::ani_ref,
-            GlobalRef,
-            obj.as_raw()
-        )
+        let reference = (|| -> Result<GlobalRef> {
+            ani_call_wrap!(
+                self,
+                GlobalReference_Create,
+                sys::ani_ref,
+                GlobalRef,
+                obj.as_raw()
+            )
+        })()?;
+        LIVE_GLOBAL_REFERENCES.fetch_add(1, Ordering::AcqRel);
+        Ok(reference)
     }
 
     /// Delete a global reference
     pub fn delete_global_ref(&self, gref: GlobalRef) -> Result<()> {
-        ani_call!(self, GlobalReference_Delete, gref.as_raw())
+        ani_call!(self, GlobalReference_Delete, gref.as_raw())?;
+        decrement_tracked_reference(&LIVE_GLOBAL_REFERENCES);
+        Ok(())
     }
 
     /// Materialize a thread-local reference from a global reference.
@@ -3977,18 +4010,24 @@ impl<'local> Env<'local> {
 
     /// Create a weak reference from a local/global reference.
     pub fn create_weak_ref<'a>(&self, obj: &AniRef<'a>) -> Result<WeakRef> {
-        ani_call_wrap!(
-            self,
-            WeakReference_Create,
-            sys::ani_wref,
-            WeakRef,
-            obj.as_raw()
-        )
+        let reference = (|| -> Result<WeakRef> {
+            ani_call_wrap!(
+                self,
+                WeakReference_Create,
+                sys::ani_wref,
+                WeakRef,
+                obj.as_raw()
+            )
+        })()?;
+        LIVE_WEAK_REFERENCES.fetch_add(1, Ordering::AcqRel);
+        Ok(reference)
     }
 
     /// Delete a weak reference.
     pub fn delete_weak_ref(&self, wref: WeakRef) -> Result<()> {
-        ani_call!(self, WeakReference_Delete, wref.as_raw())
+        ani_call!(self, WeakReference_Delete, wref.as_raw())?;
+        decrement_tracked_reference(&LIVE_WEAK_REFERENCES);
+        Ok(())
     }
 
     /// Upgrade a weak reference.
@@ -5436,7 +5475,10 @@ impl<'local> Env<'local> {
     }
 
     /// Create and immediately reject a typed Promise with a typed [`Error`].
-    pub fn promise_rejected_with_error<T, S: AsRef<str> + std::fmt::Debug>(
+    pub fn promise_rejected_with_error<
+        T,
+        S: AsRef<str> + std::fmt::Debug + Send + Sync + 'static,
+    >(
         &self,
         error: Error<S>,
     ) -> Result<PromiseRaw<'local, T>> {

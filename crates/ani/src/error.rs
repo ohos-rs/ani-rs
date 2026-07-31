@@ -16,29 +16,28 @@
 //!
 //! ## Custom Error Types
 //!
-//! You can define custom error types that implement `AsRef<str>`:
+//! You can define custom error types that implement [`AniErrorPayload`]:
 //!
 //! ```rust,ignore
 //! use ani::prelude::*;
 //!
-//! pub enum MyError {
-//!     InvalidInput,
-//!     NotFound,
-//!     Internal(String),
-//! }
+//! #[derive(Debug)]
+//! pub struct MyError(String);
 //!
-//! impl AsRef<str> for MyError {
-//!     fn as_ref(&self) -> &str {
-//!         match self {
-//!             MyError::InvalidInput => "InvalidInput",
-//!             MyError::NotFound => "NotFound",
-//!             MyError::Internal(_) => "InternalError",
-//!         }
+//! impl std::fmt::Display for MyError {
+//!     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//!         f.write_str(&self.0)
 //!     }
 //! }
 //!
-//! fn custom_error() -> std::result::Result<(), Error<MyError>> {
-//!     Err(Error::new(MyError::InvalidInput, "The input is invalid"))
+//! impl AniErrorPayload for MyError {
+//!     fn ani_status(&self) -> &str { "MyError" }
+//!     fn ani_code(&self) -> i32 { 70001 }
+//!     fn ani_message(&self) -> &str { &self.0 }
+//! }
+//!
+//! fn custom_error() -> std::result::Result<(), MyError> {
+//!     Err(MyError("The input is invalid".into()))
 //! }
 //! ```
 //!
@@ -58,10 +57,12 @@
 //! }
 //! ```
 
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::env::Env;
 use crate::sys;
+use crate::types::{AniError, AniRef};
 
 // ============================================================================
 // Status Code
@@ -236,6 +237,12 @@ pub struct Error<S: AsRef<str> = Status> {
     pub status: S,
     /// Human-readable error message
     pub reason: String,
+    /// Optional dynamic status name received across a type-erased boundary.
+    pub status_name: Option<String>,
+    /// Optional application-defined numeric BusinessError code.
+    pub code: Option<i32>,
+    /// Additional string metadata copied to the ArkTS error object.
+    pub metadata: BTreeMap<String, String>,
     /// Optional cause of this error
     pub cause: Option<Box<Error<Status>>>,
 }
@@ -259,6 +266,9 @@ impl<S: AsRef<str>> Error<S> {
         Self {
             status,
             reason: reason.into(),
+            status_name: None,
+            code: None,
+            metadata: BTreeMap::new(),
             cause: None,
         }
     }
@@ -279,6 +289,9 @@ impl<S: AsRef<str>> Error<S> {
         Self {
             status: S::default(),
             reason: reason.into(),
+            status_name: None,
+            code: None,
+            metadata: BTreeMap::new(),
             cause: None,
         }
     }
@@ -302,19 +315,139 @@ impl<S: AsRef<str>> Error<S> {
         Self {
             status,
             reason: reason.into(),
+            status_name: None,
+            code: None,
+            metadata: BTreeMap::new(),
             cause: Some(Box::new(cause)),
         }
     }
 
+    /// Override the stable numeric BusinessError code.
+    pub fn with_code(mut self, code: i32) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    /// Preserve a dynamic status identifier received from ArkTS.
+    pub fn with_status_name(mut self, status: impl Into<String>) -> Self {
+        self.status_name = Some(status.into());
+        self
+    }
+
+    /// Attach application metadata to the ArkTS error object.
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
     /// Get the status code as a string reference
     pub fn status_str(&self) -> &str {
-        self.status.as_ref()
+        self.status_name
+            .as_deref()
+            .unwrap_or_else(|| self.status.as_ref())
+    }
+}
+
+/// Extensible error contract shared by sync exports, async functions, tasks,
+/// Promise rejection, and streams.
+///
+/// Custom application errors can implement this trait directly; ani-rs never
+/// requires conversion to its built-in [`Status`] enum or to a string.
+pub trait AniErrorPayload: fmt::Debug + fmt::Display + Send + Sync + 'static {
+    /// Stable status identifier exposed as ArkTS `Error.name` and as the
+    /// structured context's `status` field.
+    fn ani_status(&self) -> &str {
+        "GenericFailure"
+    }
+
+    /// Numeric BusinessError code. Applications may define their own range.
+    fn ani_code(&self) -> i32 {
+        business_error_code(self.ani_status())
+    }
+
+    /// Human-readable message.
+    fn ani_message(&self) -> &str;
+
+    /// Optional structured cause.
+    fn ani_cause(&self) -> Option<&dyn AniErrorPayload> {
+        None
+    }
+
+    /// Visit extra string properties to attach to the ArkTS error.
+    fn visit_ani_metadata(&self, _visitor: &mut dyn FnMut(&str, &str)) {}
+}
+
+impl<S> AniErrorPayload for Error<S>
+where
+    S: AsRef<str> + fmt::Debug + Send + Sync + 'static,
+{
+    fn ani_status(&self) -> &str {
+        self.status_str()
+    }
+
+    fn ani_code(&self) -> i32 {
+        self.code
+            .unwrap_or_else(|| business_error_code(self.status_str()))
+    }
+
+    fn ani_message(&self) -> &str {
+        &self.reason
+    }
+
+    fn ani_cause(&self) -> Option<&dyn AniErrorPayload> {
+        self.cause
+            .as_deref()
+            .map(|cause| cause as &dyn AniErrorPayload)
+    }
+
+    fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
+        for (key, value) in &self.metadata {
+            visitor(key, value);
+        }
+    }
+}
+
+/// Type-erased error retained across an asynchronous scheduler boundary.
+pub type DynAniError = Box<dyn AniErrorPayload>;
+
+impl<T> AniErrorPayload for Box<T>
+where
+    T: AniErrorPayload + ?Sized,
+{
+    fn ani_status(&self) -> &str {
+        (**self).ani_status()
+    }
+    fn ani_code(&self) -> i32 {
+        (**self).ani_code()
+    }
+    fn ani_message(&self) -> &str {
+        (**self).ani_message()
+    }
+    fn ani_cause(&self) -> Option<&dyn AniErrorPayload> {
+        (**self).ani_cause()
+    }
+    fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
+        (**self).visit_ani_metadata(visitor);
+    }
+}
+
+/// Stable numeric BusinessError code for a framework status name.
+pub fn business_error_code(status: &str) -> i32 {
+    match status {
+        "InvalidArgs" | "InvalidType" => 401,
+        "NotFound" => 404,
+        "OutOfMemory" => 100001,
+        "QueueFull" => 100002,
+        "Closing" => 100003,
+        "Cancelled" => 100004,
+        "OutOfRange" => 10200001,
+        _ => 1,
     }
 }
 
 impl<S: AsRef<str> + fmt::Debug> fmt::Display for Error<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.status.as_ref(), self.reason)?;
+        write!(f, "[{}] {}", self.status_str(), self.reason)?;
         if let Some(ref cause) = self.cause {
             write!(f, "\n  Caused by: {}", cause)?;
         }
@@ -489,30 +622,11 @@ impl<S: AsRef<str>> BusinessError<S> {
     /// let biz_err = BusinessError::from(err);
     /// unsafe { biz_err.throw_into(env) };
     /// ```
-    pub unsafe fn throw_into(self, env: *mut sys::ani_env) {
-        if env.is_null() {
-            return;
-        }
-        let env_ref = unsafe { Env::from_raw_unchecked(env) };
-        let fallback_message = format!("[{}] {}", self.0.status.as_ref(), self.0.reason);
-        let has_error =
-            crate::ani_call_ret_result!(env_ref, ExistUnhandledError, sys::ani_boolean, 0)
-                .map(|r| r != 0)
-                .unwrap_or(false);
-        if has_error {
-            return;
-        }
-        if let Some(error) = unsafe { self.create_error_object(env) } {
-            let _ = crate::ani_call!(env_ref, ThrowError, error);
-            return;
-        }
-        if let Ok(error_string) = env_ref.create_string(&fallback_message) {
-            let _ = crate::ani_call!(
-                env_ref,
-                ThrowError,
-                error_string.into_raw() as sys::ani_error
-            );
-        }
+    pub unsafe fn throw_into(self, env: *mut sys::ani_env)
+    where
+        S: fmt::Debug + Send + Sync + 'static,
+    {
+        unsafe { throw_error_payload(env, &self.0) };
     }
 
     /// Create an ANI BusinessError object
@@ -520,75 +634,184 @@ impl<S: AsRef<str>> BusinessError<S> {
     /// # Safety
     ///
     /// The env pointer must be valid.
-    unsafe fn create_error_object(self, env: *mut sys::ani_env) -> Option<sys::ani_error> {
+    unsafe fn create_error_object(&self, env: *mut sys::ani_env) -> Option<sys::ani_error>
+    where
+        S: fmt::Debug + Send + Sync + 'static,
+    {
         let env_ref = unsafe { Env::from_raw_unchecked(env) };
-        let message = format!("[{}] {}", self.0.status.as_ref(), self.0.reason);
-        let code = match self.0.status.as_ref() {
-            "InvalidType" => 401,
-            "OutOfRange" => 10200001,
-            _ => 1,
-        };
+        create_error_payload(&env_ref, &self.0)
+    }
 
-        // Current OpenHarmony runtimes expose the ECMAScript-compatible
-        // throwable as `std.core.Error`. Its constructor takes the message and
-        // an optional ErrorOptions value; `undefined` is the canonical value
-        // when no options are supplied.
-        if let Ok(err_cls) = env_ref.find_class("std.core.Error")
-            && let Ok(err_ctor) =
-                env_ref.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
-            && let Ok(text) = env_ref.create_string(&message)
-            && let Ok(undefined) = env_ref.get_undefined_object()
-        {
-            let args = [
-                crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
-                crate::types::ani_value_ref(undefined as sys::ani_ref),
-            ];
-            if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
-                let _ = env_ref.set_property_by_name_int(&err_obj, "code", code);
-                return Some(err_obj.into_raw() as sys::ani_error);
-            }
-        }
+    /// Materialize this error for Promise rejection or explicit propagation.
+    pub fn into_ani_error<'env>(&self, env: &Env<'env>) -> Result<AniError<'env>>
+    where
+        S: fmt::Debug + Send + Sync + 'static,
+    {
+        let raw = unsafe { self.create_error_object(env.as_raw()) }.ok_or_else(|| {
+            Error::new(
+                Status::GenericFailure,
+                "failed to create ArkTS BusinessError",
+            )
+        })?;
+        Ok(unsafe { AniError::from_raw(raw) })
+    }
+}
 
-        // Keep compatibility with older runtimes that exposed only the
-        // no-argument BusinessError/escompat.Error constructors.
-        for (class_name, error_name) in [
-            ("@ohos.base.BusinessError", "BusinessError"),
-            ("escompat.Error", "Error"),
-        ] {
-            let err_cls = match env_ref.find_class(class_name) {
-                Ok(cls) => cls,
-                Err(_) => continue,
-            };
-            let err_ctor = match env_ref.find_constructor(&err_cls, ":") {
-                Ok(ctor) => ctor,
-                Err(_) => continue,
-            };
-            let err_obj = match env_ref.new_object(&err_cls, &err_ctor, &[]) {
-                Ok(obj) => obj,
-                Err(_) => continue,
-            };
+/// Throw any structured error payload into an ANI environment without first
+/// converting it to ani-rs's built-in [`Error`] type.
+///
+/// # Safety
+///
+/// `env` must point to a valid environment for the current thread.
+pub unsafe fn throw_error_payload(env: *mut sys::ani_env, payload: &dyn AniErrorPayload) {
+    if env.is_null() {
+        return;
+    }
+    let env_ref = unsafe { Env::from_raw_unchecked(env) };
+    let fallback_message = format!("[{}] {}", payload.ani_status(), payload.ani_message());
+    let has_error = crate::ani_call_ret_result!(env_ref, ExistUnhandledError, sys::ani_boolean, 0)
+        .map(|r| r != 0)
+        .unwrap_or(false);
+    if has_error {
+        return;
+    }
+    if let Some(error) = create_error_payload(&env_ref, payload) {
+        let _ = crate::ani_call!(env_ref, ThrowError, error);
+        return;
+    }
+    if let Ok(error_string) = env_ref.create_string(&fallback_message) {
+        let _ = crate::ani_call!(
+            env_ref,
+            ThrowError,
+            error_string.into_raw() as sys::ani_error
+        );
+    }
+}
 
-            let name = match env_ref.create_string(error_name) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let text = match env_ref.create_string(&message) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let name_ref =
-                unsafe { crate::types::AniRef::from_raw(name.into_raw() as sys::ani_ref) };
-            let text_ref =
-                unsafe { crate::types::AniRef::from_raw(text.into_raw() as sys::ani_ref) };
+/// Materialize any custom async/sync error payload without erasing it.
+pub fn payload_to_ani_error<'env>(
+    env: &Env<'env>,
+    payload: &dyn AniErrorPayload,
+) -> Result<AniError<'env>> {
+    let raw = create_error_payload(env, payload).ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            "failed to create ArkTS BusinessError",
+        )
+    })?;
+    Ok(unsafe { AniError::from_raw(raw) })
+}
 
-            let _ = env_ref.set_property_by_name_ref(&err_obj, "name", &name_ref);
-            let _ = env_ref.set_property_by_name_ref(&err_obj, "message", &text_ref);
-            let _ = env_ref.set_property_by_name_int(&err_obj, "code", code);
+fn set_error_metadata(
+    env: &Env<'_>,
+    object: &crate::types::AniObject<'_>,
+    status: &str,
+    message: &str,
+    code: i32,
+) {
+    if let Ok(name) = env.create_string(status) {
+        let name = unsafe { AniRef::from_raw(name.into_raw() as sys::ani_ref) };
+        let _ = env.set_property_by_name_ref(object, "name", &name);
+    }
+    if let Ok(text) = env.create_string(message) {
+        let text = unsafe { AniRef::from_raw(text.into_raw() as sys::ani_ref) };
+        let _ = env.set_property_by_name_ref(object, "message", &text);
+    }
+    let _ = env.set_property_by_name_int(object, "code", code);
+}
+
+fn attach_error_context(
+    env: &Env<'_>,
+    object: &crate::types::AniObject<'_>,
+    payload: &dyn AniErrorPayload,
+) {
+    use crate::conversions::ToAni;
+
+    let mut metadata = HashMap::<String, String>::new();
+    payload.visit_ani_metadata(&mut |key, value| {
+        metadata.insert(key.to_string(), value.to_string());
+    });
+    let Ok(metadata) = metadata.to_ani(env) else {
+        return;
+    };
+    let Ok(status) = env.create_string(payload.ani_status()) else {
+        return;
+    };
+    let mut context = HashMap::<String, AniRef<'_>>::new();
+    context.insert("status".to_string(), unsafe {
+        AniRef::from_raw(status.into_raw() as sys::ani_ref)
+    });
+    context.insert("metadata".to_string(), unsafe {
+        AniRef::from_raw(metadata.into_raw() as sys::ani_ref)
+    });
+    if let Some(cause) = payload.ani_cause()
+        && let Some(cause) = create_error_payload(env, cause)
+    {
+        context.insert("cause".to_string(), unsafe {
+            AniRef::from_raw(cause as sys::ani_ref)
+        });
+    }
+    if let Ok(context) = context.to_ani(env) {
+        let context = unsafe { AniRef::from_raw(context.into_raw() as sys::ani_ref) };
+        let _ = env.set_property_by_name_ref(object, "cause", &context);
+    }
+}
+
+fn create_error_payload(
+    env_ref: &Env<'_>,
+    payload: &dyn AniErrorPayload,
+) -> Option<sys::ani_error> {
+    let status = payload.ani_status();
+    let message = payload.ani_message();
+    let code = payload.ani_code();
+
+    // Current OpenHarmony runtimes expose the ECMAScript-compatible
+    // throwable as `std.core.Error`. Its constructor takes the message and
+    // an optional ErrorOptions value; `undefined` is the canonical value
+    // when no options are supplied.
+    if let Ok(err_cls) = env_ref.find_class("std.core.Error")
+        && let Ok(err_ctor) =
+            env_ref.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
+        && let Ok(text) = env_ref.create_string(message)
+        && let Ok(undefined) = env_ref.get_undefined_object()
+    {
+        let args = [
+            crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
+            crate::types::ani_value_ref(undefined as sys::ani_ref),
+        ];
+        if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
+            set_error_metadata(env_ref, &err_obj, status, message, code);
+            attach_error_context(env_ref, &err_obj, payload);
             return Some(err_obj.into_raw() as sys::ani_error);
         }
-
-        None
     }
+
+    // Keep compatibility with older runtimes that exposed only the
+    // no-argument BusinessError/escompat.Error constructors.
+    for (class_name, error_name) in [
+        ("@ohos.base.BusinessError", "BusinessError"),
+        ("escompat.Error", "Error"),
+    ] {
+        let err_cls = match env_ref.find_class(class_name) {
+            Ok(cls) => cls,
+            Err(_) => continue,
+        };
+        let err_ctor = match env_ref.find_constructor(&err_cls, ":") {
+            Ok(ctor) => ctor,
+            Err(_) => continue,
+        };
+        let err_obj = match env_ref.new_object(&err_cls, &err_ctor, &[]) {
+            Ok(obj) => obj,
+            Err(_) => continue,
+        };
+
+        let _ = error_name;
+        set_error_metadata(env_ref, &err_obj, status, message, code);
+        attach_error_context(env_ref, &err_obj, payload);
+        return Some(err_obj.into_raw() as sys::ani_error);
+    }
+
+    None
 }
 
 impl BusinessError<Status> {
@@ -669,4 +892,25 @@ macro_rules! ani_bail {
     ($status:expr, $($msg:tt)*) => {
         return Err($crate::ani_error!($status, $($msg)*))
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_status_and_metadata_survive_type_erasure() {
+        let error = Error::new(Status::GenericFailure, "remote")
+            .with_status_name("RemoteDomainFailure")
+            .with_code(74001)
+            .with_metadata("operation", "read");
+        let erased: DynAniError = Box::new(error);
+        assert_eq!(erased.ani_status(), "RemoteDomainFailure");
+        assert_eq!(erased.ani_code(), 74001);
+        let mut metadata = BTreeMap::new();
+        erased.visit_ani_metadata(&mut |key, value| {
+            metadata.insert(key.to_string(), value.to_string());
+        });
+        assert_eq!(metadata.get("operation").map(String::as_str), Some("read"));
+    }
 }

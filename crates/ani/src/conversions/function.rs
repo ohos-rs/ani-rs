@@ -80,6 +80,7 @@
 //! }
 //! ```
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -775,31 +776,20 @@ struct ThreadsafeMessage<Args, Return> {
 }
 
 struct ThreadsafeFunctionInner<Args, Return> {
-    sender: Mutex<Option<std::sync::mpsc::SyncSender<ThreadsafeMessage<Args, Return>>>>,
+    queue: Mutex<VecDeque<ThreadsafeMessage<Args, Return>>>,
+    space_available: Condvar,
+    capacity: usize,
     callback: Arc<FunctionRef<Args, Return>>,
-    join: Mutex<Option<std::thread::JoinHandle<()>>>,
+    draining: AtomicBool,
     closed: AtomicBool,
-}
-
-impl<Args, Return> Drop for ThreadsafeFunctionInner<Args, Return> {
-    fn drop(&mut self) {
-        if let Ok(sender) = self.sender.get_mut() {
-            sender.take();
-        }
-        if let Ok(join) = self.join.get_mut()
-            && let Some(join) = join.take()
-            && join.thread().id() != std::thread::current().id()
-        {
-            let _ = join.join();
-        }
-    }
 }
 
 /// A bounded, cloneable cross-thread callback queue.
 ///
-/// A dedicated dispatcher serializes calls and attaches to the owning ANI VM
-/// for each invocation. Calls can apply blocking or non-blocking backpressure,
-/// return an awaitable result, and are rejected after [`close`](Self::close).
+/// A shared scheduler serializes each callback queue and attaches to the owning
+/// ANI VM for each invocation. Calls can apply blocking or non-blocking
+/// backpressure, return an awaitable result, and are rejected after
+/// [`close`](Self::close).
 pub struct ThreadsafeFunction<Args, Return> {
     inner: Arc<ThreadsafeFunctionInner<Args, Return>>,
 }
@@ -832,30 +822,13 @@ where
             ));
         }
 
-        let callback = Arc::new(callback);
-        let (sender, receiver) =
-            std::sync::mpsc::sync_channel::<ThreadsafeMessage<Args, Return>>(capacity);
-        let dispatcher_callback = Arc::clone(&callback);
-        let join = std::thread::Builder::new()
-            .name("ani-threadsafe-function".to_string())
-            .spawn(move || {
-                while let Ok(message) = receiver.recv() {
-                    message
-                        .state
-                        .finish(dispatcher_callback.call_attached(message.args));
-                }
-            })
-            .map_err(|error| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("failed to spawn callback dispatcher: {error}"),
-                )
-            })?;
         Ok(Self {
             inner: Arc::new(ThreadsafeFunctionInner {
-                sender: Mutex::new(Some(sender)),
-                callback,
-                join: Mutex::new(Some(join)),
+                queue: Mutex::new(VecDeque::with_capacity(capacity)),
+                space_available: Condvar::new(),
+                capacity,
+                callback: Arc::new(callback),
+                draining: AtomicBool::new(false),
                 closed: AtomicBool::new(false),
             }),
         })
@@ -870,34 +843,41 @@ where
         if self.is_closed() {
             return Err(Error::new(Status::Closing, "ThreadsafeFunction is closed"));
         }
-        let sender = self
-            .inner
-            .sender
-            .lock()
-            .map_err(|_| Error::new(Status::GenericFailure, "callback queue lock poisoned"))?
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| Error::new(Status::Closing, "ThreadsafeFunction is closed"))?;
         let state = Arc::new(ThreadsafeCallState::new());
-        let message = ThreadsafeMessage {
-            args,
-            state: Arc::clone(&state),
-        };
+        let mut queue = self
+            .inner
+            .queue
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "callback queue lock poisoned"))?;
+        if self.is_closed() {
+            return Err(Error::new(Status::Closing, "ThreadsafeFunction is closed"));
+        }
         match mode {
-            ThreadsafeFunctionCallMode::Blocking => sender
-                .send(message)
-                .map_err(|_| Error::new(Status::Closing, "ThreadsafeFunction is closed"))?,
+            ThreadsafeFunctionCallMode::Blocking => {
+                while queue.len() >= self.inner.capacity && !self.is_closed() {
+                    queue = self.inner.space_available.wait(queue).map_err(|_| {
+                        Error::new(Status::GenericFailure, "callback queue lock poisoned")
+                    })?;
+                }
+                if self.is_closed() {
+                    return Err(Error::new(Status::Closing, "ThreadsafeFunction is closed"));
+                }
+            }
             ThreadsafeFunctionCallMode::NonBlocking => {
-                sender.try_send(message).map_err(|error| match error {
-                    std::sync::mpsc::TrySendError::Full(_) => {
-                        Error::new(Status::QueueFull, "ThreadsafeFunction queue is full")
-                    }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        Error::new(Status::Closing, "ThreadsafeFunction is closed")
-                    }
-                })?
+                if queue.len() >= self.inner.capacity {
+                    return Err(Error::new(
+                        Status::QueueFull,
+                        "ThreadsafeFunction queue is full",
+                    ));
+                }
             }
         }
+        queue.push_back(ThreadsafeMessage {
+            args,
+            state: Arc::clone(&state),
+        });
+        drop(queue);
+        schedule_threadsafe_drain(Arc::clone(&self.inner), mode)?;
         Ok(ThreadsafeFunctionCall { state })
     }
 
@@ -909,10 +889,8 @@ where
 
     /// Close the queue. Already queued calls are drained before the dispatcher exits.
     pub fn close(&self) {
-        if !self.inner.closed.swap(true, Ordering::AcqRel)
-            && let Ok(mut sender) = self.inner.sender.lock()
-        {
-            sender.take();
+        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+            self.inner.space_available.notify_all();
         }
     }
 
@@ -924,6 +902,87 @@ where
     /// Returns whether the underlying callback carries owning VM information.
     pub fn can_call_attached(&self) -> bool {
         self.inner.callback.can_call_attached()
+    }
+}
+
+fn schedule_threadsafe_drain<Args, Return>(
+    inner: Arc<ThreadsafeFunctionInner<Args, Return>>,
+    mode: ThreadsafeFunctionCallMode,
+) -> Result<()>
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    if inner.draining.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
+    let scheduled = Arc::clone(&inner);
+    let result = match mode {
+        ThreadsafeFunctionCallMode::Blocking => {
+            crate::scheduler::shared().schedule_blocking(move || drain_threadsafe_queue(scheduled))
+        }
+        ThreadsafeFunctionCallMode::NonBlocking => {
+            crate::scheduler::shared().schedule(move || drain_threadsafe_queue(scheduled))
+        }
+    };
+    if let Err(error) = result {
+        // The submission that elected itself as the drainer owns every item
+        // queued while `draining` is true. If the process-wide scheduler is
+        // saturated, fail that entire batch explicitly; otherwise concurrent
+        // callers could receive a future that is never scheduled or woken.
+        let pending = match inner.queue.lock() {
+            Ok(mut queue) => {
+                inner.draining.store(false, Ordering::Release);
+                queue.drain(..).collect::<Vec<_>>()
+            }
+            Err(_) => {
+                inner.draining.store(false, Ordering::Release);
+                Vec::new()
+            }
+        };
+        inner.space_available.notify_all();
+        for message in pending {
+            message
+                .state
+                .finish(Err(Error::new(error.status, error.reason.clone())));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn drain_threadsafe_queue<Args, Return>(inner: Arc<ThreadsafeFunctionInner<Args, Return>>)
+where
+    Args: ToAniArgs + Send + 'static,
+    Return: for<'a> FromAni<'a> + TypeInfo + Send + 'static,
+{
+    loop {
+        let message = match inner.queue.lock() {
+            Ok(mut queue) => {
+                let message = queue.pop_front();
+                if message.is_some() {
+                    inner.space_available.notify_one();
+                }
+                message
+            }
+            Err(_) => return,
+        };
+        if let Some(message) = message {
+            message
+                .state
+                .finish(inner.callback.call_attached(message.args));
+            continue;
+        }
+
+        inner.draining.store(false, Ordering::Release);
+        let has_more = inner
+            .queue
+            .lock()
+            .map(|queue| !queue.is_empty())
+            .unwrap_or(false);
+        if !has_more || inner.draining.swap(true, Ordering::AcqRel) {
+            return;
+        }
     }
 }
 
@@ -1427,6 +1486,19 @@ mod tests {
             callback.call_attached(()).unwrap_err().status,
             Status::InvalidArgs
         );
+    }
+
+    #[test]
+    fn callback_completion_race_has_no_lost_wakeups() {
+        for expected in 0..1_000 {
+            let state = Arc::new(ThreadsafeCallState::new());
+            let pending = ThreadsafeFunctionCall {
+                state: Arc::clone(&state),
+            };
+            let worker = std::thread::spawn(move || state.finish(Ok(expected)));
+            assert_eq!(pending.wait().unwrap(), expected);
+            worker.join().unwrap();
+        }
     }
 
     #[test]

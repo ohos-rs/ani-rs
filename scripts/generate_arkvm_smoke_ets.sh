@@ -137,6 +137,11 @@ let mutated = __ANI_GENERATED__.replace_first_byte(bufA, 255 as short);
 __assert_eq_int("arraybuffer_copy_on_write", __ANI_GENERATED__.first_byte(mutated), 255);
 let typed = __ANI_GENERATED__.make_u16_array();
 __assert_eq_long("typed_array_roundtrip", __ANI_GENERATED__.sum_u16_array(typed), 65794);
+let typedInput = new Uint16Array(3);
+typedInput[0] = 4;
+typedInput[1] = 5;
+typedInput[2] = 6;
+__assert_eq_long("typed_array_native_input", __ANI_GENERATED__.sum_u16_array(typedInput), 15);
 ETS
       ;;
     ani-example-async-wrapper)
@@ -257,6 +262,49 @@ function main(): void {
   let thisReady: boolean = waitForCompletion(() => widget.this_handle_ready());
   __assert_true("async_this_injection", thisReady);
 
+  let customErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.custom_async_error("qemu-custom-error");
+      return false;
+    } catch (value) {
+      let error = value as Error;
+      __assert_eq_string("custom_async_error_status", error.name, "AsyncDomainFailure");
+      __assert_eq_string("custom_async_error_message", error.message, "domain-specific asynchronous failure");
+      let context = error.cause as Record<string, Object>;
+      let metadata = context["metadata"] as Record<string, string>;
+      let operation = metadata["operation"];
+      __assert_true("custom_async_error_metadata", operation != undefined && operation == "qemu-custom-error");
+      __assert_eq_int("custom_async_error_code", error.code, 71001);
+      return true;
+    }
+  });
+  __assert_true("custom_async_error_rejected", customErrorOk);
+
+  let iterator = new CounterAsyncIterator();
+  __ANI_GENERATED__.push_async_iterator_value(10);
+  __ANI_GENERATED__.push_async_iterator_value(20);
+  __ANI_GENERATED__.finish_async_iterator();
+  let iteratorFirst: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  let iteratorSecond: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  let iteratorEnd: IteratorResult<int> = waitForCompletion(() => iterator.next());
+  __assert_true("async_iterator_first_not_done", !iteratorFirst.done);
+  __assert_eq_int("async_iterator_first", iteratorFirst.value as int, 10);
+  __assert_eq_int("async_iterator_second", iteratorSecond.value as int, 20);
+  __assert_true("async_iterator_done", iteratorEnd.done);
+
+  let failingIterator = new CounterAsyncIterator();
+  __ANI_GENERATED__.fail_async_iterator("stream-next");
+  let streamErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await failingIterator.next();
+      return false;
+    } catch (value) {
+      __assert_eq_int("async_iterator_custom_error", (value as Error).code, 71001);
+      return true;
+    }
+  });
+  __assert_true("async_iterator_custom_error_rejected", streamErrorOk);
+
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);
   }
@@ -328,8 +376,12 @@ ETS
       cat <<'ETS'
 __assert_true("enum_status_terminal", __ANI_GENERATED__.is_terminal(Status.Stopped));
 __assert_eq_string("enum_status_name", __ANI_GENERATED__.status_name(Status.Running), "running");
-let pointJson: string = "{\"Point\":{\"x\":3,\"y\":4}}";
-__assert_eq_string("structured_enum_json", __ANI_GENERATED__.message_identity(pointJson), pointJson);
+let pointData = new Record<string, Object>();
+pointData["x"] = new Int(3);
+pointData["y"] = new Int(4);
+let point = new Record<string, Object>();
+point["Point"] = pointData;
+__assert_eq_int("structured_enum_native_record", __ANI_GENERATED__.message_point_sum(point), 7);
 ETS
       ;;
     ani-example-call-method)

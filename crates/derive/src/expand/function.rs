@@ -483,6 +483,9 @@ impl ClassMemberPlanKind {
         match self {
             ClassMemberPlanKind::Constructor => "<ctor>".to_string(),
             ClassMemberPlanKind::Property(_) => format!("__ani_native_{ets_name}"),
+            ClassMemberPlanKind::Op(
+                ClassOpKind::IteratorNext { .. } | ClassOpKind::AsyncIteratorNext { .. },
+            ) => "__ani_native_next".to_string(),
             ClassMemberPlanKind::Method { .. } | ClassMemberPlanKind::Op(..)
                 if requires_nullish_bridge =>
             {
@@ -651,6 +654,42 @@ fn resolve_class_op_kind(
                     return Err(syn::Error::new_spanned(
                         ty,
                         "#[ani(name = \"$_iterator\")] return type must be a concrete iterator class",
+                    ));
+                }
+            }
+        }
+        "next" if owner_short_name(owner).ends_with("AsyncIterator") => {
+            let arg_count = binding_input.exposed_arg_count(sig);
+            if arg_count != 0 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "async iterator next() cannot expose parameters",
+                ));
+            }
+            let ReturnType::Type(_, ty) = &sig.output else {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "async iterator next() must return Promise<Option<T>> or AsyncTask<_, Option<T>>",
+                ));
+            };
+            match AniType::from_syn_type(ty) {
+                AniType::Promise(promise) => match promise.inner.as_deref() {
+                    Some(AniType::Wrapper(WrapperType::Option(inner))) => {
+                        ClassOpKind::AsyncIteratorNext {
+                            item_type: ets_public_type_for_ani_type(inner),
+                        }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            ty,
+                            "async iterator next() Promise must resolve to Option<T>",
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        ty,
+                        "async iterator next() must return Promise<Option<T>> or AsyncTask<_, Option<T>>",
                     ));
                 }
             }
@@ -1929,6 +1968,32 @@ mod tests {
                 },
                 native_symbol_name: "__ani_native_next".to_string(),
                 kind: ClassOpKind::IteratorNext {
+                    item_type: "int".to_string(),
+                },
+            }))
+        );
+
+        let async_next_attrs = BindgenAttrs {
+            class: Some("demo.WidgetAsyncIterator".to_string()),
+            ..Default::default()
+        };
+        let async_next_sig: Signature = parse_quote! {
+            fn next() -> AsyncTask<StreamNextTask<i32>, AsyncIteratorValue<i32>>
+        };
+        let async_next_plan =
+            resolve_binding_plan(&async_next_attrs, "next", &async_next_sig, binding_input)
+                .expect("async next binding plan should resolve");
+        assert_eq!(async_next_plan.register_symbol_name, "__ani_native_next");
+        assert_eq!(
+            async_next_plan.class_descriptor,
+            Some(ClassDescriptorMember::Op(ClassOpDescriptor {
+                metadata: ClassMemberMetadata {
+                    owner: "demo.WidgetAsyncIterator".to_string(),
+                    public_name: "next".to_string(),
+                    scope: ClassMemberScope::Instance,
+                },
+                native_symbol_name: "__ani_native_next".to_string(),
+                kind: ClassOpKind::AsyncIteratorNext {
                     item_type: "int".to_string(),
                 },
             }))

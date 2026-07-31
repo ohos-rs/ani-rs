@@ -419,7 +419,7 @@ fn generate_async_blocking_receiver_wrapper(
                 &__ani_env,
                 &__ani_this,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
         }
     } else {
         quote! {}
@@ -441,7 +441,7 @@ fn generate_async_blocking_receiver_wrapper(
                 match ani::conversions::RefContainer::new(&__ani_env_outer, &__ani_this_ref) {
                     Ok(value) => value,
                     Err(e) => {
-                        let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+                        unsafe { ani::error::throw_error_payload(__ani_env_outer.as_raw(), &e) };
                         #param_error_return
                     }
                 }
@@ -452,21 +452,21 @@ fn generate_async_blocking_receiver_wrapper(
                 let env = __ani_env.as_raw();
                 let __ani_this: ani::types::AniObject<'_> = __ani_this_container
                     .to_local(&__ani_env)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 let mut __ani_self: #self_ty = #self_ty::__ani_from_bound_ani_object(
                     &__ani_env,
                     __ani_this.as_raw(),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 #injected_env_bindings
                 let result = __ani_self.#method_name(#(#call_args),*).await;
                 #writeback
-                result.map_err(|e| e.to_string())
+                result.map_err(|e| -> ani::error::DynAniError { Box::new(e) })
             };
             let result = match ani::tokio::block_on_future_result(__ani_future) {
                 Ok(result) => result,
                 Err(e) => {
-                    let _ = ani::conversions::throw_error(&__ani_env_outer, &e.to_string());
+                    unsafe { ani::error::throw_error_payload(__ani_env_outer.as_raw(), &e) };
                     #param_error_return
                 }
             };
@@ -508,7 +508,7 @@ fn generate_async_receiver_wrapper(
                 __ani_env,
                 &__ani_this,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
         }
     } else {
         quote! {}
@@ -542,26 +542,28 @@ fn generate_async_receiver_wrapper(
             #async_param_captures
 
             match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
-                let __ani_attach = __ani_vm.attach_current_thread_scoped().map_err(|e| e.to_string())?;
+                let __ani_attach = __ani_vm
+                    .attach_current_thread_scoped()
+                    .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 let __ani_env = __ani_attach.env();
                 let env = __ani_env.as_raw();
                 let __ani_this: ani::types::AniObject<'_> = __ani_this_container
                     .to_local(&__ani_env)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 let mut __ani_self: #self_ty = #self_ty::__ani_from_bound_ani_object(
                     __ani_env,
                     __ani_this.as_raw(),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 #injected_env_bindings
                 #async_param_restores
                 let result = __ani_self.#method_name(#(#call_args),*).await;
                 #writeback
-                result.map_err(|e| e.to_string())
+                result.map_err(|e| -> ani::error::DynAniError { Box::new(e) })
             }) {
                 Ok(promise) => promise.into_raw(),
                 Err(e) => {
-                    match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+                    match ani::conversions::PromiseRaw::<()>::reject_with_error(&__ani_env, e) {
                         Ok(promise) => promise.into_raw(),
                         Err(_) => std::ptr::null_mut(),
                     }
@@ -675,14 +677,14 @@ fn build_param_error_return(return_type: &ReturnType) -> TokenStream {
 fn generate_throw_error_and_return(on_error_return: &TokenStream) -> TokenStream {
     quote! {
         let env_wrapper = ani::env::Env::from_raw_unchecked(env);
-        let _ = ani::conversions::throw_error(&env_wrapper, &e.to_string());
+        unsafe { ani::error::throw_error_payload(env_wrapper.as_raw(), &e) };
         #on_error_return
     }
 }
 
 fn generate_promise_reject_and_return() -> TokenStream {
     quote! {
-        return match ani::conversions::PromiseRaw::<()>::reject(&__ani_env, e.to_string()) {
+        return match ani::conversions::PromiseRaw::<()>::reject_with_error(&__ani_env, e) {
             Ok(promise) => promise.into_raw(),
             Err(_) => std::ptr::null_mut(),
         };

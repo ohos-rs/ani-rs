@@ -6,7 +6,7 @@
 use std::fmt::Debug;
 
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{AniErrorPayload, Error, Result};
 use crate::sys;
 use crate::{ani_call, ani_call_ret_result};
 
@@ -33,7 +33,7 @@ impl<T: TypeInfo, E> TypeInfo for std::result::Result<T, E> {
 impl<'env, T, E> ToAni<'env> for std::result::Result<T, E>
 where
     T: ToAni<'env>,
-    E: Debug,
+    E: AniErrorPayload,
 {
     type Output = T::Output;
 
@@ -41,9 +41,10 @@ where
         match self {
             Ok(value) => value.to_ani(env),
             Err(e) => {
-                // Throw ANI exception
-                let error_msg = format!("{:?}", e);
-                let _ = throw_error(env, &error_msg);
+                let error_msg = e.to_string();
+                if let Ok(error) = crate::error::payload_to_ani_error(env, &e) {
+                    let _ = crate::ani_call!(env, ThrowError, error.into_raw());
+                }
                 Err(Error::new(crate::error::Status::PendingError, error_msg))
             }
         }

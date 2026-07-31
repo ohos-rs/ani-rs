@@ -24,6 +24,15 @@ pub fn message_identity(message: Message) -> Message {
 }
 
 #[ani]
+pub fn message_point_sum(message: Message) -> i32 {
+    match message {
+        Message::Point { x, y } => x + y,
+        Message::Text(text) => text.len() as i32,
+        Message::Empty => 0,
+    }
+}
+
+#[ani]
 pub fn next_status(status: Status) -> Status {
     match status {
         Status::Idle => Status::Running,

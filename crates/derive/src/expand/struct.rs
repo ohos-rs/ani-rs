@@ -139,6 +139,7 @@ fn expand_transparent_struct(
             inner,
             AniType::Wrapper(crate::types::ani_type::WrapperType::Vec(_))
                 | AniType::ArrayBuffer
+                | AniType::TypedArray(_)
                 | AniType::FixedArray(_)
                 | AniType::ArrayHandle(_)
         )
@@ -1015,15 +1016,15 @@ fn expand_enum_type_impls(
 }
 
 fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStream {
-    let string_type: syn::Type = syn::parse_quote!(String);
-    register_exact_type_alias(&enum_name.to_string(), &string_type);
+    let object_type: syn::Type = syn::parse_quote!(ani::types::AniObject<'static>);
+    register_exact_type_alias(&enum_name.to_string(), &object_type);
 
     let mut parts = qualified_name
         .split('.')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     let ets_name = parts.pop().unwrap_or(qualified_name);
-    let rendered = format!("type {ets_name} = string");
+    let rendered = format!("type {ets_name} = Record<string, Object> | string");
     if parts.is_empty() {
         emit_compile_ets_rendered_decl(EtsDeclKind::Global, "", &rendered);
     } else {
@@ -1033,11 +1034,11 @@ fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStrea
     quote! {
         impl ani::conversions::TypeInfo for #enum_name {
             fn type_signature() -> &'static str {
-                "Lstd/core/String;"
+                "Lstd/core/Object;"
             }
 
             fn ani_c_type() -> &'static str {
-                "ani_string"
+                "ani_object"
             }
         }
 
@@ -1045,16 +1046,10 @@ fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStrea
         where
             Self: ani::serde::Serialize,
         {
-            type Output = ani::types::AniString<'env>;
+            type Output = ani::sys::ani_object;
 
             fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
-                let value = ani::serde_json::to_string(&self).map_err(|error| {
-                    ani::error::Error::new(
-                        ani::error::Status::InvalidArgs,
-                        format!("failed to serialize structured enum: {error}"),
-                    )
-                })?;
-                env.create_string(&value)
+                ani::conversions::ToAni::to_ani(ani::conversions::Json::new(self), env)
             }
         }
 
@@ -1062,19 +1057,19 @@ fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStrea
         where
             Self: ani::serde::de::DeserializeOwned,
         {
-            type Input = ani::types::AniString<'env>;
+            type Input = ani::sys::ani_object;
 
             unsafe fn from_ani(
                 env: &ani::env::Env<'env>,
                 value: Self::Input,
             ) -> ani::error::Result<Self> {
-                let value = env.get_string(&value)?;
-                ani::serde_json::from_str(&value).map_err(|error| {
-                    ani::error::Error::new(
-                        ani::error::Status::InvalidArgs,
-                        format!("failed to deserialize structured enum: {error}"),
+                let value = unsafe {
+                    <ani::conversions::Json<Self> as ani::conversions::FromAni<'env>>::from_ani(
+                        env,
+                        value,
                     )
-                })
+                }?;
+                Ok(value.into_inner())
             }
         }
     }
@@ -1262,15 +1257,15 @@ mod tests {
     }
 
     #[test]
-    fn derive_ani_enum_supports_structured_variants_through_json() {
+    fn derive_ani_enum_supports_structured_variants_through_native_objects() {
         let input: DeriveInput = parse_quote! {
             enum BadEnum {
                 Value(i32),
             }
         };
         let expanded = expand_enum_derive(input).to_string();
-        assert!(expanded.contains("serde_json :: to_string"));
-        assert!(expanded.contains("serde_json :: from_str"));
-        assert!(expanded.contains("ani_string"));
+        assert!(expanded.contains("conversions :: Json :: new"));
+        assert!(expanded.contains("ani_object"));
+        assert!(!expanded.contains("AniString"));
     }
 }
