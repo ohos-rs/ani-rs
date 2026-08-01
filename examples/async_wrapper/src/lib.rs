@@ -511,7 +511,7 @@ pub fn tokio_await_arkts_promise(
     promise: PromiseRaw<'_, String>,
 ) -> Result<PromiseRaw<'static, String>> {
     let future = promise.into_future(env)?;
-    ani::tokio::spawn_future(env, future).map(PromiseRaw::into_static)
+    ani::tokio::spawn_future_result(env, future).map(PromiseRaw::into_static)
 }
 
 #[ani]
@@ -684,6 +684,64 @@ pub fn runtime_kernel_shutdown_and_restart() -> Result<bool> {
     }
     let after = kernel.metrics().generation;
     Ok(drained && after > before && marker.load(Ordering::Acquire))
+}
+
+static QEMU_LEAK_BASELINE: std::sync::Mutex<Option<RuntimeMetrics>> = std::sync::Mutex::new(None);
+
+/// Capture a per-scenario runtime ownership baseline inside the real guest.
+#[ani]
+pub fn runtime_leak_checkpoint() -> Result<()> {
+    *QEMU_LEAK_BASELINE
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "leak baseline lock poisoned"))? =
+        Some(runtime_metrics()?);
+    Ok(())
+}
+
+/// Expose the tracked global-reference count to the real-guest stress suite.
+#[ani]
+pub fn runtime_global_reference_count() -> Result<i64> {
+    i64::try_from(runtime_metrics()?.references.global)
+        .map_err(|_| Error::new(Status::OutOfRange, "global-reference count exceeds i64"))
+}
+
+/// Wait for terminal async cleanup before evaluating the global-reference
+/// leak gate. Promise settlement and Rust-side reference deletion are
+/// intentionally decoupled, so an immediate snapshot can race with the final
+/// cleanup callback on slow guests.
+#[ani]
+pub fn runtime_wait_for_global_reference_count(expected: i64, timeout_ms: i32) -> Result<bool> {
+    let expected = usize::try_from(expected)
+        .map_err(|_| Error::new(Status::InvalidArgs, "expected reference count is negative"))?;
+    let timeout_ms = u64::try_from(timeout_ms)
+        .map_err(|_| Error::new(Status::InvalidArgs, "reference timeout is negative"))?;
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+    loop {
+        let current = runtime_metrics()?.references.global;
+        if current <= expected {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!(
+                "ANI_GLOBAL_REFERENCE_TIMEOUT expected={expected} current={current} timeout_ms={timeout_ms}"
+            );
+            return Ok(false);
+        }
+        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Require every tracked runtime resource to return to the guest baseline.
+#[ani]
+pub fn runtime_assert_no_leaks() -> Result<bool> {
+    let baseline = QEMU_LEAK_BASELINE
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "leak baseline lock poisoned"))?
+        .take()
+        .ok_or_else(|| Error::new(Status::InvalidArgs, "leak baseline was not captured"))?;
+    assert_no_runtime_leaks(baseline, Duration::from_secs(3)).map(|_| true)
 }
 
 // ============================================================================

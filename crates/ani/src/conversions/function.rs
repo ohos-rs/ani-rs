@@ -84,7 +84,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -700,6 +700,13 @@ pub enum ThreadsafeFunctionCallMode {
     NonBlocking,
 }
 
+static PENDING_THREADSAFE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of queued TSFN calls that have not started or been cancelled.
+pub fn pending_threadsafe_function_call_count() -> usize {
+    PENDING_THREADSAFE_CALLS.load(Ordering::Acquire)
+}
+
 struct ThreadsafeCallState<Return> {
     result: Mutex<Option<Result<Return>>>,
     ready: Condvar,
@@ -798,6 +805,7 @@ where
             .lock()
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
+        PENDING_THREADSAFE_CALLS.fetch_sub(pending.len(), Ordering::AcqRel);
         self.space_available.notify_all();
         for message in pending {
             message.state.finish(Err(Error::new(
@@ -907,6 +915,7 @@ where
             args,
             state: Arc::clone(&state),
         });
+        PENDING_THREADSAFE_CALLS.fetch_add(1, Ordering::AcqRel);
         drop(queue);
         schedule_threadsafe_drain(Arc::clone(&self.inner), mode)?;
         Ok(ThreadsafeFunctionCall { state })
@@ -946,7 +955,7 @@ where
 
 fn schedule_threadsafe_drain<Args, Return>(
     inner: Arc<ThreadsafeFunctionInner<Args, Return>>,
-    mode: ThreadsafeFunctionCallMode,
+    _mode: ThreadsafeFunctionCallMode,
 ) -> Result<()>
 where
     Args: ToAniArgs + Send + 'static,
@@ -956,14 +965,33 @@ where
         return Ok(());
     }
     let scheduled = Arc::clone(&inner);
-    let result = match mode {
-        ThreadsafeFunctionCallMode::Blocking => {
-            crate::scheduler::shared().schedule_blocking(move || drain_threadsafe_queue(scheduled))
-        }
-        ThreadsafeFunctionCallMode::NonBlocking => {
-            crate::scheduler::shared().schedule(move || drain_threadsafe_queue(scheduled))
-        }
-    };
+    let rejected = Arc::clone(&inner);
+    let (task, _handle) = crate::async_runtime::RuntimeBlockingTask::new(
+        move || drain_threadsafe_queue(scheduled),
+        move |error| {
+            let pending = match rejected.queue.lock() {
+                Ok(mut queue) => {
+                    rejected.draining.store(false, Ordering::Release);
+                    queue.drain(..).collect::<Vec<_>>()
+                }
+                Err(_) => {
+                    rejected.draining.store(false, Ordering::Release);
+                    Vec::new()
+                }
+            };
+            rejected.space_available.notify_all();
+            PENDING_THREADSAFE_CALLS.fetch_sub(pending.len(), Ordering::AcqRel);
+            for message in pending {
+                let mut callback_error =
+                    Error::new(Status::GenericFailure, error.ani_message().to_string())
+                        .with_status_name(error.ani_status().to_string())
+                        .with_code(error.ani_code());
+                callback_error.set_stack(error.ani_stack().map(str::to_string));
+                message.state.finish(Err(callback_error));
+            }
+        },
+    );
+    let result = crate::async_runtime::spawn_runtime_blocking_task(task).map(|_| ());
     if let Err(error) = result {
         // The submission that elected itself as the drainer owns every item
         // queued while `draining` is true. If the process-wide scheduler is
@@ -980,6 +1008,7 @@ where
             }
         };
         inner.space_available.notify_all();
+        PENDING_THREADSAFE_CALLS.fetch_sub(pending.len(), Ordering::AcqRel);
         for message in pending {
             message
                 .state
@@ -1001,6 +1030,7 @@ where
                 let message = queue.pop_front();
                 if message.is_some() {
                     inner.space_available.notify_one();
+                    PENDING_THREADSAFE_CALLS.fetch_sub(1, Ordering::AcqRel);
                 }
                 message
             }

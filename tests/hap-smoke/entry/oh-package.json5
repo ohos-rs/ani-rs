@@ -1,7 +1,7 @@
 {
-  "name": "entry",
-  "version": "1.0.0",
-  "description": "ani-rs native HAP runtime smoke test",
-  "main": "",
-  "dependencies": {}
+  "name": 'entry',
+  "version": '1.0.0',
+  "description": 'ani-rs native HAP runtime smoke test',
+  "main": '',
+  "dependencies": {},
 }

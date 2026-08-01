@@ -93,7 +93,9 @@ jobs:
       - name: Check public crates against target branch
         env:
           ANI_SEMVER_BASELINE_REV: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/master^' }}
-        run: scripts/check_semver.sh
+        run: |
+          scripts/check_semver.sh
+          scripts/check_abi.sh
 
   performance:
     name: Performance regression gates

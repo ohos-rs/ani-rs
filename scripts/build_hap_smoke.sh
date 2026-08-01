@@ -7,6 +7,9 @@ sdk_root="${DEVECO_SDK_ROOT:-/Applications/DevEco-Studio.app/Contents/sdk/defaul
 deveco_root="${DEVECO_STUDIO_ROOT:-/Applications/DevEco-Studio.app/Contents}"
 work_root="${ANI_HAP_WORK_ROOT:-$repo_root/target/hap-smoke-$arch}"
 ohos_source_root="${OHOS_SOURCE_ROOT:-/Volumes/PSSD/qemu/openharmony}"
+if [[ "$work_root" != /* ]]; then
+  work_root="$repo_root/$work_root"
+fi
 project_root="$work_root/project"
 native_target="$work_root/native-target"
 sdk_base="$work_root/sdk-base"

@@ -1,6 +1,6 @@
 ---
 title: 异步与 Promise
-description: 使用 #[ani(async)] 和 Tokio 把 Rust Future 暴露为 ArkTS Promise。
+description: 使用 #[ani(async)]、RuntimeDomain 和可替换执行器导出 Promise。
 ---
 
 ## 等待 ArkTS Promise
@@ -20,6 +20,8 @@ pub fn await_arkts(
 
 Future 持有全局 ANI 引用。生成的 ETS continuation bridge 在原 Promise 上注册 `then`/reject 回调，settle 时直接唤醒 Rust waiter；等待过程不读取 Promise 的私有字段，也不占用 worker 或 timer。`cancel()` 和 Drop 都会注销等待并释放引用；ANI 没有 Promise 取消原语，因此取消不会强制终止 ArkTS 自身的操作。
 
+默认错误类型是 `ArktsRejection`，会保留原 rejection、`stack`、带环 `cause` 图和 typed metadata。需要领域错误时，使用 `into_future_with_decoder` 传入对象安全的 `RejectionDecoder<E>`；decoder 同时接收 ArkTS rejection 与运行时取消，错误类型不被固定成 ani-rs `Error`。
+
 异步 I/O 或需要等待的 Rust API，优先写成 `#[ani(async)] async fn`。生成的 ArkTS 返回类型是 `Promise<T>`。
 
 ## 开启异步运行时
@@ -31,10 +33,10 @@ ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 tokio = { version = "1", default-features = false, features = ["time"] }
 ```
 
-`async` 是 `tokio_rt` 的易用别名。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync` 等 feature。
+`async-runtime` 只提供执行器无关 SPI；`async` 额外选择内置 Tokio backend。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync` 等 feature。
 
 :::caution
-没有启用 `async` 或 `tokio_rt` 时，`#[ani(async)]` 仍可能通过编译，但返回的 Promise 会立即 reject。
+仅启用 `async-runtime` 时，应用必须在第一次异步调用前注册 `AsyncRuntime`；否则 Promise 以结构化错误 reject。自定义 runtime 不需要链接 Tokio。
 :::
 
 ## 导出 async fn
@@ -181,23 +183,41 @@ pub fn square_in_background(input: i32) -> AsyncTask<Square> {
 
 `Task::Error` 不固定为 ani-rs 的 `Error`；任何实现 `AniErrorPayload` 的业务错误都可以直接使用，调度边界不会先转换为字符串。
 
-## RuntimeKernel 生命周期
+## RuntimeDomain 与自定义执行器
 
-Promise、`AsyncTask`、`ThreadsafeFunction` 和 async stream 共用一个惰性初始化的 `RuntimeKernel`。模块析构会先进入 closing 状态，拒绝新任务，统一取消仍在等待的操作，drain 已接收的工作并 join worker/timer；完成后内核回到 dormant，后续调用会建立新的 generation。
+`#[ani(async)]`、Promise、`AsyncTask`、`ThreadsafeFunction` 和 async stream 全部进入同一个 RuntimeDomain。生成宏提交的是 `RuntimeTask`，不再调用 Tokio API。carrier 本身可跨线程；backend 必须在选定线程调用 `into_local_future()`，并在同一线程 poll/drop 可能为 `!Send` 的 ANI Future。
 
-应用通常不需要手动管理它。测试或需要显式停机的宿主可以使用：
+应用可以实现并注册完整 backend：
 
 ```rust
-use ani::prelude::{runtime_kernel, shutdown_runtime};
+unsafe impl AsyncRuntime for AppRuntime {
+    fn spawn(&self, task: RuntimeTask)
+        -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>>
+    { /* 提交 carrier */ }
 
-let before = runtime_kernel().metrics();
-shutdown_runtime()?;
+    fn spawn_blocking(&self, task: RuntimeBlockingTask)
+        -> std::result::Result<(), AsyncRuntimeRejection<RuntimeBlockingTask>>
+    { /* 提交后调用 task.run() */ }
 
-// 下一次提交会自动初始化新的 generation。
-let after = runtime_kernel().metrics();
+    fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> { /* ... */ }
+    fn start(&self) -> Result<()> { Ok(()) }
+    fn shutdown(&self) -> Result<()> { /* cancel、drain、join */ Ok(()) }
+}
+
+register_async_runtime(AppRuntime::new())?;
 ```
 
-不要从 RuntimeKernel 自己的 worker 内调用同步 shutdown；该路径会返回错误，以免等待当前线程造成死锁。
+`shutdown` 是 unsafe contract：返回前所有 backend thread、task、closure 和 waker 必须停止执行 addon 代码。析构默认有 30 秒 watchdog，可用 `ANI_RUNTIME_SHUTDOWN_TIMEOUT_MS` 调整；非协作任务超时会 fail-fast，不会在 SO 卸载后继续运行。
+
+```rust
+let before = runtime_kernel().metrics();
+shutdown_runtime_domain()?;
+let after = runtime_kernel().metrics(); // 下一次提交会启动新 generation
+```
+
+## ArkTS 主动取消
+
+`spawn_future_result_factory_with_handle` 返回 Promise 与 `RuntimeTaskHandle`。调用 `cancel_with(Box<dyn AniErrorPayload>)` 可使用任意业务错误；`bridge_token()` 把 handle 注册到生成的 `AniCancelHandle` native bridge。ETS 必须在 `AbortSignal` 创建线程读取 `signal.reason` 并调用 `handle.cancel(reason)`，worker 从不访问线程亲和的 AbortSignal。
 
 ## 跨线程回调
 
@@ -240,8 +260,10 @@ sender.send_error(FeedError { message: "closed".into() })?;
 let promise = stream.next_promise(env)?;
 ```
 
-队列有界并提供背压；多个并发 `next()` 按注册顺序完成。生成的 iterator 还提供 `returnIterator()` 和 `throwIterator(reason)`：前者取消生产者并完成所有 waiter，后者保留原始 ArkTS rejection 对象并拒绝 waiter。RuntimeKernel shutdown 会走同一取消路径。
+队列有界并提供背压；多个并发 `next()` 按注册顺序完成。生成的 iterator 还提供 `returnIterator()` 和 `throwIterator(reason)`：前者取消生产者并完成所有 waiter，后者保留原始 ArkTS rejection 对象并拒绝 waiter。RuntimeDomain shutdown 会走同一取消路径。
+
+二进制流可使用 `ohos_byte_stream_channel[_with_error]`，得到 `OhosReadableSource` 与 `OhosWritableSink`。API 23+ 的 `@ohos.util.stream.Readable/Writable` 子类在 ETS 线程调用 pull/write；Rust 端保留 bounded queue、drain、close、error、背压和取消语义。
 
 :::note
-20260728 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。
+`20260731-jitfix` 沿用的 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。
 :::

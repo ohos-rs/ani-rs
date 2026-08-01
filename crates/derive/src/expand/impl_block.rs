@@ -541,7 +541,7 @@ fn generate_async_receiver_wrapper(
             #conversions
             #async_param_captures
 
-            match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
+            match ani::async_runtime::spawn_future_result_factory(&__ani_env, move || async move {
                 let __ani_attach = __ani_vm
                     .attach_current_thread_scoped()
                     .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;

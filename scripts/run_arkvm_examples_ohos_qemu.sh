@@ -15,24 +15,50 @@ work_root="${OHOS_QEMU_WORK_ROOT:-$repo_root/target/ohos-qemu}"
 remote_root="${OHOS_QEMU_REMOTE_ROOT:-/data/local/tmp/ani-rs-qemu}"
 case_timeout="${OHOS_QEMU_CASE_TIMEOUT:-45}"
 case_attempts="${OHOS_QEMU_CASE_ATTEMPTS:-3}"
+hdc_timeout="${OHOS_QEMU_HDC_TIMEOUT:-60}"
+hdc_runtime_timeout="${OHOS_QEMU_HDC_RUNTIME_TIMEOUT:-}"
 package_filter="${OHOS_QEMU_PACKAGE_FILTER:-}"
 runner_asan="${OHOS_QEMU_RUNNER_ASAN:-0}"
+rust_asan="${OHOS_QEMU_RUST_ASAN:-0}"
+lsan="${OHOS_QEMU_LSAN:-0}"
 runner_iterations="${OHOS_QEMU_ITERATIONS:-1}"
 memory_sample="${OHOS_QEMU_MEMORY_SAMPLE:-${OHOS_QEMU_MEMORY_SAMPLE_EVERY:-0}}"
 max_pss_growth_kb="${OHOS_QEMU_MAX_PSS_GROWTH_KB:-}"
+max_per_iteration_us="${OHOS_QEMU_MAX_PER_ITERATION_US:-}"
 
-for numeric in "$runner_iterations" "$memory_sample"; do
+for numeric in \
+  "$runner_iterations" \
+  "$memory_sample" \
+  "$case_timeout" \
+  "$case_attempts" \
+  "$hdc_timeout"; do
   if [[ ! "$numeric" =~ ^[0-9]+$ ]]; then
-    echo "QEMU iteration and memory-sample values must be non-negative integers" >&2
+    echo "QEMU iteration, attempt, and timeout values must be non-negative integers" >&2
     exit 2
   fi
 done
+if [[ -n "$hdc_runtime_timeout" && ! "$hdc_runtime_timeout" =~ ^[0-9]+$ ]]; then
+  echo "OHOS_QEMU_HDC_RUNTIME_TIMEOUT must be a non-negative integer" >&2
+  exit 2
+fi
 if [[ -n "$max_pss_growth_kb" && ! "$max_pss_growth_kb" =~ ^[0-9]+$ ]]; then
   echo "OHOS_QEMU_MAX_PSS_GROWTH_KB must be a non-negative integer" >&2
   exit 2
 fi
+if [[ -n "$max_per_iteration_us" && ! "$max_per_iteration_us" =~ ^[0-9]+$ ]]; then
+  echo "OHOS_QEMU_MAX_PER_ITERATION_US must be a non-negative integer" >&2
+  exit 2
+fi
 if [[ "$runner_iterations" == "0" ]]; then
   echo "OHOS_QEMU_ITERATIONS must be greater than zero" >&2
+  exit 2
+fi
+if [[ -z "$hdc_runtime_timeout" ]]; then
+  hdc_runtime_timeout=$((case_timeout + 30))
+fi
+if [[ "$case_timeout" == "0" || "$case_attempts" == "0" || \
+  "$hdc_timeout" == "0" || "$hdc_runtime_timeout" == "0" ]]; then
+  echo "QEMU case, attempt, and HDC timeout values must be greater than zero" >&2
   exit 2
 fi
 
@@ -80,12 +106,22 @@ clang_bin="$deveco_sdk_root/native/llvm/bin"
 sysroot="$deveco_sdk_root/native/sysroot"
 hdc_bin="${HDC_BIN:-}"
 es2panda_dir="$ohos_source_root/out/arm64_virt/clang_x64/arkcompiler/ets_frontend"
-es2panda="$es2panda_dir/es2panda"
-arktsconfig="$es2panda_dir/arktsconfig.json"
+es2panda="${OHOS_ES2PANDA:-$es2panda_dir/es2panda}"
+arktsconfig="${OHOS_ARKTSCONFIG:-$es2panda_dir/arktsconfig.json}"
+if [[ -z "${OHOS_ES2PANDA:-}" && ! -f "$es2panda" ]]; then
+  host_tools="$ohos_source_root/out/x86_64_virt/clang_x64"
+  candidate="$host_tools/exe.unstripped/clang_x64/arkcompiler/ets_frontend/es2panda"
+  [[ -f "$candidate" ]] && es2panda="$candidate"
+fi
+if [[ -z "${OHOS_ARKTSCONFIG:-}" && ! -f "$arktsconfig" ]]; then
+  candidate="$ohos_source_root/out/x86_64_virt/clang_x64/arkcompiler/ets_frontend/arktsconfig.json"
+  [[ -f "$candidate" ]] && arktsconfig="$candidate"
+fi
 runner="$work_root/ani_abc_runner"
 launcher_abc="$work_root/ohos_qemu_abc_launcher.abc"
 report="$work_root/report.tsv"
 memory_report="$work_root/memory.tsv"
+performance_report="$work_root/performance.tsv"
 
 if [[ -n "$qemu_packages_root" ]]; then
   package_root="$qemu_packages_root/$qemu_package"
@@ -131,15 +167,63 @@ if [[ ! -x "$hdc_bin" ]]; then
   exit 1
 fi
 
-if ! "$hdc_bin" -t "$hdc_target" shell true >/dev/null 2>&1; then
-  "$hdc_bin" tconn "$hdc_target" >/dev/null 2>&1 || true
-fi
-if ! "$hdc_bin" -t "$hdc_target" shell true >/dev/null 2>&1; then
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 2 "$timeout_seconds" "$@"
+    return
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout -k 2 "$timeout_seconds" "$@"
+    return
+  fi
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "missing timeout, gtimeout, or perl for the host HDC watchdog" >&2
+    return 127
+  fi
+
+  "$@" &
+  local command_pid=$!
+  LC_ALL=C LANG=C perl -e '
+    my ($timeout, $pid) = @ARGV;
+    sleep $timeout;
+    if (kill 0, $pid) {
+      warn "host timeout after ${timeout}s\n";
+      kill 15, $pid;
+      sleep 2;
+      kill 9, $pid if kill 0, $pid;
+    }
+  ' "$timeout_seconds" "$command_pid" &
+  local watchdog_pid=$!
+  local status=0
+
+  wait "$command_pid" || status=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  return "$status"
+}
+
+target_connected() {
+  run_with_timeout "$hdc_timeout" "$hdc_bin" list targets |
+    tr -d '\r' |
+    grep -Fxq "$hdc_target"
+}
+
+for _ in $(seq 1 30); do
+  target_connected && break
+  run_with_timeout "$hdc_timeout" "$hdc_bin" tconn "$hdc_target" \
+    >/dev/null 2>&1 || true
+  sleep 1
+done
+if ! target_connected; then
   echo "HDC target is not connected: $hdc_target" >&2
   exit 1
 fi
 
-device_arch="$("$hdc_bin" -t "$hdc_target" shell uname -m | tr -d '\r[:space:]')"
+device_arch="$(run_with_timeout "$hdc_timeout" \
+  "$hdc_bin" -t "$hdc_target" shell uname -m | tr -d '\r[:space:]')"
 if [[ ! "$device_arch" =~ ^($expected_uname)$ ]]; then
   echo "HDC target architecture mismatch: requested $guest_arch, device reports $device_arch" >&2
   exit 1
@@ -173,7 +257,7 @@ if [[ "${OHOS_QEMU_DISABLE_JIT:-0}" == "1" ]]; then
 fi
 if [[ "$runner_asan" == "1" ]]; then
   runner_cxxflags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address)
-  runner_runtime_env+=" ASAN_OPTIONS=detect_leaks=0:halt_on_error=1"
+  runner_runtime_env+=" ASAN_OPTIONS=detect_leaks=$lsan:halt_on_error=1"
 fi
 
 "$clang_bin/$clang_triple-clang++" \
@@ -197,22 +281,38 @@ docker run --rm --platform linux/amd64 \
   /repo/scripts/ohos_qemu_abc_launcher.ets
 
 if [[ -z "$hap_input" && "${OHOS_QEMU_SKIP_BUILD:-0}" != "1" ]]; then
+  cargo_command=(cargo)
+  rustflags="${RUSTFLAGS:-}"
+  if [[ "$rust_asan" == "1" ]]; then
+    if [[ "$runner_asan" != "1" ]]; then
+      echo "OHOS_QEMU_RUST_ASAN requires OHOS_QEMU_RUNNER_ASAN so the executable supplies the ASAN runtime" >&2
+      exit 2
+    fi
+    cargo_command=(cargo +nightly)
+    rustflags="${rustflags:+$rustflags }-Zsanitizer=address -Cforce-frame-pointers=yes"
+  fi
   env \
     ANI_TEST_MODULE_NAME=arkvm_test \
+    RUSTFLAGS="$rustflags" \
     "$rust_target_env=$clang_bin/$clang_triple-clang" \
     "$cc_target_env=$clang_bin/$clang_triple-clang" \
     "$cxx_target_env=$clang_bin/$clang_triple-clang++" \
-    cargo build --workspace --target "$rust_target"
+    "${cargo_command[@]}" build --workspace --target "$rust_target"
 fi
 
-"$hdc_bin" -t "$hdc_target" shell mkdir -p "$remote_root"
-"$hdc_bin" -t "$hdc_target" file send "$runner" "$remote_root/ani_abc_runner" >/dev/null
-"$hdc_bin" -t "$hdc_target" file send \
+run_with_timeout "$hdc_timeout" \
+  "$hdc_bin" -t "$hdc_target" shell mkdir -p "$remote_root"
+run_with_timeout "$hdc_timeout" \
+  "$hdc_bin" -t "$hdc_target" file send \
+  "$runner" "$remote_root/ani_abc_runner" >/dev/null
+run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" file send \
   "$launcher_abc" "$remote_root/ohos_qemu_abc_launcher.abc" >/dev/null
-"$hdc_bin" -t "$hdc_target" shell chmod 755 "$remote_root/ani_abc_runner"
+run_with_timeout "$hdc_timeout" \
+  "$hdc_bin" -t "$hdc_target" shell chmod 755 "$remote_root/ani_abc_runner"
 
 printf 'arch\tpackage\tcross_build\telf_abi\tabc_compile\tqemu_runtime\tassert_pass\tassert_fail\tstatus\n' > "$report"
 printf 'arch\tpackage\titerations\tstart_pss_kb\tend_pss_kb\tgrowth_pss_kb\tlimit_pss_kb\tstatus\n' > "$memory_report"
+printf 'arch\tpackage\titerations\telapsed_us\tper_iteration_us\tlimit_us\tstatus\n' > "$performance_report"
 
 total=0
 passed=0
@@ -275,8 +375,10 @@ while IFS= read -r cargo_toml; do
     fi
   fi
 
-  "$hdc_bin" -t "$hdc_target" file send "$native_lib" "$remote_root/lib${base}.so" >/dev/null
-  "$hdc_bin" -t "$hdc_target" file send "$abc_file" "$remote_root/arkvm_test.abc" >/dev/null
+  run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" file send \
+    "$native_lib" "$remote_root/lib${base}.so" >/dev/null
+  run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" file send \
+    "$abc_file" "$remote_root/arkvm_test.abc" >/dev/null
   runtime_ok=0
   assert_pass=0
   assert_fail=0
@@ -284,17 +386,21 @@ while IFS= read -r cargo_toml; do
   end_pss=-1
   growth_pss=0
   memory_status=SKIP
+  elapsed_us=-1
+  per_iteration_us=-1
+  performance_status=FAIL
   for ((attempt = 1; attempt <= case_attempts; attempt += 1)); do
-    "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null
+    run_with_timeout "$hdc_timeout" \
+      "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null
     case_runtime_env="$runner_runtime_env ANI_QEMU_DESTRUCTOR_LIBRARY=$remote_root/lib${base}.so"
     set +e
-    "$hdc_bin" -t "$hdc_target" shell \
+    run_with_timeout "$hdc_runtime_timeout" "$hdc_bin" -t "$hdc_target" shell \
       "$case_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
       >"$run_log" 2>&1
     device_exit=$?
     set -e
     printf 'ANI_HDC_SHELL_EXIT=%s\n' "$device_exit" >>"$run_log"
-    "$hdc_bin" -t "$hdc_target" shell \
+    run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" shell \
       "hilog -x | grep -E '\\[arkvm\\]|\\[ASSERT PASS\\]|\\[ASSERT FAIL\\]|\\[QEMU ERROR\\]'" \
       >"$hilog_file" 2>&1 || true
     cp "$run_log" "$case_dir/runtime.attempt-$attempt.log"
@@ -302,6 +408,17 @@ while IFS= read -r cargo_toml; do
 
     assert_pass="$(awk '/\[ASSERT PASS\]/{count += 1} END{print count + 0}' "$hilog_file")"
     assert_fail="$(awk '/\[ASSERT FAIL\]/{count += 1} END{print count + 0}' "$hilog_file")"
+    elapsed_us="$(awk -F'elapsed_us=' '/ANI_PERF_SAMPLE/{split($2, v, " "); value=v[1]} END{if (value != "") print value}' "$run_log")"
+    per_iteration_us="$(awk -F'per_iteration_us=' '/ANI_PERF_SAMPLE/{split($2, v, " "); value=v[1]} END{if (value != "") print value}' "$run_log")"
+    elapsed_us="${elapsed_us:--1}"
+    per_iteration_us="${per_iteration_us:--1}"
+    performance_status=PASS
+    if ((elapsed_us < 0 || per_iteration_us < 0)); then
+      performance_status=FAIL
+    elif [[ -n "$max_per_iteration_us" ]] &&
+      ((per_iteration_us > max_per_iteration_us)); then
+      performance_status=FAIL
+    fi
     if [[ "$memory_sample" != "0" ]]; then
       sample_count="$(awk '/ANI_MEMORY_SAMPLE/{count += 1} END{print count + 0}' "$run_log")"
       start_pss="$(awk -F'pss_kb=' '/ANI_MEMORY_SAMPLE/{split($2, v, " "); print v[1]; exit}' "$run_log")"
@@ -323,7 +440,8 @@ while IFS= read -r cargo_toml; do
       [[ "$assert_fail" == "0" ]] &&
       { [[ "$package" != "ani-example-init-lifecycle" ]] ||
         grep -q 'ANI_FINALIZER_OK count=1' "$run_log"; } &&
-      [[ "$memory_status" != "FAIL" ]]; then
+      [[ "$memory_status" != "FAIL" ]] &&
+      [[ "$performance_status" != "FAIL" ]]; then
       runtime_ok=1
       break
     fi
@@ -346,10 +464,15 @@ while IFS= read -r cargo_toml; do
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$guest_arch" "$package" "$runner_iterations" "$start_pss" "$end_pss" \
     "$growth_pss" "${max_pss_growth_kb:-none}" "$memory_status" >> "$memory_report"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$guest_arch" "$package" "$runner_iterations" "$elapsed_us" \
+    "$per_iteration_us" "${max_per_iteration_us:-none}" "$performance_status" \
+    >> "$performance_report"
 done < <(find examples -maxdepth 2 -name Cargo.toml | sort)
 
 echo "QEMU_RESULT: $passed/$total"
 echo "REPORT: $report"
 echo "MEMORY_REPORT: $memory_report"
+echo "PERFORMANCE_REPORT: $performance_report"
 
 [[ "$passed" == "$total" ]]

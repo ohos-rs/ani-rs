@@ -112,7 +112,11 @@ export native function promise_resolver_into_deferred(value: string): Promise<st
 export native function promise_resolver_reject_message(message: string): Promise<void>;
 export native function promise_resolver_resolve_value(value: string): Promise<string>;
 export native function push_async_iterator_value(value: int): void;
+export native function runtime_assert_no_leaks(): boolean;
+export native function runtime_global_reference_count(): long;
 export native function runtime_kernel_shutdown_and_restart(): boolean;
+export native function runtime_leak_checkpoint(): void;
+export native function runtime_wait_for_global_reference_count(expected: long, timeout_ms: int): boolean;
 export native function signature_override_echo(value: string): Promise<string>;
 export native function tokio_await_arkts_promise(promise: Promise<string>): Promise<string>;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
@@ -135,6 +139,12 @@ promise.then(
 (value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
 (reason: Object): void => { __ani_rs_promise_reject(token, reason); }
 );
+}
+export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
+export class AniCancelHandle {
+private token: long;
+constructor(token: long) { this.token = token; }
+cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
 }
 
 
@@ -213,6 +223,7 @@ function __assert_throws(name: string, fn: () => void): void {
 console.log("[arkvm] smoke start: ani-example-async-wrapper");
 function main(): void {
   console.log("[arkvm] smoke start: ani-example-async-wrapper");
+  let runtimeGlobalReferenceBaseline: long = runtime_global_reference_count();
   __assert_eq_int("async_square", async_square(6), 36);
   let taskId = async_compute_start(5);
   __assert_true("async_compute_start_non_negative", taskId >= 0);
@@ -220,8 +231,10 @@ function main(): void {
   __assert_true("batch_compute_non_negative", batch_compute(3) >= 0);
   let promisedSquare: int = waitForCompletion(() => tokio_delayed_square(7, 10));
   __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  runtime_leak_checkpoint();
   let promisedSquareAsync: int = waitForCompletion(() => tokio_delayed_square_async(7, 10));
   __assert_eq_int("tokio_delayed_square_async", promisedSquareAsync, 49);
+  __assert_true("runtime_task_leak_gate", runtime_assert_no_leaks());
   let promisedText: string = waitForCompletion(() => tokio_fetch_text("ani://tokio"));
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
   let promisedTextAsync: string = waitForCompletion(() => tokio_fetch_text_async("ani://tokio"));
@@ -490,6 +503,13 @@ function main(): void {
   __assert_true("runtime_shutdown_iterator_cleanup", shutdownIteratorReturn.done);
   let restartedSquare: int = waitForCompletion(() => background_square(12));
   __assert_eq_int("runtime_kernel_restarted_task", restartedSquare, 144);
+  __assert_true(
+    "runtime_global_reference_leak_gate",
+    runtime_wait_for_global_reference_count(
+      runtimeGlobalReferenceBaseline,
+      3000,
+    ),
+  );
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);

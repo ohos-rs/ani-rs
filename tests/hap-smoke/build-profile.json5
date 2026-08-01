@@ -2,37 +2,34 @@
   "app": {
     "products": [
       {
-        "name": "default",
+        "name": 'default',
         "targetSdkVersion": 24,
         "compatibleSdkVersion": 20,
         "compileSdkVersion": 24,
-        "runtimeOS": "OpenHarmony",
+        "runtimeOS": 'OpenHarmony',
         "buildOption": {
           "strictMode": {
             "caseSensitiveCheck": true,
-            "useNormalizedOHMUrl": true
+            "useNormalizedOHMUrl": true,
           },
           "packOptions": {
-            "buildAppSkipSignHap": true
-          }
-        }
-      }
+            "buildAppSkipSignHap": true,
+          },
+        },
+      },
     ],
-    "buildModeSet": [
-      { "name": "debug" },
-      { "name": "release" }
-    ]
+    "buildModeSet": [{ "name": 'debug' }, { "name": 'release' }],
   },
   "modules": [
     {
-      "name": "entry",
-      "srcPath": "./entry",
+      "name": 'entry',
+      "srcPath": './entry',
       "targets": [
         {
-          "name": "default",
-          "applyToProducts": ["default"]
-        }
-      ]
-    }
-  ]
+          "name": 'default',
+          "applyToProducts": ['default'],
+        },
+      ],
+    },
+  ],
 }

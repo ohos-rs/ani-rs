@@ -18,13 +18,16 @@ else
 fi
 max_slope_kb="${OHOS_QEMU_MAX_PSS_SLOPE_KB:-8192}"
 export OHOS_QEMU_MEMORY_SAMPLE=1
-export OHOS_QEMU_MAX_PSS_GROWTH_KB="${OHOS_QEMU_MAX_PSS_GROWTH_KB:-32768}"
-export OHOS_QEMU_CASE_TIMEOUT="${OHOS_QEMU_CASE_TIMEOUT:-120}"
-# Repeated reflective calls currently hit an Ark runtime JIT code-cache crash
-# after roughly two dozen async invocations on the 20260728 image. Leak checks
-# exercise the same ANI/native ownership paths under the interpreter so that a
-# platform JIT failure cannot hide a native memory regression.
-export OHOS_QEMU_DISABLE_JIT="${OHOS_QEMU_DISABLE_JIT:-1}"
+# Ark VM/JIT metadata is initialized lazily during the first repeated guest
+# run. The absolute ceiling allows that one-time cost; the 50→100 slope below
+# is the actual unbounded-growth gate.
+export OHOS_QEMU_MAX_PSS_GROWTH_KB="${OHOS_QEMU_MAX_PSS_GROWTH_KB:-65536}"
+export OHOS_QEMU_CASE_TIMEOUT="${OHOS_QEMU_CASE_TIMEOUT:-300}"
+# The 20260731-jitfix release baseline fixes executable-page transitions in the
+# guest kernel. Keep JIT enabled so the 50/100-loop leak gate also protects the
+# historical RuntimeKernel restart regression. Disabling JIT is diagnostic
+# only and must be requested explicitly.
+export OHOS_QEMU_DISABLE_JIT="${OHOS_QEMU_DISABLE_JIT:-0}"
 
 for iterations in "$short_iterations" "$long_iterations"; do
   export OHOS_QEMU_ITERATIONS="$iterations"

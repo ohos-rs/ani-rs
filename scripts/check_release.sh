@@ -10,6 +10,9 @@ cargo test --workspace --all-features
 scripts/header.sh --check
 scripts/check_example_ets.sh
 scripts/check_performance.sh
+if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+  ANI_SEMVER_BASELINE_REV="${ANI_SEMVER_BASELINE_REV:-HEAD^}" scripts/check_abi.sh
+fi
 
 RUSTDOCFLAGS="-D warnings" cargo doc \
   -p ani -p ani-derive -p ani-sys -p ani-cli \

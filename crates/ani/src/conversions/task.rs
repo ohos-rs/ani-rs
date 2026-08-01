@@ -1,10 +1,8 @@
 //! Cancellable background tasks exposed as ArkTS Promises.
 
-use std::any::Any;
 use std::marker::PhantomData;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::env::Env;
 use crate::error::{AniErrorPayload, Error, Result, Status};
@@ -112,46 +110,48 @@ where
 
     /// Starts the task and returns its typed Promise.
     pub fn run<'env>(self, env: &Env<'env>) -> Result<PromiseRaw<'env, T::JsValue>> {
-        let vm = env.get_vm()?;
+        let vm = Arc::new(env.get_vm()?);
         let (deferred, promise) = PromiseRaw::<T::JsValue>::deferred(env)?;
         let cancellation = Arc::new(self.cancellation);
-        let registration = crate::scheduler::shared().register_cancellable(&cancellation)?;
+        let settlement = Arc::new(Mutex::new(Some(deferred.cast::<()>())));
+        let work_settlement = Arc::clone(&settlement);
+        let reject_settlement = Arc::clone(&settlement);
+        let work_vm = Arc::clone(&vm);
+        let reject_vm = Arc::clone(&vm);
+        let work_cancellation = Arc::clone(&cancellation);
+        let reject_cancellation = Arc::clone(&cancellation);
         let mut task = self.task;
 
-        crate::scheduler::shared().schedule(move || {
-            let _registration = registration;
-            let computed = catch_unwind(AssertUnwindSafe(|| {
-                let output = task.compute(&cancellation)?;
-                Ok::<T::Output, T::Error>(output)
-            }));
-
-            let _ = vm.with_attached(|env| match computed {
-                Ok(Ok(output)) => match task.resolve(env, output) {
-                    Ok(value) => deferred.resolve_value(env, value),
+        let (runtime_task, _handle) = crate::async_runtime::RuntimeBlockingTask::new(
+            move || {
+                let computed = task.compute(&work_cancellation);
+                let deferred = work_settlement
+                    .lock()
+                    .ok()
+                    .and_then(|mut deferred| deferred.take());
+                let Some(deferred) = deferred else { return };
+                let _ = work_vm.with_attached(|env| match computed {
+                    Ok(output) => match task.resolve(env, output) {
+                        Ok(value) => deferred.resolve_value(env, value),
+                        Err(error) => deferred.reject_with_payload(env, error),
+                    },
                     Err(error) => deferred.reject_with_payload(env, error),
-                },
-                Ok(Err(error)) => deferred.reject_with_payload(env, error),
-                Err(payload) => deferred.reject_with_error(
-                    env,
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("panic in AsyncTask: {}", panic_message(payload)),
-                    ),
-                ),
-            });
-        })?;
+                });
+            },
+            move |error| {
+                reject_cancellation.cancel();
+                let deferred = reject_settlement
+                    .lock()
+                    .ok()
+                    .and_then(|mut deferred| deferred.take());
+                if let Some(deferred) = deferred {
+                    let _ = reject_vm.with_attached(|env| deferred.reject_with_payload(env, error));
+                }
+            },
+        );
+        crate::async_runtime::spawn_runtime_blocking_task(runtime_task)?;
 
         Ok(promise)
-    }
-}
-
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else {
-        "unknown panic payload".to_string()
     }
 }
 

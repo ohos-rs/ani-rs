@@ -109,7 +109,7 @@ hdc -t 127.0.0.1:5558 file send \
 
 ```bash
 HDC_TARGET=127.0.0.1:5558 \
-QEMU_PACKAGES_ROOT=/Volumes/PSSD/qemu/releases/ohos-qemu-vpn-20260728/packages \
+QEMU_PACKAGES_ROOT=/Volumes/PSSD/qemu/packages/20260731-jitfix \
 OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1 \
 OHOS_SOURCE_ROOT=/Volumes/PSSD/qemu/openharmony \
 DEVECO_SDK_ROOT=/path/to/openharmony-sdk \
@@ -118,6 +118,10 @@ OHOS_QEMU_PACKAGE_FILTER=my-package \
 ```
 
 设置 `QEMU_PACKAGES_ROOT` 后脚本会校验 manifest；设置 `OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1` 后还会确认当前进程确实引用该包的 `images/`，从而避免把 DevEco 模拟器或其他端口误认为目标镜像。
+
+如果 OpenHarmony host 工具位于非默认输出目录，可显式设置 `OHOS_ES2PANDA` 与 `OHOS_ARKTSCONFIG`。runner 会为每个场景写出 `performance.tsv`；发布门禁另外运行 `scripts/check_qemu_performance.sh`，可通过 `OHOS_QEMU_MAX_PER_ITERATION_US` 配置对应机器/架构的延迟上限。所有 HDC 操作都有宿主侧 watchdog，默认 60 秒，可通过 `OHOS_QEMU_HDC_TIMEOUT` 调整；运行场景另受 `OHOS_QEMU_HDC_RUNTIME_TIMEOUT` 保护。
+
+发布基准使用 `20260731-jitfix` 镜像与 Linux 6.6.101。该内核修复了 Ark JIT 将代码页从可写切换为可执行时可能返回未初始化错误的问题，因此正确性、50/100 轮泄漏和性能门禁均保持 JIT 开启。`OHOS_QEMU_DISABLE_JIT=1` 只用于诊断，不构成发布证据。
 
 独立 ABC runner 不会触发 Stage 应用的动态库卸载流程，因此测试驱动在 `DestroyVM` 前从当前模块显式解析并调用一次 `ANI_Destructor`；生命周期用例要求观察到 finalizer 标记。这样构造、绑定、析构和资源清理都在真实 Ark Runtime 内执行，而不是只检查 ELF 符号。
 
@@ -154,9 +158,7 @@ HDC_TARGET=127.0.0.1:5558 scripts/run_hap_abc_ohos_qemu.sh
 HDC_TARGET=127.0.0.1:5558 scripts/check_qemu_memory.sh
 ```
 
-脚本分别创建 fresh ANI VM，并在每个 VM 内连续执行 50 或 100 轮 ArrayBuffer、异步与 native resource 场景，记录 `/proc/self/smaps_rollup` 的 PSS。除了单次增长必须低于 32 MB，100 轮相对 50 轮的额外增长还必须低于 8 MB，避免只看一次运行而漏掉线性增长。
-
-20260728 镜像的 Ark Runtime 在 JIT 模式下反射重复异步入口约二十余轮会崩在 `libarkruntime.so` 的 JIT code cache。常规 52 场景测试仍使用 JIT；内存压力测试显式关闭 JIT，把平台 JIT 问题和 ani-rs 所有权泄漏分开观察。
+脚本分别创建 fresh ANI VM，并在每个 VM 内连续执行 50 或 100 轮 ArrayBuffer、异步与 native resource 场景，记录 `/proc/self/smaps_rollup` 的 PSS。单次增长默认必须低于 64 MB，100 轮相对 50 轮的额外增长还必须低于 8 MB，避免只看一次运行而漏掉线性增长。异步用例同时执行 RuntimeKernel shutdown、drain、join、restart 和引用终态收敛检查，因此也作为 JIT 重启回归门禁。
 
 ## 推荐顺序
 

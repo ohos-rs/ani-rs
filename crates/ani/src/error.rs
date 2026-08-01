@@ -87,6 +87,29 @@ pub enum AniErrorValue {
     Array(Vec<AniErrorValue>),
     /// Binary ArrayBuffer payload.
     Binary(Vec<u8>),
+    /// Reference to an earlier container node in a cyclic/shared object graph.
+    Reference(usize),
+}
+
+/// Bounds applied while decoding untrusted ArkTS rejection metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AniErrorDecodeLimits {
+    /// Maximum nested Array/Record depth.
+    pub max_depth: usize,
+    /// Maximum total value nodes.
+    pub max_nodes: usize,
+    /// Maximum bytes copied from one ArrayBuffer.
+    pub max_binary_bytes: usize,
+}
+
+impl Default for AniErrorDecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: 16,
+            max_nodes: 512,
+            max_binary_bytes: 1024 * 1024,
+        }
+    }
 }
 
 impl From<bool> for AniErrorValue {
@@ -155,67 +178,141 @@ impl AniErrorValue {
             Self::Binary(value) => ArrayBuffer::from(value.as_slice())
                 .to_ani(env)
                 .map(|value| unsafe { AniRef::from_raw(value as sys::ani_ref) }),
+            Self::Reference(index) => {
+                let mut reference = HashMap::new();
+                reference.insert("$ref".to_string(), AniErrorValue::Integer(*index as i64));
+                AniErrorValue::Object(reference.into_iter().collect()).to_ani_ref(env)
+            }
         }
     }
 
     /// Decode a structured ArkTS value without relying on JSON serialization.
     pub fn from_ani_ref(env: &Env<'_>, value: &AniRef<'_>) -> Result<Self> {
-        if env.is_nullish(value)? {
-            return Ok(Self::Null);
+        Self::from_ani_ref_with_limits(env, value, AniErrorDecodeLimits::default())
+    }
+
+    /// Decode with explicit recursion, node-count, cycle, and binary bounds.
+    pub fn from_ani_ref_with_limits(
+        env: &Env<'_>,
+        value: &AniRef<'_>,
+        limits: AniErrorDecodeLimits,
+    ) -> Result<Self> {
+        struct DecodeState {
+            limits: AniErrorDecodeLimits,
+            nodes: usize,
+            containers: Vec<sys::ani_ref>,
         }
-        let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
-        let instance_of = |descriptor: &str| {
-            env.find_class(descriptor)
-                .and_then(|class| env.object_instance_of(&object, &class))
-                .unwrap_or(false)
-        };
-        if instance_of("std.core.String") {
-            let string = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
-            return env.get_string(&string).map(Self::String);
+
+        fn decode(
+            env: &Env<'_>,
+            value: &AniRef<'_>,
+            depth: usize,
+            state: &mut DecodeState,
+        ) -> Result<AniErrorValue> {
+            if depth > state.limits.max_depth {
+                return Err(Error::new(
+                    Status::OutOfRange,
+                    "ArkTS error metadata exceeds maximum decode depth",
+                ));
+            }
+            state.nodes = state.nodes.saturating_add(1);
+            if state.nodes > state.limits.max_nodes {
+                return Err(Error::new(
+                    Status::OutOfRange,
+                    "ArkTS error metadata exceeds maximum node count",
+                ));
+            }
+            if env.is_nullish(value)? {
+                return Ok(AniErrorValue::Null);
+            }
+            let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+            let instance_of = |descriptor: &str| {
+                env.find_class(descriptor)
+                    .and_then(|class| env.object_instance_of(&object, &class))
+                    .unwrap_or(false)
+            };
+            if instance_of("std.core.String") {
+                let string = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+                return env.get_string(&string).map(AniErrorValue::String);
+            }
+            if instance_of("std.core.Boolean") {
+                return bool::unbox(env, &object).map(AniErrorValue::Bool);
+            }
+            if instance_of("std.core.Int") {
+                return i32::unbox(env, &object).map(|value| AniErrorValue::Integer(value as i64));
+            }
+            if instance_of("std.core.Long") {
+                return i64::unbox(env, &object).map(AniErrorValue::Integer);
+            }
+            if instance_of("std.core.Float") {
+                return f32::unbox(env, &object).map(|value| AniErrorValue::Number(value as f64));
+            }
+            if instance_of("std.core.Double") {
+                return f64::unbox(env, &object).map(AniErrorValue::Number);
+            }
+            if instance_of("std.core.Array") {
+                if let Some(index) = state.containers.iter().position(|previous| {
+                    let previous = unsafe { AniRef::from_raw(*previous) };
+                    env.reference_strict_equals(&previous, value)
+                        .unwrap_or(false)
+                }) {
+                    return Ok(AniErrorValue::Reference(index));
+                }
+                state.containers.push(value.as_raw());
+                let values =
+                    unsafe { Vec::<AniRef<'_>>::from_ani(env, value.as_raw() as sys::ani_array) }?;
+                return values
+                    .iter()
+                    .map(|value| decode(env, value, depth + 1, state))
+                    .collect::<Result<Vec<_>>>()
+                    .map(AniErrorValue::Array);
+            }
+            if instance_of("std.core.Record") {
+                if let Some(index) = state.containers.iter().position(|previous| {
+                    let previous = unsafe { AniRef::from_raw(*previous) };
+                    env.reference_strict_equals(&previous, value)
+                        .unwrap_or(false)
+                }) {
+                    return Ok(AniErrorValue::Reference(index));
+                }
+                state.containers.push(value.as_raw());
+                let values =
+                    unsafe { HashMap::<String, AniRef<'_>>::from_ani(env, object.as_raw()) }?;
+                return values
+                    .iter()
+                    .map(|(key, value)| {
+                        decode(env, value, depth + 1, state).map(|value| (key.clone(), value))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()
+                    .map(AniErrorValue::Object);
+            }
+            if instance_of("escompat.ArrayBuffer") || instance_of("std.core.ArrayBuffer") {
+                let buffer =
+                    unsafe { ArrayBuffer::from_ani(env, value.as_raw() as sys::ani_arraybuffer) }?;
+                if buffer.len() > state.limits.max_binary_bytes {
+                    return Err(Error::new(
+                        Status::OutOfRange,
+                        "ArkTS error metadata ArrayBuffer exceeds maximum binary size",
+                    ));
+                }
+                return Ok(AniErrorValue::Binary(buffer.as_ref().to_vec()));
+            }
+            Err(Error::new(
+                Status::InvalidType,
+                "error property must be null, bool, number, string, Record, Array, or ArrayBuffer",
+            ))
         }
-        if instance_of("std.core.Boolean") {
-            return bool::unbox(env, &object).map(Self::Bool);
-        }
-        if instance_of("std.core.Int") {
-            return i32::unbox(env, &object).map(|value| Self::Integer(value as i64));
-        }
-        if instance_of("std.core.Long") {
-            return i64::unbox(env, &object).map(Self::Integer);
-        }
-        if instance_of("std.core.Float") {
-            return f32::unbox(env, &object).map(|value| Self::Number(value as f64));
-        }
-        if instance_of("std.core.Double") {
-            return f64::unbox(env, &object).map(Self::Number);
-        }
-        if instance_of("std.core.Array") {
-            let values =
-                unsafe { Vec::<AniRef<'_>>::from_ani(env, value.as_raw() as sys::ani_array) }?;
-            return values
-                .iter()
-                .map(|value| Self::from_ani_ref(env, value))
-                .collect::<Result<Vec<_>>>()
-                .map(Self::Array);
-        }
-        if instance_of("std.core.Record") {
-            let values = unsafe { HashMap::<String, AniRef<'_>>::from_ani(env, object.as_raw()) }?;
-            return values
-                .iter()
-                .map(|(key, value)| {
-                    Self::from_ani_ref(env, value).map(|value| (key.clone(), value))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()
-                .map(Self::Object);
-        }
-        if instance_of("escompat.ArrayBuffer") || instance_of("std.core.ArrayBuffer") {
-            let buffer =
-                unsafe { ArrayBuffer::from_ani(env, value.as_raw() as sys::ani_arraybuffer) }?;
-            return Ok(Self::Binary(buffer.as_ref().to_vec()));
-        }
-        Err(Error::new(
-            Status::InvalidType,
-            "error property must be null, bool, number, string, Record, Array, or ArrayBuffer",
-        ))
+
+        decode(
+            env,
+            value,
+            0,
+            &mut DecodeState {
+                limits,
+                nodes: 0,
+                containers: Vec::new(),
+            },
+        )
     }
 }
 

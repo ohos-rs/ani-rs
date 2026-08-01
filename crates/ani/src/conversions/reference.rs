@@ -681,9 +681,11 @@ impl Drop for RefContainer {
             return;
         };
 
-        if let Ok(guard) = self.vm.attach_current_thread_scoped() {
-            let _ = guard.env().delete_global_ref(global);
-        }
+        // Reuse the current Env when drop runs inside an async callback. ANI
+        // rejects a second AttachCurrentThread on an already-attached thread;
+        // treating that as a detach/attach failure used to silently leak this
+        // global reference on Promise rejection and async-iterator throw.
+        let _ = self.vm.with_attached(|env| env.delete_global_ref(global));
     }
 }
 

@@ -91,6 +91,8 @@ async fn authenticate(token: String)
 
 ArkTS Promise rejection 进入 Rust 时，生成的 ETS continuation bridge 会把原始 rejection 提升为 global ref，同时读取 name/message/code/stack/cause/metadata。若它再次跨回同一 VM，会优先返回完全相同的 rejection 对象，因此自定义 Error 类型和未知业务字段不会被固定框架结构抹掉。
 
+`PromiseFuture<T, E = ArktsRejection>` 允许通过对象安全的 `RejectionDecoder<E>` 解码为任意领域错误。默认 decoder 对 cause/metadata 图执行 object identity 与 visited-set 检查，并限制最大深度、节点数和 binary 大小；循环 cause 使用引用标记保留，不会无限递归。RuntimeTask 取消同样经过可注册的 cancellation error factory 和 materializer。
+
 ```ts
 try {
   await authenticate('bad')

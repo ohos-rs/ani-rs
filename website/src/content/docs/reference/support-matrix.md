@@ -14,6 +14,8 @@ description: ANI-RS 的 API、架构、运行时和验证层级。
 | 兼容模式 | `api23` 使用 class constructor/method primitive wrapper 路径 |
 | ArkTS | ArkTS 1.2 / ETS |
 
+API 23/24 当前声明为“交叉编译兼容”；只有 API 26 具有真实 guest 运行时证据。`.github/workflows/qemu.yml` 对 API profile × 三架构执行 9 组编译门禁，并对 `20260731-jitfix` API 26 的 ARM64/x86_64/ARMv7A 镜像执行同一 commit、同一 52 场景、HAP、JIT 50/100 轮内存压力与性能报告。
+
 `scripts/header.sh --check` 会同时验证头文件校验和、API 24 符号和 bindgen 输出漂移。
 
 ## 目标架构
@@ -54,10 +56,12 @@ scripts/run_arkvm_examples_ohos_qemu.sh
 | 执行 HAP 中实际 ABC 与 SO | `scripts/run_hap_abc_ohos_qemu.sh` |
 | 50/100 轮 PSS 增长 | `scripts/check_qemu_memory.sh` |
 | Rust 所有权计数 | `runtime_metrics` + `assert_no_runtime_leaks` |
-| 性能回归 | `scripts/check_performance.sh` |
+| Host 性能回归 | `scripts/check_performance.sh` |
+| 真实 QEMU 场景延迟上限 | `scripts/check_qemu_performance.sh` / `performance.tsv` |
 | 公共 API semver | `scripts/check_semver.sh` |
+| ETS/ANI/native ABI | `scripts/check_abi.sh` |
 | 发布前完整检查 | `scripts/check_release.sh` |
 
-异步运行时门禁还覆盖 RuntimeKernel shutdown/drain/join/restart、closing 拒绝、Promise continuation、并发 stream waiter、return/throw/cancel 竞态，以及 Promise/Task/TSFN/Stream 的统一析构取消。TypedArray 门禁区分 ANI→Rust 借用/COW 与 Rust→ANI 必须复制的能力边界。
+异步运行时门禁还覆盖 RuntimeDomain shutdown/drain/join/restart、watchdog、closing 拒绝、Promise continuation、自定义 rejection decoder、并发 stream waiter、return/throw/cancel 竞态，以及 Promise/Task/TSFN/Stream 的统一析构取消。Loom 穷举 exactly-once terminal transition；guest 的 `runtime_task_leak_gate` 调用真实 `assert_no_runtime_leaks`，`runtime_global_reference_leak_gate` 使用 3 秒有界终态检查，允许 Promise 完成与 Rust 引用删除之间的正常调度间隔，但引用不回落仍会失败。TypedArray 门禁区分 owned、VM ref、scope view 与 Rust→ANI 必须复制的平台边界。
 
-HAP 验证要求存在 `resources/rawfile/ani_rs_smoke.abc`，并检查 `libs/<abi>/` 下每个 ANI 动态库的架构以及 `ANI_Constructor`、`ANI_Destructor` 导出。当前 arm64 基准为指定的 20260728 QEMU 包、OpenHarmony 7.0.0.32 / API 26；其他架构由同一 workflow 与 manifest/ELF 门禁覆盖，但发布结论应以对应 guest 的实际运行报告为准。
+HAP 验证要求存在 `resources/rawfile/ani_rs_smoke.abc`，并检查 `libs/<abi>/` 下每个 ANI 动态库的架构以及 `ANI_Constructor`、`ANI_Destructor` 导出。当前运行基准为 `20260731-jitfix`、Linux 6.6.101、OpenHarmony 7.0.0.32 / API 26；ARM64、x86_64、ARMv7A 均以 JIT 开启状态使用同一 52 场景和 458 个断言通过真实 guest、HAP 解包执行，并完成 100 轮异步 RuntimeKernel 重启。发布结论仍以对应 commit 的 workflow 报告为准，不能用历史或其他架构报告替代。

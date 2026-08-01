@@ -119,7 +119,7 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 
 ## TypedArray
 
-`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。`TypedArrayRef<T>` 是其 owned/global-reference/COW 语义名称。公开 ABI 使用对应的 ArkTS 原生 TypedArray class，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
+`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `OwnedTypedArray<T>`（兼容名 `TypedArray<T>`）的别名。公开 ABI 使用对应的 ArkTS 原生 TypedArray class，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
 
 ```rust
 use ani::prelude::*;
@@ -136,8 +136,9 @@ pub fn sequence() -> Uint16Array {
 }
 ```
 
-- ANI 输入由 global ref 保活；只读 `as_slice()` 不复制，第一次 `as_mut_slice()` 使用 COW 分离为 Rust owned 存储。
-- `TypedArraySlice<'env, T>` 提供仅限当前 ANI scope 的只读零拷贝视图。
+- `OwnedTypedArray<T>` 是纯 Rust 内存并且 `Send + Sync`；ANI 输入转换到 owned 类型时会复制，适合 async。
+- `TypedArrayRef<T>` 持有 ANI/global ref backing，明确 `!Send + !Sync`；通过 `freeze()`/`to_owned()` 显式复制后才能跨线程。
+- `TypedArraySlice<'env, T>`（`TypedArrayView`）提供仅限当前 ANI scope 的只读零拷贝视图。
 - `TypedArraySliceMut<'env, T>::from_ani_unchecked` 提供显式作用域的可变零拷贝视图，但调用者必须证明 ArkTS/Rust 均无别名，因此它不会作为安全的自动参数转换出现。
 - `Uint8ClampedArray` 的元素类型为 `ClampedU8`；`DataView` 保留 byte offset/length，并在可变访问时遵循同一 COW 规则。
 - class 不匹配、范围越界、未对齐或字节数不能被元素宽度整除时返回结构化错误。

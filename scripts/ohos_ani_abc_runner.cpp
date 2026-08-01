@@ -8,6 +8,7 @@
 #include <ani.h>
 #include <dlfcn.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -365,6 +366,7 @@ int main(int argc, char **argv)
     if (sample_memory) {
         PrintMemorySample(0);
     }
+    const auto invoke_started = std::chrono::steady_clock::now();
     if (repeated) {
         status = env->Object_CallMethod_Void(
             launcher, invoke, abc_path_string, class_descriptor_string,
@@ -382,6 +384,16 @@ int main(int argc, char **argv)
                      : "Object_CallMethod(launcher.invoke)",
             status);
     }
+    const auto invoke_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - invoke_started).count();
+    const auto elapsed_us = static_cast<unsigned long long>(invoke_elapsed);
+    const auto per_iteration_us =
+        (elapsed_us + static_cast<unsigned long long>(iterations) - 1) /
+        static_cast<unsigned long long>(iterations);
+    std::printf(
+        "ANI_PERF_SAMPLE iterations=%zu elapsed_us=%llu per_iteration_us=%llu\n",
+        iterations, elapsed_us, per_iteration_us);
+    std::fflush(stdout);
     if (const char *destructor_library =
             std::getenv("ANI_QEMU_DESTRUCTOR_LIBRARY");
         destructor_library != nullptr && *destructor_library != '\0') {

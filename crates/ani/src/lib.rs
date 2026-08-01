@@ -49,6 +49,7 @@ pub use serde;
 pub use serde_json;
 
 // Core modules
+pub mod async_runtime;
 pub mod bindgen_runtime;
 pub mod conversions;
 #[macro_use]
@@ -69,6 +70,13 @@ pub mod vm;
 /// use ani::prelude::*;
 /// ```
 pub mod prelude {
+    pub use crate::async_runtime::{
+        AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
+        RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
+        activate_async_runtime, register_async_runtime, register_cancellation_error_factory,
+        runtime_cancellation_error, shutdown_runtime_domain,
+        spawn_future_result_factory_with_handle, try_register_async_runtime,
+    };
     pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{
         AniErrorPayload, AniErrorValue, BusinessError, DynAniError, Error, PreservedArktsError,

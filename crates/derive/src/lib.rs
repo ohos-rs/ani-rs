@@ -163,8 +163,7 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
                     let api = &*(*vm);
                     let mut env: *mut ::ani::sys::ani_env = std::ptr::null_mut();
                     let Some(get_env) = api.GetEnv else {
-                        let _ = ::ani::scheduler::shutdown_runtime();
-                        ::ani::tokio::shutdown_runtime();
+                        let _ = ::ani::async_runtime::shutdown_runtime_domain();
                         let _ = ::ani::conversions::close_all_managed_resources();
                         return ::ani::sys::ani_status_ANI_ERROR;
                     };
@@ -177,13 +176,12 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
                     if get_env_status == ::ani::sys::ani_status_ANI_OK {
                         status = ::ani::module_register::execute_finalizers(env);
                     }
-                    if let Err(error) = ::ani::scheduler::shutdown_runtime() {
+                    if let Err(error) = ::ani::async_runtime::shutdown_runtime_domain() {
                         eprintln!("failed to shut down shared ANI runtime: {error}");
                         if status == ::ani::sys::ani_status_ANI_OK {
                             status = ::ani::sys::ani_status_ANI_ERROR;
                         }
                     }
-                    ::ani::tokio::shutdown_runtime();
                     if let Err(error) = ::ani::conversions::close_all_managed_resources() {
                         eprintln!("failed to release managed resources: {error}");
                         if status == ::ani::sys::ani_status_ANI_OK {

@@ -43,13 +43,15 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::task::{Context, Poll, Waker};
 
 use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
-use crate::error::{AniErrorPayload, AniErrorValue, Error, Result, Status};
+use crate::error::{
+    AniErrorDecodeLimits, AniErrorPayload, AniErrorValue, DynAniError, Error, Result, Status,
+};
 use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 use crate::sys;
 use crate::types::{
@@ -64,6 +66,7 @@ use super::{FromAni, RefContainer, ToAni as ConversionToAni, TypeInfo, Unboxable
 const PROMISE_BRIDGE_OBSERVE: &str = "__ani_rs_observe_promise";
 const PROMISE_BRIDGE_RESOLVE: &str = "__ani_rs_promise_resolve\0";
 const PROMISE_BRIDGE_REJECT: &str = "__ani_rs_promise_reject\0";
+const RUNTIME_TASK_CANCEL: &str = "__ani_rs_cancel_runtime_task\0";
 const PROMISE_BRIDGE_SETTLE_SIGNATURE: &str = "lC{std.core.Object}:\0";
 const PROMISE_BRIDGE_OBSERVE_SIGNATURE: &str = "C{std.core.Promise}l:";
 
@@ -76,6 +79,7 @@ type PromiseObserverRegistry = HashMap<u64, Weak<dyn PromiseBridgeObserver>>;
 static PROMISE_BRIDGE_MODULES: OnceLock<RwLock<Vec<&'static str>>> = OnceLock::new();
 static PROMISE_OBSERVERS: OnceLock<Mutex<PromiseObserverRegistry>> = OnceLock::new();
 static NEXT_PROMISE_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static LIVE_DEFERREDS: AtomicUsize = AtomicUsize::new(0);
 
 fn promise_bridge_modules() -> &'static RwLock<Vec<&'static str>> {
     PROMISE_BRIDGE_MODULES.get_or_init(|| RwLock::new(Vec::new()))
@@ -124,6 +128,15 @@ pub fn queue_registered_promise_bridges() -> sys::ani_status {
                 return status;
             }
         }
+        let status = crate::module_register::queue_module_binding(
+            module,
+            RUNTIME_TASK_CANCEL,
+            PROMISE_BRIDGE_SETTLE_SIGNATURE,
+            crate::async_runtime::cancel_runtime_task_from_ets as *const () as *const c_void,
+        );
+        if status != sys::ani_status_ANI_OK {
+            return status;
+        }
     }
     sys::ani_status_ANI_OK
 }
@@ -143,6 +156,22 @@ fn unregister_promise_observer(token: u64) {
     {
         observers.remove(&token);
     }
+}
+
+/// Number of live generated-bridge observers retained by Rust.
+pub fn live_promise_observer_count() -> usize {
+    promise_observers()
+        .lock()
+        .map(|mut observers| {
+            observers.retain(|_, observer| observer.strong_count() > 0);
+            observers.len()
+        })
+        .unwrap_or(usize::MAX)
+}
+
+/// Number of typed Promise resolvers currently owned by Rust.
+pub fn live_deferred_count() -> usize {
+    LIVE_DEFERREDS.load(Ordering::Acquire)
 }
 
 fn dispatch_promise_settlement(
@@ -294,6 +323,19 @@ impl<'env, T> PromiseRaw<'env, T> {
         PromiseFuture::new(env, self)
     }
 
+    /// Promotes this Promise using an application-defined rejection decoder.
+    pub fn into_future_with_decoder<E>(
+        self,
+        env: &Env<'env>,
+        decoder: Arc<dyn RejectionDecoder<E>>,
+    ) -> Result<PromiseFuture<T, E>>
+    where
+        T: PromiseFutureValue,
+        E: Send + 'static,
+    {
+        PromiseFuture::with_decoder(env, self, decoder)
+    }
+
     /// Create a new Promise and immediately resolve it with the given value
     ///
     /// This is a convenience method for creating a resolved Promise.
@@ -434,10 +476,7 @@ impl<'env, T> PromiseRaw<'env, T> {
         )
         .map_err(|_| Error::new(Status::GenericFailure, "Failed to create promise"))?;
 
-        let deferred = Deferred {
-            resolver: unsafe { AniResolver::from_raw(resolver) },
-            _marker: PhantomData,
-        };
+        let deferred = Deferred::from_resolver(unsafe { AniResolver::from_raw(resolver) });
 
         let promise_raw = Self {
             inner: promise,
@@ -539,19 +578,129 @@ impl PromiseFutureValue for () {
     }
 }
 
-struct PromiseFutureState<T> {
+/// Default open-ended rejection returned when Rust awaits an ArkTS Promise.
+///
+/// The payload is not normalized to ani-rs' built-in [`Error`]. An ArkTS
+/// rejection retains its exact object, while runtime cancellation retains the
+/// application payload created by the registered cancellation factory.
+#[derive(Debug)]
+pub struct ArktsRejection {
+    payload: DynAniError,
+}
+
+impl ArktsRejection {
+    /// Wrap any structured rejection payload without erasing its materializer.
+    pub fn new(payload: DynAniError) -> Self {
+        Self { payload }
+    }
+
+    /// Borrow the original open-ended payload.
+    pub fn payload(&self) -> &dyn AniErrorPayload {
+        self.payload.as_ref()
+    }
+
+    /// Consume this rejection and recover the original payload.
+    pub fn into_payload(self) -> DynAniError {
+        self.payload
+    }
+}
+
+impl std::fmt::Display for ArktsRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.payload.fmt(formatter)
+    }
+}
+
+impl AniErrorPayload for ArktsRejection {
+    fn ani_status(&self) -> &str {
+        self.payload.ani_status()
+    }
+
+    fn ani_code(&self) -> i32 {
+        self.payload.ani_code()
+    }
+
+    fn ani_message(&self) -> &str {
+        self.payload.ani_message()
+    }
+
+    fn ani_cause(&self) -> Option<&dyn AniErrorPayload> {
+        self.payload.ani_cause()
+    }
+
+    fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
+        self.payload.visit_ani_metadata(visitor);
+    }
+
+    fn visit_ani_properties(&self, visitor: &mut dyn FnMut(&str, &AniErrorValue)) {
+        self.payload.visit_ani_properties(visitor);
+    }
+
+    fn ani_stack(&self) -> Option<&str> {
+        self.payload.ani_stack()
+    }
+
+    fn materialize_ani_error<'env>(&self, env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        self.payload.materialize_ani_error(env)
+    }
+}
+
+/// Object-safe conversion from an ArkTS rejection into any application error.
+pub trait RejectionDecoder<E>: Send + Sync + 'static {
+    /// Decode the exact rejected value while attached to its owning VM.
+    fn decode(&self, env: &Env<'_>, rejection: AniRef<'_>) -> E;
+
+    /// Convert ani-rs infrastructure failures and Rust-side cancellation.
+    fn runtime_error(&self, error: DynAniError) -> E;
+}
+
+/// Bounded default decoder preserving name, message, code, stack, typed
+/// metadata, cause relationships, and the exact raw rejection.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ArktsRejectionDecoder {
+    limits: AniErrorDecodeLimits,
+}
+
+impl ArktsRejectionDecoder {
+    /// Creates a decoder with explicit untrusted-graph limits.
+    pub const fn new(limits: AniErrorDecodeLimits) -> Self {
+        Self { limits }
+    }
+
+    /// Returns the configured graph limits.
+    pub const fn limits(&self) -> AniErrorDecodeLimits {
+        self.limits
+    }
+}
+
+impl RejectionDecoder<ArktsRejection> for ArktsRejectionDecoder {
+    fn decode(&self, env: &Env<'_>, rejection: AniRef<'_>) -> ArktsRejection {
+        ArktsRejection::new(Box::new(promise_rejection_error_with_limits(
+            env,
+            rejection,
+            self.limits,
+        )))
+    }
+
+    fn runtime_error(&self, error: DynAniError) -> ArktsRejection {
+        ArktsRejection::new(error)
+    }
+}
+
+struct PromiseFutureState<T, E> {
     vm: AniVm,
     promise: Mutex<Option<GlobalRef>>,
     bridge_token: AtomicU64,
     cancelled: AtomicBool,
     finished: AtomicBool,
-    result: Mutex<Option<Result<T>>>,
+    result: Mutex<Option<std::result::Result<T, E>>>,
     waker: Mutex<Option<Waker>>,
     registration: Mutex<Option<RuntimeRegistration>>,
+    decoder: Arc<dyn RejectionDecoder<E>>,
 }
 
-impl<T> PromiseFutureState<T> {
-    fn finish(&self, result: Result<T>) {
+impl<T, E: Send + 'static> PromiseFutureState<T, E> {
+    fn finish(&self, result: std::result::Result<T, E>) {
         if let Ok(mut slot) = self.result.lock() {
             *slot = Some(result);
         }
@@ -574,15 +723,17 @@ impl<T> PromiseFutureState<T> {
         }
     }
 
-    fn cancel_wait(&self, message: &'static str) -> bool {
+    fn cancel_wait(&self, reason: crate::async_runtime::RuntimeCancelReason) -> bool {
         if self.cancelled.swap(true, Ordering::AcqRel) {
             return false;
         }
         unregister_promise_observer(self.bridge_token.swap(0, Ordering::AcqRel));
         if !self.finished.swap(true, Ordering::AcqRel) {
             let result = match self.release_promise() {
-                Ok(()) => Err(Error::new(Status::Cancelled, message)),
-                Err(error) => Err(error),
+                Ok(()) => Err(self
+                    .decoder
+                    .runtime_error(crate::async_runtime::runtime_cancellation_error(reason))),
+                Err(error) => Err(self.decoder.runtime_error(Box::new(error))),
             };
             self.finish(result);
             if let Ok(mut registration) = self.registration.lock() {
@@ -593,26 +744,27 @@ impl<T> PromiseFutureState<T> {
     }
 }
 
-impl<T: Send + 'static> RuntimeCancellable for PromiseFutureState<T> {
+impl<T: Send + 'static, E: Send + 'static> RuntimeCancellable for PromiseFutureState<T, E> {
     fn cancel_for_runtime_shutdown(&self) {
-        self.cancel_wait("Promise future cancelled during runtime shutdown");
+        self.cancel_wait(crate::async_runtime::RuntimeCancelReason::Shutdown);
     }
 }
 
-impl<T: PromiseFutureValue> PromiseBridgeObserver for PromiseFutureState<T> {
+impl<T: PromiseFutureValue, E: Send + 'static> PromiseBridgeObserver for PromiseFutureState<T, E> {
     fn settle(&self, env: &Env<'_>, value: AniRef<'_>, rejected: bool) {
         self.bridge_token.store(0, Ordering::Release);
         if self.finished.swap(true, Ordering::AcqRel) {
             return;
         }
         let result = if rejected {
-            Err(promise_rejection_error(env, value))
+            Err(self.decoder.decode(env, value))
         } else {
             T::from_promise_ref(env, value)
+                .map_err(|error| self.decoder.runtime_error(Box::new(error)))
         };
         let result = match self.release_promise() {
             Ok(()) => result,
-            Err(error) => Err(error),
+            Err(error) => Err(self.decoder.runtime_error(Box::new(error))),
         };
         self.finish(result);
         if let Ok(mut registration) = self.registration.lock() {
@@ -629,14 +781,27 @@ impl<T: PromiseFutureValue> PromiseBridgeObserver for PromiseFutureState<T> {
 /// bridge to attach public `then` continuations. Those continuations settle a
 /// tokenized Rust waiter directly; no runtime-private Promise fields are read
 /// and no scheduler worker or timer is consumed while the Promise is pending.
-pub struct PromiseFuture<T> {
-    state: Arc<PromiseFutureState<T>>,
+pub struct PromiseFuture<T, E: Send + 'static = ArktsRejection> {
+    state: Arc<PromiseFutureState<T, E>>,
     completed: bool,
 }
 
-impl<T: PromiseFutureValue> PromiseFuture<T> {
+impl<T: PromiseFutureValue> PromiseFuture<T, ArktsRejection> {
     /// Creates a future and promotes the Promise to a global ANI reference.
     pub fn new<'env>(env: &Env<'env>, promise: PromiseRaw<'env, T>) -> Result<Self> {
+        Self::with_decoder(env, promise, Arc::new(ArktsRejectionDecoder::default()))
+    }
+}
+
+impl<T: PromiseFutureValue, E: Send + 'static> PromiseFuture<T, E> {
+    /// Creates a future with an application-provided, object-safe rejection
+    /// decoder. The decoder controls both ArkTS rejections and runtime-originated
+    /// cancellation errors.
+    pub fn with_decoder<'env>(
+        env: &Env<'env>,
+        promise: PromiseRaw<'env, T>,
+        decoder: Arc<dyn RejectionDecoder<E>>,
+    ) -> Result<Self> {
         let promise_ref = unsafe { AniRef::from_raw(promise.into_raw() as sys::ani_ref) };
         let state = Arc::new(PromiseFutureState {
             vm: env.get_vm()?,
@@ -647,6 +812,7 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
             cancelled: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             registration: Mutex::new(None),
+            decoder,
         });
         let registration = match crate::scheduler::shared().register_cancellable(&state) {
             Ok(registration) => registration,
@@ -678,7 +844,11 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
     /// Cancellation is idempotent and does not abort the ArkTS operation
     /// itself because ANI has no Promise cancellation primitive.
     pub fn cancel(&mut self) -> Result<bool> {
-        Ok(self.state.cancel_wait("Promise future was cancelled"))
+        Ok(self
+            .state
+            .cancel_wait(crate::async_runtime::RuntimeCancelReason::Explicit(
+                "Promise future was cancelled".into(),
+            )))
     }
 
     /// Returns whether the Rust-side wait has been cancelled.
@@ -721,8 +891,8 @@ fn attach_promise_bridge(env: &Env<'_>, promise: &AniRef<'_>, token: u64) -> Res
     }))
 }
 
-impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
-    type Output = Result<T>;
+impl<T: PromiseFutureValue, E: Send + 'static> std::future::Future for PromiseFuture<T, E> {
+    type Output = std::result::Result<T, E>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         assert!(!self.completed, "PromiseFuture polled after completion");
@@ -748,13 +918,63 @@ impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
     }
 }
 
-impl<T> Drop for PromiseFuture<T> {
+impl<T, E: Send + 'static> Drop for PromiseFuture<T, E> {
     fn drop(&mut self) {
-        self.state.cancel_wait("Promise future was dropped");
+        self.state
+            .cancel_wait(crate::async_runtime::RuntimeCancelReason::Dropped);
     }
 }
 
-fn promise_rejection_error(env: &Env<'_>, value: AniRef<'_>) -> Error {
+struct RejectionGraphState {
+    limits: AniErrorDecodeLimits,
+    nodes: usize,
+    visited: Vec<sys::ani_ref>,
+}
+
+impl RejectionGraphState {
+    fn identity(&self, env: &Env<'_>, value: &AniRef<'_>) -> Option<usize> {
+        self.visited.iter().position(|previous| {
+            let previous = unsafe { AniRef::from_raw(*previous) };
+            env.reference_strict_equals(&previous, value)
+                .unwrap_or(false)
+        })
+    }
+}
+
+fn promise_rejection_error_with_limits(
+    env: &Env<'_>,
+    value: AniRef<'_>,
+    limits: AniErrorDecodeLimits,
+) -> Error {
+    decode_promise_rejection(
+        env,
+        value,
+        0,
+        &mut RejectionGraphState {
+            limits,
+            nodes: 0,
+            visited: Vec::new(),
+        },
+    )
+}
+
+fn decode_promise_rejection(
+    env: &Env<'_>,
+    value: AniRef<'_>,
+    depth: usize,
+    graph: &mut RejectionGraphState,
+) -> Error {
+    if depth > graph.limits.max_depth || graph.nodes >= graph.limits.max_nodes {
+        let mut error = Error::new(
+            Status::OutOfRange,
+            "ArkTS rejection cause graph exceeds configured decode limits",
+        )
+        .with_status_name("ArktsRejectionLimit");
+        error.preserve_rejection(RefContainer::new(env, &value).ok());
+        return error;
+    }
+    graph.nodes += 1;
+    graph.visited.push(value.as_raw());
     let error_object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
     let string_property = |name: &str| {
         env.get_property_by_name_ref(&error_object, name)
@@ -793,12 +1013,18 @@ fn promise_rejection_error(env: &Env<'_>, value: AniRef<'_>) -> Error {
     if let Ok(context) = env.get_property_by_name_ref(&error_object, "cause")
         && !env.is_nullish(&context).unwrap_or(true)
     {
-        decode_error_context(env, &context, &mut error);
+        decode_error_context(env, &context, &mut error, depth, graph);
     }
     error
 }
 
-fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) {
+fn decode_error_context(
+    env: &Env<'_>,
+    context: &AniRef<'_>,
+    error: &mut Error,
+    depth: usize,
+    graph: &mut RejectionGraphState,
+) {
     if env.is_nullish(context).unwrap_or(true) {
         return;
     }
@@ -806,9 +1032,16 @@ fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) 
     let Ok(values) = (unsafe {
         std::collections::HashMap::<String, AniRef<'_>>::from_ani(env, context_object.as_raw())
     }) else {
-        error.cause = Some(Box::new(promise_rejection_error(env, unsafe {
-            AniRef::from_raw(context.as_raw())
-        })));
+        if let Some(index) = graph.identity(env, context) {
+            error.insert_property("$causeRef".into(), AniErrorValue::Integer(index as i64));
+        } else {
+            error.cause = Some(Box::new(decode_promise_rejection(
+                env,
+                unsafe { AniRef::from_raw(context.as_raw()) },
+                depth + 1,
+                graph,
+            )));
+        }
         return;
     };
 
@@ -824,7 +1057,9 @@ fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) 
             std::collections::HashMap::<String, AniRef<'_>>::from_ani(env, metadata.as_raw())
         } {
             for (key, value) in properties {
-                if let Ok(value) = AniErrorValue::from_ani_ref(env, &value) {
+                if let Ok(value) =
+                    AniErrorValue::from_ani_ref_with_limits(env, &value, graph.limits)
+                {
                     if let AniErrorValue::String(text) = &value {
                         error.metadata.insert(key.clone(), text.clone());
                     }
@@ -834,9 +1069,16 @@ fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) 
         }
     }
     if let Some(cause) = values.get("cause") {
-        error.cause = Some(Box::new(promise_rejection_error(env, unsafe {
-            AniRef::from_raw(cause.as_raw())
-        })));
+        if let Some(index) = graph.identity(env, cause) {
+            error.insert_property("$causeRef".into(), AniErrorValue::Integer(index as i64));
+        } else {
+            error.cause = Some(Box::new(decode_promise_rejection(
+                env,
+                unsafe { AniRef::from_raw(cause.as_raw()) },
+                depth + 1,
+                graph,
+            )));
+        }
     }
 }
 
@@ -870,6 +1112,22 @@ fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) 
 pub struct Deferred<T = ()> {
     resolver: AniResolver,
     _marker: PhantomData<fn() -> T>,
+    _metric: Arc<DeferredMetric>,
+}
+
+struct DeferredMetric;
+
+impl DeferredMetric {
+    fn new() -> Arc<Self> {
+        LIVE_DEFERREDS.fetch_add(1, Ordering::AcqRel);
+        Arc::new(Self)
+    }
+}
+
+impl Drop for DeferredMetric {
+    fn drop(&mut self) {
+        LIVE_DEFERREDS.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl<T> TypeInfo for Deferred<T> {
@@ -1075,6 +1333,7 @@ impl<T> Deferred<T> {
         Self {
             resolver,
             _marker: PhantomData,
+            _metric: DeferredMetric::new(),
         }
     }
 
@@ -1084,6 +1343,7 @@ impl<T> Deferred<T> {
         Deferred {
             resolver: self.resolver,
             _marker: PhantomData,
+            _metric: self._metric,
         }
     }
 

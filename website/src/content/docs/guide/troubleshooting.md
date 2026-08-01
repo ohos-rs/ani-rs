@@ -84,6 +84,8 @@ ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["async"] }
 
 使用 `tokio::time`、`tokio::fs` 等模块时，还要开启对应 `ani` passthrough feature 和 Tokio 自身 feature。
 
+只启用 `async-runtime` 时还必须在第一次调用前 `register_async_runtime(...)`；它是完全自定义 backend 模式，不会自动选择 Tokio。
+
 然后确认返回错误是否来自 Rust `Result`：
 
 ```ts

@@ -1,14 +1,18 @@
 name: OpenHarmony QEMU
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       guest_arch:
         description: Architecture of the running QEMU guest
         required: true
-        default: arm64
+        default: all
         type: choice
         options:
+          - all
           - arm64
           - x86_64
           - armv7a
@@ -18,9 +22,9 @@ on:
         default: 127.0.0.1:5558
         type: string
       qemu_packages_root:
-        description: Directory containing the extracted 20260728 QEMU packages
+        description: Directory containing the extracted 20260731-jitfix QEMU packages
         required: true
-        default: /Volumes/PSSD/qemu/releases/ohos-qemu-vpn-20260728/packages
+        default: /Volumes/PSSD/qemu/packages/20260731-jitfix
         type: string
       ohos_source_root:
         description: Matching OpenHarmony source/output root
@@ -37,28 +41,85 @@ on:
         required: true
         default: false
         type: boolean
+      auto_launch:
+        description: Launch each package headlessly and stop it after its matrix leg
+        required: true
+        default: true
+        type: boolean
+      lsan:
+        description: Enable LSan when the selected OpenHarmony runtime supports it
+        required: true
+        default: false
+        type: boolean
+      rust_asan:
+        description: Instrument Rust cdylibs with nightly AddressSanitizer
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ohos-qemu-${{ inputs.guest_arch }}
+  group: ohos-qemu-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  qemu:
-    name: ${{ inputs.guest_arch }} image runtime suite
+  compile-profiles:
+    name: ${{ matrix.api }} / ${{ matrix.arch }} compile compatibility
     runs-on: [self-hosted, ohos-qemu]
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [api23, api24, api26]
+        arch:
+          - aarch64-unknown-linux-ohos
+          - x86_64-unknown-linux-ohos
+          - armv7-unknown-linux-ohos
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add "${{ matrix.arch }}"
+      - name: Compile exact API profile
+        env:
+          DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root || '/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony' }}
+        shell: bash
+        run: |
+          case "${{ matrix.arch }}" in
+            aarch64-*) triple=aarch64-unknown-linux-ohos ;;
+            x86_64-*) triple=x86_64-unknown-linux-ohos ;;
+            armv7-*) triple=armv7-unknown-linux-ohos ;;
+          esac
+          linker="$DEVECO_SDK_ROOT/native/llvm/bin/$triple-clang"
+          target_env="CARGO_TARGET_$(printf '%s' '${{ matrix.arch }}' | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          env "$target_env=$linker" cargo check -p ani \
+            --target "${{ matrix.arch }}" --no-default-features --features "${{ matrix.api }}"
+
+  qemu:
+    name: API 26 / ${{ matrix.guest_arch }} runtime evidence
+    needs: compile-profiles
+    if: ${{ inputs.guest_arch == '' || inputs.guest_arch == 'all' || inputs.guest_arch == matrix.guest_arch }}
+    runs-on: [self-hosted, ohos-qemu]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        guest_arch: [arm64, x86_64, armv7a]
     timeout-minutes: 90
     env:
-      HDC_TARGET: ${{ inputs.hdc_target }}
-      QEMU_PACKAGES_ROOT: ${{ inputs.qemu_packages_root }}
-      OHOS_QEMU_GUEST_ARCH: ${{ inputs.guest_arch }}
-      OHOS_SOURCE_ROOT: ${{ inputs.ohos_source_root }}
-      DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root }}
-      OHOS_QEMU_WORK_ROOT: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}
-      OHOS_QEMU_REMOTE_ROOT: /data/local/tmp/ani-rs-qemu-${{ github.run_id }}
+      HDC_TARGET: ${{ inputs.hdc_target || '127.0.0.1:5558' }}
+      QEMU_PACKAGES_ROOT: ${{ inputs.qemu_packages_root || '/Volumes/PSSD/qemu/packages/20260731-jitfix' }}
+      OHOS_QEMU_GUEST_ARCH: ${{ matrix.guest_arch }}
+      OHOS_SOURCE_ROOT: ${{ inputs.ohos_source_root || '/Volumes/PSSD/qemu/openharmony' }}
+      DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root || '/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony' }}
+      OHOS_QEMU_WORK_ROOT: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}
+      OHOS_QEMU_REMOTE_ROOT: /data/local/tmp/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}
       OHOS_QEMU_RUNNER_ASAN: ${{ inputs.asan_runner && '1' || '0' }}
+      OHOS_QEMU_LSAN: ${{ inputs.lsan && '1' || '0' }}
+      OHOS_QEMU_RUST_ASAN: ${{ inputs.rust_asan && '1' || '0' }}
+      OHOS_QEMU_HDC_TIMEOUT: 60
+      # The 20260731-jitfix kernel is the release baseline. Correctness,
+      # lifecycle, memory, and performance gates all exercise Ark JIT.
+      OHOS_QEMU_DISABLE_JIT: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -83,13 +144,44 @@ jobs:
           echo "QEMU_PACKAGE_ROOT=$QEMU_PACKAGES_ROOT/$package" >> "$GITHUB_ENV"
           echo "OHOS_RUST_TARGET=$rust_target" >> "$GITHUB_ENV"
       - name: Install Rust target
-        run: rustup target add "$OHOS_RUST_TARGET"
+        shell: bash
+        run: |
+          rustup target add "$OHOS_RUST_TARGET"
+          if [[ "$OHOS_QEMU_RUST_ASAN" == 1 ]]; then
+            rustup toolchain install nightly --profile minimal
+            rustup target add --toolchain nightly "$OHOS_RUST_TARGET"
+          fi
+      - name: Launch the requested QEMU image
+        if: ${{ inputs.auto_launch == true || inputs.auto_launch == '' }}
+        shell: bash
+        run: |
+          test -f "$QEMU_PACKAGE_ROOT/manifest.json"
+          grep -q "\"guest_arch\": \"$OHOS_QEMU_GUEST_ARCH\"" "$QEMU_PACKAGE_ROOT/manifest.json"
+          port="${HDC_TARGET##*:}"
+          case "$(uname)" in
+            Darwin) launcher="$QEMU_PACKAGE_ROOT/launch/macos.command" ;;
+            *) launcher="$QEMU_PACKAGE_ROOT/launch/linux.sh" ;;
+          esac
+          QEMU_DISPLAY=none QEMU_HDC_HOST_PORT="$port" "$launcher" \
+            >"$RUNNER_TEMP/qemu-${OHOS_QEMU_GUEST_ARCH}.log" 2>&1 &
+          echo "$!" >"$RUNNER_TEMP/qemu-${OHOS_QEMU_GUEST_ARCH}.pid"
+          for attempt in $(seq 1 180); do
+            "$DEVECO_SDK_ROOT/toolchains/hdc" tconn "$HDC_TARGET" >/dev/null 2>&1 || true
+            if "$DEVECO_SDK_ROOT/toolchains/hdc" list targets |
+              tr -d '\r' | grep -Fxq "$HDC_TARGET"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/qemu-${OHOS_QEMU_GUEST_ARCH}.log" >&2
+          exit 1
       - name: Verify the requested QEMU image is running
         shell: bash
         run: |
           test -f "$QEMU_PACKAGE_ROOT/manifest.json"
           grep -q "\"guest_arch\": \"$OHOS_QEMU_GUEST_ARCH\"" "$QEMU_PACKAGE_ROOT/manifest.json"
-          ps -ax -o command= | grep -F "$QEMU_PACKAGE_ROOT/images/" | grep -v grep
+          test -f "$QEMU_PACKAGES_ROOT/BUILDINFO.md"
+          grep -Fq 'Build ID: `20260731-jitfix`' "$QEMU_PACKAGES_ROOT/BUILDINFO.md"
       - name: Verify connected OpenHarmony API level
         shell: bash
         run: |
@@ -99,9 +191,11 @@ jobs:
             HDC_BIN="$DEVECO_SDK_ROOT/toolchains/hdc"
           fi
           api_level="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.ohos.apiversion' | tr -d '\r[:space:]')"
+          kernel="$("$HDC_BIN" -t "$HDC_TARGET" shell uname -r | tr -d '\r[:space:]')"
           version="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.product.software.version' | tr -d '\r')"
-          echo "OpenHarmony: $version (API $api_level)"
-          test "$api_level" -ge 24
+          echo "OpenHarmony: $version (API $api_level, kernel $kernel)"
+          test "$api_level" -eq 26
+          test "$kernel" = 6.6.101
       - name: Run cross-build, ETS/ABC and QEMU runtime suite
         run: scripts/run_arkvm_examples_ohos_qemu.sh
       - name: Build and verify HAP smoke artifact
@@ -110,18 +204,26 @@ jobs:
         run: scripts/run_hap_abc_ohos_qemu.sh
       - name: Run bounded memory-growth stress suite
         run: scripts/check_qemu_memory.sh
+      - name: Run real-guest performance ceiling
+        env:
+          OHOS_QEMU_PERF_DISABLE_JIT: 0
+          OHOS_QEMU_SKIP_BUILD: 1
+        run: scripts/check_qemu_performance.sh
       - name: Upload QEMU report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ohos-qemu-${{ inputs.guest_arch }}-${{ github.run_id }}
+          name: ohos-qemu-api26-${{ matrix.guest_arch }}-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/report.tsv
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}/memory.tsv
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-hap-${{ inputs.guest_arch }}/report.tsv
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-hap-${{ inputs.guest_arch }}/memory.tsv
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-memory/report.tsv
-            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-memory/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}/performance.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}-hap-${{ matrix.guest_arch }}/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}-hap-${{ matrix.guest_arch }}/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}-memory/report.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}-memory/memory.tsv
+            ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}-performance/performance.tsv
+            ${{ runner.temp }}/qemu-${{ matrix.guest_arch }}.log
           if-no-files-found: warn
       - name: Clean device test directory
         if: always()
@@ -133,3 +235,13 @@ jobs:
             HDC_BIN="$DEVECO_SDK_ROOT/toolchains/hdc"
           fi
           "$HDC_BIN" -t "$HDC_TARGET" shell "rm -rf '$OHOS_QEMU_REMOTE_ROOT'" || true
+      - name: Stop matrix QEMU image
+        if: ${{ always() && (inputs.auto_launch == true || inputs.auto_launch == '') }}
+        shell: bash
+        run: |
+          pid_file="$RUNNER_TEMP/qemu-${OHOS_QEMU_GUEST_ARCH}.pid"
+          if [[ -f "$pid_file" ]]; then
+            pid="$(cat "$pid_file")"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          fi

@@ -696,6 +696,12 @@ export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): v
     (value: T): void => { __ani_rs_promise_resolve(token, value as Object); },\n\
     (reason: Object): void => { __ani_rs_promise_reject(token, reason); }\n\
   );\n\
+}\n\
+export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;\n\
+export class AniCancelHandle {\n\
+  private token: long;\n\
+  constructor(token: long) { this.token = token; }\n\
+  cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }\n\
 }\n",
         );
         out.push('\n');

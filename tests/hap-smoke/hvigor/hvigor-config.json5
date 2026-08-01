@@ -1,13 +1,13 @@
 {
-  "modelVersion": "6.0.0",
+  "modelVersion": '6.0.0',
   "dependencies": {},
   "execution": {
     "daemon": false,
     "incremental": false,
     "parallel": false,
-    "typeCheck": true
+    "typeCheck": true,
   },
   "logging": {
-    "level": "info"
-  }
+    "level": 'info',
+  },
 }

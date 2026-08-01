@@ -382,7 +382,7 @@ pub fn generate_async_wrapper_with_target(
             #conversions
             #async_param_captures
 
-            match ani::tokio::spawn_future_result_factory(&__ani_env, move || async move {
+            match ani::async_runtime::spawn_future_result_factory(&__ani_env, move || async move {
                 #async_injected
                 #async_param_restores
                 #call_target(#(#call_args),*)

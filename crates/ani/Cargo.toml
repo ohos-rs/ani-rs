@@ -21,10 +21,13 @@ api26 = ["api24"]
 error_anyhow = ["dep:anyhow"]
 # Map serde values to native ArkTS Record/Array/boxed primitive object graphs.
 serde-json = ["dep:serde", "dep:serde_json"]
-# Ergonomic alias matching napi-rs async exports.
-async = ["tokio_rt"]
-# Enable ani's tokio-backed Promise/runtime bridge.
-tokio_rt = ["dep:tokio"]
+# Executor-independent async runtime SPI. Applications can provide the entire
+# runtime without linking Tokio.
+async-runtime = []
+# Ergonomic batteries-included alias. Tokio is only the default backend.
+async = ["async-runtime", "tokio_rt"]
+# Enable ani's built-in Tokio AsyncRuntime backend and Tokio helper APIs.
+tokio_rt = ["async-runtime", "dep:tokio"]
 # Tokio passthrough feature set aligned with napi-rs naming.
 tokio_fs = ["tokio/fs"]
 tokio_full = ["tokio/full"]
@@ -49,3 +52,4 @@ serde_json = { version = "1", optional = true }
 tokio = { version = "1", optional = true, default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]
+loom = "0.7"

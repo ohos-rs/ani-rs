@@ -67,7 +67,7 @@ entry/
 
 ArkTS 代码导入生成模块后，`loadLibrary` 会加载动态库，并由 `ANI_Constructor` 完成 native function 或 method 绑定。
 
-动态库还会导出 `ANI_Destructor`。VM 卸载模块时，它按顺序执行 `#[ani(finalize)]`、释放仍存活的 `ManagedResource`、停止 ani-rs 拥有的 Tokio worker，并清空注册状态。
+动态库还会导出 `ANI_Destructor`。VM 卸载模块时，它执行 `#[ani(finalize)]`，关闭 RuntimeDomain，取消并 exactly-once reject Promise/Task/TSFN/Stream，join 自定义或内置 backend，再释放 `ManagedResource`。若非协作任务超过 shutdown deadline，watchdog 会 fail-fast，绝不会让线程在 native image 卸载后继续执行。
 
 如果项目走静态 ArkTS 编译链，`.ets` 会随应用构建进入模块 ABC；不要把源 `.ets` 当成设备侧独立脚本直接执行。
 

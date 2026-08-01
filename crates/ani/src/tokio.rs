@@ -13,16 +13,17 @@
 
 #[cfg(feature = "tokio_rt")]
 mod imp {
-    use std::any::Any;
     use std::future::Future;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll};
 
-    use crate::conversions::{Deferred, PromiseRaw, PromiseValue};
+    use crate::conversions::{PromiseRaw, PromiseValue};
     use crate::env::Env;
     use crate::error::{AniErrorPayload, Error, Result, Status};
+
+    use crate::async_runtime::{
+        AsyncRuntime, AsyncRuntimeRejection, RuntimeBlockingTask, RuntimeTask,
+    };
 
     static TOKIO_RUNTIME: Mutex<Option<Arc<::tokio::runtime::Runtime>>> = Mutex::new(None);
     static LOCAL_WORKER: Mutex<Option<LocalWorker>> = Mutex::new(None);
@@ -32,32 +33,6 @@ mod imp {
     struct LocalWorker {
         tx: ::tokio::sync::mpsc::UnboundedSender<LocalJob>,
         join: std::thread::JoinHandle<()>,
-    }
-
-    struct CatchUnwindFuture<F> {
-        inner: F,
-    }
-
-    impl<F> CatchUnwindFuture<F> {
-        fn new(inner: F) -> Self {
-            Self { inner }
-        }
-    }
-
-    impl<F> Future for CatchUnwindFuture<F>
-    where
-        F: Future,
-    {
-        type Output = std::result::Result<F::Output, Box<dyn Any + Send>>;
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let inner = unsafe { self.map_unchecked_mut(|this| &mut this.inner) };
-            match catch_unwind(AssertUnwindSafe(|| inner.poll(cx))) {
-                Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
-                Ok(Poll::Pending) => Poll::Pending,
-                Err(panic) => Poll::Ready(Err(panic)),
-            }
-        }
     }
 
     fn build_runtime() -> Result<::tokio::runtime::Runtime> {
@@ -132,24 +107,86 @@ mod imp {
             .map_err(|_| Error::new(Status::GenericFailure, "ani local tokio worker stopped"))
     }
 
-    fn panic_message(panic: Box<dyn Any + Send>) -> String {
-        if let Some(string) = panic.downcast_ref::<String>() {
-            string.clone()
-        } else if let Some(string) = panic.downcast_ref::<&str>() {
-            (*string).to_string()
-        } else {
-            "panic in async function".to_string()
+    /// Built-in Tokio implementation of ani-rs' executor-independent runtime
+    /// contract.
+    ///
+    /// The type is public so applications can wrap or compose it, but it is
+    /// selected automatically only when no custom runtime was registered.
+    #[derive(Debug, Default)]
+    pub struct TokioAsyncRuntime;
+
+    impl TokioAsyncRuntime {
+        /// Creates an unstarted backend. [`AsyncRuntime::start`] is lazy and
+        /// restartable.
+        pub const fn new() -> Self {
+            Self
         }
     }
 
-    fn reject_panic_payload(
-        vm: crate::vm::AniVm,
-        deferred: Deferred<()>,
-        panic: Box<dyn Any + Send>,
-    ) -> Result<()> {
-        let guard = vm.attach_current_thread_scoped()?;
-        let env = guard.env();
-        deferred.reject(env, panic_message(panic))
+    // SAFETY: shutdown_runtime closes the local carrier queue, drops every
+    // LocalSet future on its owning thread, joins that thread, and then drains
+    // the module-owned multi-thread Tokio runtime before returning.
+    unsafe impl AsyncRuntime for TokioAsyncRuntime {
+        fn spawn(
+            &self,
+            task: RuntimeTask,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+            let holder = Arc::new(Mutex::new(Some(task)));
+            let submitted = Arc::clone(&holder);
+            match submit_local_job(Box::new(move || {
+                let task = submitted.lock().ok().and_then(|mut task| task.take());
+                if let Some(task) = task {
+                    ::tokio::task::spawn_local(task.into_local_future());
+                }
+            })) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let task = holder
+                        .lock()
+                        .ok()
+                        .and_then(|mut task| task.take())
+                        .expect("failed Tokio submission retained RuntimeTask ownership");
+                    Err(AsyncRuntimeRejection::new(task, error))
+                }
+            }
+        }
+
+        fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+            build_blocking_runtime()?.block_on(future);
+            Ok(())
+        }
+
+        fn spawn_blocking(
+            &self,
+            task: RuntimeBlockingTask,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeBlockingTask>> {
+            let holder = Arc::new(Mutex::new(Some(task)));
+            let scheduled = Arc::clone(&holder);
+            match crate::scheduler::shared().schedule(move || {
+                if let Some(task) = scheduled.lock().ok().and_then(|mut task| task.take()) {
+                    task.run();
+                }
+            }) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let task = holder
+                        .lock()
+                        .ok()
+                        .and_then(|mut task| task.take())
+                        .expect("failed blocking submission retained RuntimeBlockingTask");
+                    Err(AsyncRuntimeRejection::new(task, error))
+                }
+            }
+        }
+
+        fn start(&self) -> Result<()> {
+            submit_local_job(Box::new(|| {}))
+        }
+
+        fn shutdown(&self) -> Result<()> {
+            shutdown_runtime();
+            Ok(())
+        }
     }
 
     /// Get the shared multi-thread Tokio runtime used by manual ANI helpers.
@@ -202,31 +239,7 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + 'static,
         E: AniErrorPayload,
     {
-        let vm = env.get_vm()?;
-        let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
-        let deferred = deferred.cast::<()>();
-
-        submit_local_job(Box::new(move || {
-            match catch_unwind(AssertUnwindSafe(build)) {
-                Ok(future) => {
-                    ::tokio::task::spawn_local(async move {
-                        match CatchUnwindFuture::new(future).await {
-                            Ok(outcome) => {
-                                let _ = finish_promise_display(vm, deferred, outcome);
-                            }
-                            Err(panic) => {
-                                let _ = reject_panic_payload(vm, deferred, panic);
-                            }
-                        }
-                    });
-                }
-                Err(panic) => {
-                    let _ = reject_panic_payload(vm, deferred, panic);
-                }
-            }
-        }))?;
-
-        Ok(promise)
+        crate::async_runtime::spawn_future_result_factory(env, build)
     }
 
     /// Spawn a future factory returning [`crate::error::Result`] on the local
@@ -252,11 +265,7 @@ mod imp {
     where
         F: Future<Output = std::result::Result<T, E>>,
     {
-        let runtime = build_blocking_runtime()?;
-        match runtime.block_on(CatchUnwindFuture::new(future)) {
-            Ok(outcome) => Ok(outcome),
-            Err(panic) => Err(Error::new(Status::GenericFailure, panic_message(panic))),
-        }
+        crate::async_runtime::block_on_future_result(future)
     }
 
     /// Backwards-compatible helper for callers that already built a `Send`
@@ -282,23 +291,6 @@ mod imp {
     {
         spawn_future_result_factory(env, move || future)
     }
-
-    fn finish_promise_display<T, E>(
-        vm: crate::vm::AniVm,
-        deferred: Deferred<()>,
-        outcome: std::result::Result<T, E>,
-    ) -> Result<()>
-    where
-        T: for<'vm> PromiseValue<'vm>,
-        E: AniErrorPayload,
-    {
-        let guard = vm.attach_current_thread_scoped()?;
-        let env = guard.env();
-        match outcome {
-            Ok(value) => deferred.resolve_value(env, value),
-            Err(error) => deferred.reject_with_payload(env, error),
-        }
-    }
 }
 
 #[cfg(not(feature = "tokio_rt"))]
@@ -307,27 +299,24 @@ mod imp {
 
     use crate::conversions::{PromiseRaw, PromiseValue};
     use crate::env::Env;
-    use crate::error::{AniErrorPayload, Error, Result, Status};
+    use crate::error::{AniErrorPayload, Result};
 
-    const MISSING_TOKIO_RT: &str =
-        "async bindings require enabling `ani` feature `async` (or `tokio_rt`)";
-
-    /// No-op when Tokio integration is not compiled in.
+    /// Shuts down the executor-independent runtime domain.
     #[doc(hidden)]
-    pub fn shutdown_runtime() {}
+    pub fn shutdown_runtime() {
+        let _ = crate::async_runtime::shutdown_runtime_domain();
+    }
 
-    /// Return a rejected Promise explaining that Tokio integration is disabled.
+    /// Spawn through the registered executor-independent runtime backend.
     pub fn spawn_future<'env, T, F>(env: &Env<'env>, _future: F) -> Result<PromiseRaw<'env, T>>
     where
         T: Send + 'static + for<'vm> PromiseValue<'vm>,
         F: Future<Output = crate::error::Result<T>> + Send + 'static,
     {
-        let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
-        deferred.reject(env, MISSING_TOKIO_RT)?;
-        Ok(promise)
+        crate::async_runtime::spawn_future(env, _future)
     }
 
-    /// Return a rejected Promise explaining that Tokio integration is disabled.
+    /// Spawn through the registered executor-independent runtime backend.
     pub fn spawn_future_result<'env, T, F, E>(
         env: &Env<'env>,
         _future: F,
@@ -337,12 +326,10 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + Send + 'static,
         E: AniErrorPayload,
     {
-        let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
-        deferred.reject(env, MISSING_TOKIO_RT)?;
-        Ok(promise)
+        crate::async_runtime::spawn_future_result(env, _future)
     }
 
-    /// Return a rejected Promise instead of starting a disabled future factory.
+    /// Spawn a future factory through the registered custom runtime.
     pub fn spawn_future_factory<'env, T, Build, F>(
         env: &Env<'env>,
         _build: Build,
@@ -352,12 +339,10 @@ mod imp {
         Build: FnOnce() -> F + Send + 'static,
         F: Future<Output = crate::error::Result<T>> + 'static,
     {
-        let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
-        deferred.reject(env, MISSING_TOKIO_RT)?;
-        Ok(promise)
+        crate::async_runtime::spawn_future_factory(env, _build)
     }
 
-    /// Return a rejected Promise instead of starting a disabled result factory.
+    /// Spawn a result factory through the registered custom runtime.
     pub fn spawn_future_result_factory<'env, T, Build, F, E>(
         env: &Env<'env>,
         _build: Build,
@@ -368,20 +353,20 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + 'static,
         E: AniErrorPayload,
     {
-        let (deferred, promise) = PromiseRaw::<T>::deferred(env)?;
-        deferred.reject(env, MISSING_TOKIO_RT)?;
-        Ok(promise)
+        crate::async_runtime::spawn_future_result_factory(env, _build)
     }
 
-    /// Return an error because blocking async execution requires Tokio support.
+    /// Block through the registered custom runtime backend.
     pub fn block_on_future_result<F, T, E>(_future: F) -> Result<std::result::Result<T, E>>
     where
         F: Future<Output = std::result::Result<T, E>>,
     {
-        Err(Error::new(Status::GenericFailure, MISSING_TOKIO_RT))
+        crate::async_runtime::block_on_future_result(_future)
     }
 }
 
+#[cfg(feature = "tokio_rt")]
+pub use imp::TokioAsyncRuntime;
 #[cfg(feature = "tokio_rt")]
 pub use imp::runtime;
 pub use imp::{

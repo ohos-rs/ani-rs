@@ -155,6 +155,7 @@ ETS
       cat <<'ETS'
 function main(): void {
   console.log("[arkvm] smoke start: ani-example-async-wrapper");
+  let runtimeGlobalReferenceBaseline: long = __ANI_GENERATED__.runtime_global_reference_count();
   __assert_eq_int("async_square", __ANI_GENERATED__.async_square(6), 36);
   let taskId = __ANI_GENERATED__.async_compute_start(5);
   __assert_true("async_compute_start_non_negative", taskId >= 0);
@@ -162,8 +163,10 @@ function main(): void {
   __assert_true("batch_compute_non_negative", __ANI_GENERATED__.batch_compute(3) >= 0);
   let promisedSquare: int = waitForCompletion(() => __ANI_GENERATED__.tokio_delayed_square(7, 10));
   __assert_eq_int("tokio_delayed_square", promisedSquare, 49);
+  __ANI_GENERATED__.runtime_leak_checkpoint();
   let promisedSquareAsync: int = waitForCompletion(() => __ANI_GENERATED__.tokio_delayed_square_async(7, 10));
   __assert_eq_int("tokio_delayed_square_async", promisedSquareAsync, 49);
+  __assert_true("runtime_task_leak_gate", __ANI_GENERATED__.runtime_assert_no_leaks());
   let promisedText: string = waitForCompletion(() => __ANI_GENERATED__.tokio_fetch_text("ani://tokio"));
   __assert_eq_string("tokio_fetch_text", promisedText, "Response from: ani://tokio");
   let promisedTextAsync: string = waitForCompletion(() => __ANI_GENERATED__.tokio_fetch_text_async("ani://tokio"));
@@ -432,6 +435,13 @@ function main(): void {
   __assert_true("runtime_shutdown_iterator_cleanup", shutdownIteratorReturn.done);
   let restartedSquare: int = waitForCompletion(() => background_square(12));
   __assert_eq_int("runtime_kernel_restarted_task", restartedSquare, 144);
+  __assert_true(
+    "runtime_global_reference_leak_gate",
+    __ANI_GENERATED__.runtime_wait_for_global_reference_count(
+      runtimeGlobalReferenceBaseline,
+      3000,
+    ),
+  );
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);

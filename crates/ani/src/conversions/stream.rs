@@ -13,6 +13,7 @@ use crate::types::AniRef;
 use super::{PromiseRaw, PromiseValue, ToAni, TypeInfo};
 
 static LIVE_STREAMS: AtomicUsize = AtomicUsize::new(0);
+static PENDING_STREAM_WAITERS: AtomicUsize = AtomicUsize::new(0);
 
 enum StreamSettlement<T, E> {
     Item(std::result::Result<T, E>),
@@ -23,6 +24,41 @@ enum StreamSettlement<T, E> {
 
 struct StreamWaiter<T, E> {
     settle: Box<dyn FnOnce(StreamSettlement<T, E>) -> Result<()> + Send + 'static>,
+    _metric: StreamWaiterMetric,
+}
+
+enum StreamWriteSettlement {
+    Accepted,
+    Error(Arc<DynAniError>),
+    Closed,
+    Cancelled,
+}
+
+struct StreamWriteWaiter<T> {
+    item: Option<T>,
+    settle: Box<dyn FnOnce(StreamWriteSettlement) -> Result<()> + Send + 'static>,
+    _metric: StreamWaiterMetric,
+}
+
+impl<T> StreamWriteWaiter<T> {
+    fn settle(self, settlement: StreamWriteSettlement) -> Result<()> {
+        (self.settle)(settlement)
+    }
+}
+
+struct StreamWaiterMetric;
+
+impl StreamWaiterMetric {
+    fn new() -> Self {
+        PENDING_STREAM_WAITERS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for StreamWaiterMetric {
+    fn drop(&mut self) {
+        PENDING_STREAM_WAITERS.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl<T, E> StreamWaiter<T, E> {
@@ -34,6 +70,7 @@ impl<T, E> StreamWaiter<T, E> {
 struct StreamState<T, E> {
     queue: VecDeque<std::result::Result<T, E>>,
     waiters: VecDeque<StreamWaiter<T, E>>,
+    write_waiters: VecDeque<StreamWriteWaiter<T>>,
     senders: usize,
     closed: bool,
     terminal_error: Option<Arc<DynAniError>>,
@@ -46,29 +83,52 @@ struct StreamInner<T, E> {
     registration: Mutex<Option<RuntimeRegistration>>,
 }
 
+type StreamCloseState<T, E> = (
+    Vec<StreamWaiter<T, E>>,
+    Vec<StreamWriteWaiter<T>>,
+    Option<Arc<DynAniError>>,
+);
+
 impl<T, E> StreamInner<T, E> {
-    fn close_state(
-        &self,
-        terminal_error: Option<Arc<DynAniError>>,
-    ) -> (Vec<StreamWaiter<T, E>>, Option<Arc<DynAniError>>) {
+    fn close_state(&self, terminal_error: Option<Arc<DynAniError>>) -> StreamCloseState<T, E> {
         let waiters = self
             .state
             .lock()
             .map(|mut state| {
                 if state.closed {
-                    return (Vec::new(), state.terminal_error.clone());
+                    return (Vec::new(), Vec::new(), state.terminal_error.clone());
                 }
                 state.closed = true;
                 state.queue.clear();
                 state.terminal_error = terminal_error;
                 (
                     state.waiters.drain(..).collect::<Vec<_>>(),
+                    state.write_waiters.drain(..).collect::<Vec<_>>(),
                     state.terminal_error.clone(),
                 )
             })
             .unwrap_or_default();
         self.space_available.notify_all();
         waiters
+    }
+}
+
+impl<T, E> StreamInner<T, E>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    fn ensure_runtime_registration(self: &Arc<Self>) -> Result<()> {
+        let mut registration = self.registration.lock().map_err(|_| {
+            Error::new(
+                Status::GenericFailure,
+                "async stream registration lock poisoned",
+            )
+        })?;
+        if registration.is_none() {
+            *registration = Some(crate::scheduler::shared().register_cancellable(self)?);
+        }
+        Ok(())
     }
 }
 
@@ -84,8 +144,12 @@ where
     E: Send + 'static,
 {
     fn cancel_for_runtime_shutdown(&self) {
-        for waiter in self.close_state(None).0 {
+        let (read_waiters, write_waiters, _) = self.close_state(None);
+        for waiter in read_waiters {
             let _ = waiter.settle(StreamSettlement::Cancelled);
+        }
+        for waiter in write_waiters {
+            let _ = waiter.settle(StreamWriteSettlement::Cancelled);
         }
     }
 }
@@ -178,6 +242,83 @@ where
         self.try_send_result(Ok(item))
     }
 
+    /// Return a Promise which resolves once this item has entered the bounded
+    /// queue (or was delivered directly to a pending reader).
+    ///
+    /// Full queues register a non-blocking state-machine waiter. No scheduler
+    /// worker is occupied while OpenHarmony `Writable.doWrite` waits to invoke
+    /// its completion callback, so callback completion naturally represents
+    /// the stream's drain/backpressure boundary.
+    pub fn send_promise<'env>(&self, env: &Env<'env>, item: T) -> Result<PromiseRaw<'env, ()>> {
+        self.inner.ensure_runtime_registration()?;
+        let (deferred, promise) = PromiseRaw::deferred(env)?;
+        let vm = env.get_vm()?;
+        let mut write_waiter = Some(StreamWriteWaiter {
+            item: Some(item),
+            settle: Box::new(move |settlement| {
+                vm.with_attached(|env| match settlement {
+                    StreamWriteSettlement::Accepted => deferred.resolve_value(env, ()),
+                    StreamWriteSettlement::Error(error) => deferred.reject_with_payload(env, error),
+                    StreamWriteSettlement::Closed => deferred.reject_with_error(
+                        env,
+                        Error::new(Status::Closing, "async stream receiver is closed"),
+                    ),
+                    StreamWriteSettlement::Cancelled => deferred.reject_with_payload(
+                        env,
+                        crate::async_runtime::runtime_cancellation_error(
+                            crate::async_runtime::RuntimeCancelReason::Shutdown,
+                        ),
+                    ),
+                })
+            }),
+            _metric: StreamWaiterMetric::new(),
+        });
+
+        let (read_waiter, immediate) = {
+            let mut state =
+                self.inner.state.lock().map_err(|_| {
+                    Error::new(Status::GenericFailure, "async stream lock poisoned")
+                })?;
+            if state.closed {
+                let settlement = state
+                    .terminal_error
+                    .as_ref()
+                    .map(|error| StreamWriteSettlement::Error(Arc::clone(error)))
+                    .unwrap_or(StreamWriteSettlement::Closed);
+                (None, Some(settlement))
+            } else if let Some(read_waiter) = state.waiters.pop_front() {
+                (Some(read_waiter), Some(StreamWriteSettlement::Accepted))
+            } else if state.queue.len() < self.inner.capacity {
+                let item = write_waiter
+                    .as_mut()
+                    .and_then(|waiter| waiter.item.take())
+                    .expect("write waiter item is present");
+                state.queue.push_back(Ok(item));
+                (None, Some(StreamWriteSettlement::Accepted))
+            } else {
+                state
+                    .write_waiters
+                    .push_back(write_waiter.take().expect("write waiter is present"));
+                (None, None)
+            }
+        };
+
+        if let Some(read_waiter) = read_waiter {
+            let item = write_waiter
+                .as_mut()
+                .and_then(|waiter| waiter.item.take())
+                .expect("direct write item is present");
+            read_waiter.settle(StreamSettlement::Item(Ok(item)))?;
+        }
+        if let Some(settlement) = immediate {
+            write_waiter
+                .take()
+                .expect("immediate write waiter is present")
+                .settle(settlement)?;
+        }
+        Ok(promise)
+    }
+
     /// Send an error that will reject the next Promise.
     pub fn send_error(&self, error: E) -> Result<()> {
         let error: Arc<DynAniError> = Arc::new(Box::new(error));
@@ -224,13 +365,16 @@ where
 }
 
 fn close_stream<T, E>(inner: &Arc<StreamInner<T, E>>, _reason: Option<Error>) {
-    let (waiters, terminal_error) = inner.close_state(None);
+    let (waiters, write_waiters, terminal_error) = inner.close_state(None);
     for waiter in waiters {
         let settlement = terminal_error
             .as_ref()
             .map(|error| StreamSettlement::Error(Arc::clone(error)))
             .unwrap_or(StreamSettlement::End);
         let _ = waiter.settle(settlement);
+    }
+    for waiter in write_waiters {
+        let _ = waiter.settle(StreamWriteSettlement::Closed);
     }
 }
 
@@ -239,12 +383,12 @@ fn close_stream<T, E>(inner: &Arc<StreamInner<T, E>>, _reason: Option<Error>) {
 /// queued items and waiters, but pairing them here keeps the transition
 /// correct under every send/drop interleaving.
 fn finish_stream<T, E>(inner: &Arc<StreamInner<T, E>>) {
-    let settlements = inner
+    let (settlements, write_waiters) = inner
         .state
         .lock()
         .map(|mut state| {
             if state.closed {
-                return Vec::new();
+                return (Vec::new(), Vec::new());
             }
             state.closed = true;
             let mut settlements = Vec::with_capacity(state.waiters.len());
@@ -256,36 +400,54 @@ fn finish_stream<T, E>(inner: &Arc<StreamInner<T, E>>) {
                     .unwrap_or(StreamSettlement::End);
                 settlements.push((waiter, settlement));
             }
-            settlements
+            let write_waiters = state.write_waiters.drain(..).collect::<Vec<_>>();
+            (settlements, write_waiters)
         })
         .unwrap_or_default();
     inner.space_available.notify_all();
     for (waiter, settlement) in settlements {
         let _ = waiter.settle(settlement);
     }
+    for waiter in write_waiters {
+        let _ = waiter.settle(StreamWriteSettlement::Closed);
+    }
 }
 
 fn return_stream<T, E>(inner: &Arc<StreamInner<T, E>>) {
-    let waiters = inner
+    let (waiters, write_waiters) = inner
         .state
         .lock()
         .map(|mut state| {
             state.closed = true;
             state.queue.clear();
             state.terminal_error = None;
-            state.waiters.drain(..).collect::<Vec<_>>()
+            (
+                state.waiters.drain(..).collect::<Vec<_>>(),
+                state.write_waiters.drain(..).collect::<Vec<_>>(),
+            )
         })
         .unwrap_or_default();
     inner.space_available.notify_all();
     for waiter in waiters {
         let _ = waiter.settle(StreamSettlement::End);
     }
+    for waiter in write_waiters {
+        let _ = waiter.settle(StreamWriteSettlement::Closed);
+    }
 }
 
 fn close_stream_with_error<T, E>(inner: &Arc<StreamInner<T, E>>, error: Arc<DynAniError>) {
-    let (waiters, terminal_error) = inner.close_state(Some(error));
+    let (waiters, write_waiters, terminal_error) = inner.close_state(Some(error));
     for waiter in waiters {
         let _ = waiter.settle(StreamSettlement::Error(
+            terminal_error
+                .as_ref()
+                .expect("stream terminal error was installed")
+                .clone(),
+        ));
+    }
+    for waiter in write_waiters {
+        let _ = waiter.settle(StreamWriteSettlement::Error(
             terminal_error
                 .as_ref()
                 .expect("stream terminal error was installed")
@@ -312,6 +474,17 @@ impl<T, E> Clone for AsyncStream<T, E> {
 pub type AsyncIterator<T, E = Error> = AsyncStream<T, E>;
 /// Sender alias paired with [`AsyncIterator`].
 pub type AsyncIteratorSender<T, E = Error> = StreamSender<T, E>;
+
+/// Native source endpoint used by an API 23+ `@ohos.util.stream.Readable`
+/// subclass. The ETS adapter drives [`AsyncStream::next_promise`], so
+/// pause/resume remain on the AbortSignal/stream owning ArkTS thread while the
+/// Rust side supplies bounded backpressure, close, error, and cancellation.
+pub type OhosReadableSource<E = Error> = AsyncStream<super::Uint8Array, E>;
+
+/// Native sink endpoint used by an API 23+ `@ohos.util.stream.Writable`
+/// subclass. `doWrite` maps to [`StreamSender::send_promise`]; its callback is
+/// invoked when that Promise settles, providing bounded drain/backpressure.
+pub type OhosWritableSink<E = Error> = StreamSender<super::Uint8Array, E>;
 
 /// Nullable result used internally to resolve an async-iterator `next()` Promise.
 pub struct AsyncIteratorValue<T>(pub Option<T>);
@@ -356,6 +529,7 @@ pub fn stream_channel_with_error<T, E>(
         state: Mutex::new(StreamState {
             queue: VecDeque::with_capacity(capacity),
             waiters: VecDeque::new(),
+            write_waiters: VecDeque::new(),
             senders: 1,
             closed: false,
             terminal_error: None,
@@ -370,6 +544,18 @@ pub fn stream_channel_with_error<T, E>(
         },
         AsyncStream { inner },
     ))
+}
+
+/// Creates paired OpenHarmony byte-stream endpoints with a custom error type.
+pub fn ohos_byte_stream_channel_with_error<E>(
+    capacity: usize,
+) -> Result<(OhosWritableSink<E>, OhosReadableSource<E>)> {
+    stream_channel_with_error(capacity)
+}
+
+/// Creates paired OpenHarmony byte-stream endpoints using ani-rs errors.
+pub fn ohos_byte_stream_channel(capacity: usize) -> Result<(OhosWritableSink, OhosReadableSource)> {
+    stream_channel(capacity)
 }
 
 impl<T, E> AsyncStream<T, E>
@@ -395,7 +581,7 @@ where
         &self,
         env: &Env<'env>,
     ) -> Result<PromiseRaw<'env, AsyncIteratorValue<T>>> {
-        self.ensure_runtime_registration()?;
+        self.inner.ensure_runtime_registration()?;
         let (deferred, promise) = PromiseRaw::deferred(env)?;
         let vm = env.get_vm()?;
         let mut waiter = Some(StreamWaiter {
@@ -407,40 +593,54 @@ where
                     StreamSettlement::Item(Err(error)) => deferred.reject_with_payload(env, error),
                     StreamSettlement::Error(error) => deferred.reject_with_payload(env, error),
                     StreamSettlement::End => deferred.resolve_value(env, AsyncIteratorValue(None)),
-                    StreamSettlement::Cancelled => deferred.reject_with_error(
+                    StreamSettlement::Cancelled => deferred.reject_with_payload(
                         env,
-                        Error::new(
-                            Status::Cancelled,
-                            "async stream cancelled during runtime shutdown",
+                        crate::async_runtime::runtime_cancellation_error(
+                            crate::async_runtime::RuntimeCancelReason::Shutdown,
                         ),
                     ),
                 })
             }),
+            _metric: StreamWaiterMetric::new(),
         });
-        let immediate = {
+        let (immediate, released_write) = {
             let mut state =
                 self.inner.state.lock().map_err(|_| {
                     Error::new(Status::GenericFailure, "async stream lock poisoned")
                 })?;
             if let Some(item) = state.queue.pop_front() {
-                self.inner.space_available.notify_one();
-                Some(StreamSettlement::Item(item))
+                let mut released = state.write_waiters.pop_front();
+                if let Some(waiter) = released.as_mut() {
+                    state.queue.push_back(Ok(waiter
+                        .item
+                        .take()
+                        .expect("queued write item is present")));
+                } else {
+                    self.inner.space_available.notify_one();
+                }
+                (Some(StreamSettlement::Item(item)), released)
             } else if state.closed {
-                Some(
-                    state
-                        .terminal_error
-                        .as_ref()
-                        .map(|error| StreamSettlement::Error(Arc::clone(error)))
-                        .unwrap_or(StreamSettlement::End),
+                (
+                    Some(
+                        state
+                            .terminal_error
+                            .as_ref()
+                            .map(|error| StreamSettlement::Error(Arc::clone(error)))
+                            .unwrap_or(StreamSettlement::End),
+                    ),
+                    None,
                 )
             } else {
                 state
                     .waiters
                     .push_back(waiter.take().expect("stream waiter is present"));
-                None
+                (None, None)
             }
         };
 
+        if let Some(write_waiter) = released_write {
+            write_waiter.settle(StreamWriteSettlement::Accepted)?;
+        }
         if let Some(settlement) = immediate {
             waiter
                 .take()
@@ -481,24 +681,16 @@ where
     pub fn close(&self) {
         close_stream(&self.inner, None);
     }
-
-    fn ensure_runtime_registration(&self) -> Result<()> {
-        let mut registration = self.inner.registration.lock().map_err(|_| {
-            Error::new(
-                Status::GenericFailure,
-                "async stream registration lock poisoned",
-            )
-        })?;
-        if registration.is_none() {
-            *registration = Some(crate::scheduler::shared().register_cancellable(&self.inner)?);
-        }
-        Ok(())
-    }
 }
 
 /// Number of live stream receivers, for leak gates.
 pub fn live_async_stream_count() -> usize {
     LIVE_STREAMS.load(Ordering::Acquire)
+}
+
+/// Number of unresolved async-iterator `next()` Promise waiters.
+pub fn pending_async_stream_waiter_count() -> usize {
+    PENDING_STREAM_WAITERS.load(Ordering::Acquire)
 }
 
 #[cfg(test)]
@@ -591,6 +783,7 @@ mod tests {
                         settled_sender.send((index, value)).unwrap();
                         Ok(())
                     }),
+                    _metric: StreamWaiterMetric::new(),
                 });
             }
         }
@@ -628,6 +821,7 @@ mod tests {
                         }
                         Ok(())
                     }),
+                    _metric: StreamWaiterMetric::new(),
                 });
             }
         }
@@ -648,5 +842,38 @@ mod tests {
             producer.join().unwrap().unwrap_err().status,
             Status::Closing
         );
+    }
+
+    #[test]
+    fn pending_writable_waiters_close_without_scheduler_work() {
+        let (_sender, stream) = stream_channel::<i32>(1).unwrap();
+        let closing_thread = std::thread::current().id();
+        let baseline = pending_async_stream_waiter_count();
+        let (settled_tx, settled_rx) = std::sync::mpsc::channel();
+        stream
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .write_waiters
+            .push_back(StreamWriteWaiter {
+                item: Some(7),
+                settle: Box::new(move |settlement| {
+                    settled_tx
+                        .send((
+                            matches!(settlement, StreamWriteSettlement::Closed),
+                            std::thread::current().id(),
+                        ))
+                        .unwrap();
+                    Ok(())
+                }),
+                _metric: StreamWaiterMetric::new(),
+            });
+        assert_eq!(pending_async_stream_waiter_count(), baseline + 1);
+        stream.close();
+        let (closed, settlement_thread) = settled_rx.recv().unwrap();
+        assert!(closed);
+        assert_eq!(settlement_thread, closing_thread);
+        assert_eq!(pending_async_stream_waiter_count(), baseline);
     }
 }

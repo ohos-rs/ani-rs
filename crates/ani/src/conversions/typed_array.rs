@@ -98,25 +98,13 @@ unsafe impl TypedArrayElement for ClampedU8 {
 /// An owned typed numeric array transported as its native ArkTS typed-array class.
 #[derive(Debug)]
 pub struct TypedArray<T: TypedArrayElement> {
-    buffer: ArrayBuffer,
-    byte_offset: usize,
-    length: usize,
-    marker: PhantomData<T>,
+    values: Vec<T>,
 }
 
 impl<T: TypedArrayElement> TypedArray<T> {
     /// Creates a typed array from owned elements.
     pub fn new(values: Vec<T>) -> Self {
-        let mut bytes = Vec::with_capacity(values.len().saturating_mul(T::WIDTH));
-        for value in &values {
-            value.encode(&mut bytes);
-        }
-        Self {
-            buffer: ArrayBuffer::new(bytes),
-            byte_offset: 0,
-            length: values.len(),
-            marker: PhantomData,
-        }
+        Self { values }
     }
 
     fn from_buffer(buffer: ArrayBuffer, byte_offset: usize, length: usize) -> Result<Self> {
@@ -132,65 +120,43 @@ impl<T: TypedArrayElement> TypedArray<T> {
                 "typed-array view exceeds its backing ArrayBuffer",
             ));
         }
-        let ptr = unsafe { buffer.as_ptr().add(byte_offset) };
-        if byte_length != 0 && !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
-            return Err(Error::new(
-                Status::InvalidArgs,
-                "typed-array data is misaligned",
-            ));
-        }
-        Ok(Self {
-            buffer,
-            byte_offset,
-            length,
-            marker: PhantomData,
-        })
+        // OwnedTypedArray is the async/thread-safe model. ANI does not provide
+        // an external ArrayBuffer contract and ArkTS may mutate its backing at
+        // any time, so crossing into this type is an explicit copy/freeze.
+        Self::decode_bytes(&buffer.as_slice()[byte_offset..end])
     }
 
     /// Returns the element slice.
     pub fn as_slice(&self) -> &[T] {
-        if self.length == 0 {
-            return &[];
-        }
-        unsafe {
-            std::slice::from_raw_parts(
-                self.buffer.as_ptr().add(self.byte_offset).cast::<T>(),
-                self.length,
-            )
-        }
+        &self.values
     }
 
     /// Returns the mutable element slice.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        if self.length == 0 {
-            return &mut [];
-        }
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                self.buffer.as_mut_ptr().add(self.byte_offset).cast::<T>(),
-                self.length,
-            )
-        }
+        &mut self.values
     }
 
     /// Consumes the wrapper.
     pub fn into_vec(self) -> Vec<T> {
-        self.as_slice().to_vec()
+        self.values
     }
 
     /// Number of elements, not bytes.
     pub fn len(&self) -> usize {
-        self.length
+        self.values.len()
     }
 
     /// Whether no elements are present.
     pub fn is_empty(&self) -> bool {
-        self.length == 0
+        self.values.is_empty()
     }
 
     fn encode_bytes(&self) -> Vec<u8> {
-        let byte_length = self.length.saturating_mul(T::WIDTH);
-        self.buffer.as_slice()[self.byte_offset..self.byte_offset + byte_length].to_vec()
+        let mut bytes = Vec::with_capacity(self.values.len().saturating_mul(T::WIDTH));
+        for value in &self.values {
+            value.encode(&mut bytes);
+        }
+        bytes
     }
 
     /// Encodes the elements using the stable little-endian ANI transport.
@@ -226,6 +192,13 @@ impl<T: TypedArrayElement> Clone for TypedArray<T> {
     }
 }
 
+// SAFETY: every public constructor and FromAni path stores a `Vec<T>`.
+// `from_buffer` freezes ANI-backed storage before constructing the value, so
+// no VM pointer can inhabit TypedArray across a thread boundary.
+unsafe impl<T: TypedArrayElement> Send for TypedArray<T> {}
+// SAFETY: the owned backing is immutable through shared references.
+unsafe impl<T: TypedArrayElement> Sync for TypedArray<T> {}
+
 impl<T: TypedArrayElement> Default for TypedArray<T> {
     fn default() -> Self {
         Self::new(Vec::new())
@@ -258,7 +231,7 @@ impl<'env, T: TypedArrayElement> ToAni<'env> for TypedArray<T> {
     type Output = sys::ani_object;
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
-        let length = i32::try_from(self.length).map_err(|_| {
+        let length = i32::try_from(self.values.len()).map_err(|_| {
             Error::new(
                 Status::OutOfRange,
                 "typed array length exceeds ArkTS int range",
@@ -337,12 +310,128 @@ impl<'env, T: TypedArrayElement> FromAni<'env> for TypedArray<T> {
     }
 }
 
-/// Owned global-reference/COW typed-array model.
+/// Pure Rust owned typed array. It is safe to move into async work.
+pub type OwnedTypedArray<T> = TypedArray<T>;
+
+/// ANI/global-reference-backed typed-array view.
 ///
-/// Input is zero-copy and keeps the backing ArrayBuffer alive. The first
-/// mutable access detaches into Rust-owned memory because ANI does not expose
-/// an external ArrayBuffer API for a symmetric Rust-to-ArkTS zero-copy path.
-pub type TypedArrayRef<T> = TypedArray<T>;
+/// This model keeps the ArkTS ArrayBuffer alive and reads it without copying,
+/// but is intentionally `!Send + !Sync`: ArkTS can mutate the same backing and
+/// ANI access remains VM-thread constrained. Call [`freeze`](Self::freeze) to
+/// cross an async/thread boundary.
+pub struct TypedArrayRef<T: TypedArrayElement> {
+    buffer: ArrayBuffer,
+    byte_offset: usize,
+    length: usize,
+    marker: PhantomData<T>,
+    not_send: PhantomData<std::rc::Rc<()>>,
+}
+
+impl<T: TypedArrayElement> std::fmt::Debug for TypedArrayRef<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TypedArrayRef")
+            .field("length", &self.length)
+            .field("byte_offset", &self.byte_offset)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: TypedArrayElement> TypedArrayRef<T> {
+    fn from_buffer(buffer: ArrayBuffer, byte_offset: usize, length: usize) -> Result<Self> {
+        let byte_length = length
+            .checked_mul(T::WIDTH)
+            .ok_or_else(|| Error::new(Status::OutOfRange, "typed-array byte length overflow"))?;
+        let end = byte_offset
+            .checked_add(byte_length)
+            .ok_or_else(|| Error::new(Status::OutOfRange, "typed-array byte range overflow"))?;
+        if end > buffer.len() {
+            return Err(Error::new(
+                Status::OutOfRange,
+                "typed-array view exceeds its backing ArrayBuffer",
+            ));
+        }
+        let ptr = unsafe { buffer.as_ptr().add(byte_offset) };
+        if byte_length != 0 && !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+            return Err(Error::new(
+                Status::InvalidArgs,
+                "typed-array data is misaligned",
+            ));
+        }
+        Ok(Self {
+            buffer,
+            byte_offset,
+            length,
+            marker: PhantomData,
+            not_send: PhantomData,
+        })
+    }
+
+    /// Current elements in the VM backing. The caller must prevent concurrent
+    /// ArkTS mutation for the duration of this borrow.
+    pub fn as_slice(&self) -> &[T] {
+        if self.length == 0 {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    self.buffer.as_ptr().add(self.byte_offset).cast::<T>(),
+                    self.length,
+                )
+            }
+        }
+    }
+
+    /// Copies/freezes the current contents into a `Send + Sync` Rust value.
+    pub fn freeze(&self) -> OwnedTypedArray<T> {
+        TypedArray::new(self.as_slice().to_vec())
+    }
+
+    /// Alias for [`freeze`](Self::freeze).
+    pub fn to_owned(&self) -> OwnedTypedArray<T> {
+        self.freeze()
+    }
+
+    /// Number of elements.
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Whether the view has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+}
+
+impl<T: TypedArrayElement> TypeInfo for TypedArrayRef<T> {
+    fn type_signature() -> &'static str {
+        T::TYPE_SIGNATURE
+    }
+
+    fn ani_c_type() -> &'static str {
+        "ani_object"
+    }
+}
+
+impl<'env, T: TypedArrayElement> FromAni<'env> for TypedArrayRef<T> {
+    type Input = sys::ani_object;
+
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let object = validate_typed_array::<T>(env, value)?;
+        let (byte_offset, byte_length, buffer_ref) = typed_array_view_info::<T>(env, &object)?;
+        let buffer =
+            unsafe { ArrayBuffer::from_ani(env, buffer_ref.as_raw() as sys::ani_arraybuffer) }?;
+        Self::from_buffer(buffer, byte_offset, byte_length / T::WIDTH)
+    }
+}
+
+impl<'env, T: TypedArrayElement> ToAni<'env> for TypedArrayRef<T> {
+    type Output = sys::ani_object;
+
+    fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
+        self.freeze().to_ani(env)
+    }
+}
 
 fn validate_typed_array<'env, T: TypedArrayElement>(
     env: &Env<'env>,
@@ -465,6 +554,12 @@ pub struct TypedArraySliceMut<'env, T: TypedArrayElement> {
     data: &'env mut [T],
     marker: PhantomData<&'env mut AniObject<'env>>,
 }
+
+/// Concise name for a scope-bound, read-only zero-copy view.
+pub type TypedArrayView<'env, T> = TypedArraySlice<'env, T>;
+
+/// Concise name for an explicitly-exclusive mutable zero-copy view.
+pub type TypedArrayMut<'env, T> = TypedArraySliceMut<'env, T>;
 
 impl<'env, T: TypedArrayElement> TypedArraySliceMut<'env, T> {
     /// Create a mutable view after proving that no ArkTS or Rust alias can

@@ -1,9 +1,5 @@
 export class OhosQemuLauncher {
-  public invoke(
-    abcPath: string,
-    className: string,
-    methodName: string,
-  ): void {
+  public invoke(abcPath: string, className: string, methodName: string): void {
     this.invokeRepeated(abcPath, className, methodName, 1);
   }
 

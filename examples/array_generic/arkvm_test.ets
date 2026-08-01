@@ -30,6 +30,12 @@ promise.then(
 (reason: Object): void => { __ani_rs_promise_reject(token, reason); }
 );
 }
+export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
+export class AniCancelHandle {
+private token: long;
+constructor(token: long) { this.token = token; }
+cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+}
 
 
 

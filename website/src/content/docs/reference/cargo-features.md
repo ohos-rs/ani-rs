@@ -14,8 +14,9 @@ description: 按需启用 ani-rs 的错误集成、异步运行时和 Tokio 功�
 | `api26` | API 26 发布/QEMU 验证 profile，包含 `api24` |
 | `error_anyhow` | 将 `anyhow::Error` 转换为 `ani::Error` |
 | `serde-json` | 启用 `Json<T>`、`serde_json::Value` 与结构化 `AniEnum` 的原生 Object bridge |
-| `async` | `tokio_rt` 的易用别名 |
-| `tokio_rt` | 启用 ani-rs Tokio runtime 与 Promise bridge |
+| `async-runtime` | 执行器无关的 `AsyncRuntime` / `RuntimeTask` SPI |
+| `async` | `async-runtime` + 内置 Tokio backend |
+| `tokio_rt` | 选择内置 Tokio backend，并保留 Tokio helper API |
 | `tokio_fs` | 启用 Tokio 文件系统 API |
 | `tokio_full` | 启用 Tokio `full` feature |
 | `tokio_io_std` | 启用 Tokio 标准输入输出 |
@@ -56,6 +57,8 @@ tokio = {
 
 `ani` 的 Tokio feature 会透传给内部 Tokio 依赖。你的 crate 如果直接调用 `tokio::fs` 或 `tokio::time`，仍应在自己的 `tokio` 依赖中开启相同模块。
 
+已有平台线程池或自有执行器时，只开启 `async-runtime`，并在首次异步调用前 `register_async_runtime(...)`。生成宏、Task 和 TSFN 不要求 backend 是 Tokio。
+
 ## anyhow
 
 ```toml
@@ -84,6 +87,7 @@ serde = { version = "1", features = ["derive"] }
 
 - 没有 async API：保持默认 features。
 - 只有 async Promise：使用 `async`。
+- 完全自定义执行器：只使用 `async-runtime`。
 - 使用具体 Tokio 模块：在 `async` 之外增加对应 `tokio_*`。
 - 库代码希望控制体积与依赖：不要直接使用 `tokio_full`。
 - 已有 anyhow 错误链：增加 `error_anyhow`。
