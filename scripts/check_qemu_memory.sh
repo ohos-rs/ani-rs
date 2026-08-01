@@ -23,9 +23,9 @@ export OHOS_QEMU_MEMORY_SAMPLE=1
 # is the actual unbounded-growth gate.
 export OHOS_QEMU_MAX_PSS_GROWTH_KB="${OHOS_QEMU_MAX_PSS_GROWTH_KB:-65536}"
 export OHOS_QEMU_CASE_TIMEOUT="${OHOS_QEMU_CASE_TIMEOUT:-300}"
-# The 20260731-jitfix release baseline fixes executable-page transitions in the
-# guest kernel. Keep JIT enabled so the 50/100-loop leak gate also protects the
-# historical RuntimeKernel restart regression. Disabling JIT is diagnostic
+# The upstream v20260731 release baseline fixes executable-page transitions in
+# the guest kernel. Keep JIT enabled so the 50/100-loop leak gate also protects
+# the historical RuntimeKernel restart regression. Disabling JIT is diagnostic
 # only and must be requested explicitly.
 export OHOS_QEMU_DISABLE_JIT="${OHOS_QEMU_DISABLE_JIT:-0}"
 

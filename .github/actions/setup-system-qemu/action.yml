@@ -1,0 +1,66 @@
+name: Setup system QEMU
+description: Install and verify the full-system QEMU binary used by OpenHarmony guests
+
+inputs:
+  guest-arch:
+    description: OpenHarmony guest architecture
+    required: true
+  require-kvm:
+    description: Fail unless Linux KVM acceleration is usable
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install QEMU on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          file \
+          qemu-system-x86 \
+          unzip
+
+        if [[ "${{ inputs.require-kvm }}" == "true" ]]; then
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::The hosted runner does not expose /dev/kvm." >&2
+            exit 1
+          fi
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          qemu-system-x86_64 -accel help | grep -qw kvm
+        fi
+
+    - name: Install QEMU on macOS
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.guest-arch }}" in
+          arm64) qemu_binary=qemu-system-aarch64 ;;
+          armv7a) qemu_binary=qemu-system-arm ;;
+          *) qemu_binary=qemu-system-x86_64 ;;
+        esac
+        if ! command -v "$qemu_binary" >/dev/null 2>&1; then
+          brew install qemu
+        fi
+
+    - name: Verify full-system QEMU
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.guest-arch }}" in
+          arm64) qemu_binary=qemu-system-aarch64 ;;
+          x86_64) qemu_binary=qemu-system-x86_64 ;;
+          armv7a) qemu_binary=qemu-system-arm ;;
+          *)
+            echo "unsupported guest architecture: ${{ inputs.guest-arch }}" >&2
+            exit 2
+            ;;
+        esac
+        command -v "$qemu_binary"
+        "$qemu_binary" --version

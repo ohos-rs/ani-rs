@@ -109,19 +109,21 @@ hdc -t 127.0.0.1:5558 file send \
 
 ```bash
 HDC_TARGET=127.0.0.1:5558 \
-QEMU_PACKAGES_ROOT=/Volumes/PSSD/qemu/packages/20260731-jitfix \
+QEMU_PACKAGES_ROOT=/path/to/ohos-qemu-v20260731 \
 OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1 \
-OHOS_SOURCE_ROOT=/Volumes/PSSD/qemu/openharmony \
 DEVECO_SDK_ROOT=/path/to/openharmony-sdk \
+OHOS_QEMU_USE_ABC_FIXTURES=1 \
 OHOS_QEMU_PACKAGE_FILTER=my-package \
 ./scripts/run_arkvm_examples_ohos_qemu.sh
 ```
 
 设置 `QEMU_PACKAGES_ROOT` 后脚本会校验 manifest；设置 `OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1` 后还会确认当前进程确实引用该包的 `images/`，从而避免把 DevEco 模拟器或其他端口误认为目标镜像。
 
-如果 OpenHarmony host 工具位于非默认输出目录，可显式设置 `OHOS_ES2PANDA` 与 `OHOS_ARKTSCONFIG`。runner 会为每个场景写出 `performance.tsv`；发布门禁另外运行 `scripts/check_qemu_performance.sh`，可通过 `OHOS_QEMU_MAX_PER_ITERATION_US` 配置对应机器/架构的延迟上限。所有 HDC 操作都有宿主侧 watchdog，默认 60 秒，可通过 `OHOS_QEMU_HDC_TIMEOUT` 调整；运行场景另受 `OHOS_QEMU_HDC_RUNTIME_TIMEOUT` 保护。
+`OHOS_QEMU_USE_ABC_FIXTURES=1` 使用仓库内与 ArkTS 源码校验和绑定的 ABC。`scripts/check_qemu_abc_fixtures.sh` 会拒绝源码与 ABC 不一致的提交，同时让 CI 验证“已发布 ABC + 当前 SO”的 ABI 兼容。需要现场编译 ABC 时不设置该变量，并通过 `OHOS_SOURCE_ROOT`，或 `OHOS_ES2PANDA` 与 `OHOS_ARKTSCONFIG`，指定匹配 guest 的 OpenHarmony host 编译产物。
 
-发布基准使用 `20260731-jitfix` 镜像与 Linux 6.6.101。该内核修复了 Ark JIT 将代码页从可写切换为可执行时可能返回未初始化错误的问题，因此正确性、50/100 轮泄漏和性能门禁均保持 JIT 开启。`OHOS_QEMU_DISABLE_JIT=1` 只用于诊断，不构成发布证据。
+runner 会为每个场景写出 `performance.tsv`；发布门禁另外运行 `scripts/check_qemu_performance.sh`，可通过 `OHOS_QEMU_MAX_PER_ITERATION_US` 配置对应机器/架构的延迟上限。所有 HDC 操作都有宿主侧 watchdog，默认 60 秒，可通过 `OHOS_QEMU_HDC_TIMEOUT` 调整；运行场景另受 `OHOS_QEMU_HDC_RUNTIME_TIMEOUT` 保护。
+
+发布基准固定为 [`harmony-contrib/ohos-qemu` 的 `v20260731`](https://github.com/harmony-contrib/ohos-qemu/releases/tag/v20260731) 与 Linux 6.6.101。CI 不使用 self-hosted runner：OpenHarmony SDK 由 `openharmony-rs/setup-ohos-sdk` 安装，系统 QEMU 由仓库的 composite action 在 GitHub-hosted Ubuntu/macOS runner 安装，再按架构下载发布归档并校验固定 SHA-256 与包内 `SHA256SUMS`。x86_64 使用 KVM，ARM64/ARMv7A 使用 TCG，三个 job 彼此隔离并行执行。该版本修复了 Ark JIT 相关问题，因此正确性、50/100 轮泄漏和性能门禁均保持 JIT 开启。`OHOS_QEMU_DISABLE_JIT=1` 只用于诊断，不构成发布证据。
 
 独立 ABC runner 不会触发 Stage 应用的动态库卸载流程，因此测试驱动在 `DestroyVM` 前从当前模块显式解析并调用一次 `ANI_Destructor`；生命周期用例要求观察到 finalizer 标记。这样构造、绑定、析构和资源清理都在真实 Ark Runtime 内执行，而不是只检查 ELF 符号。
 
@@ -148,9 +150,13 @@ hdc -t 127.0.0.1:5558 shell hilog -x
 仓库 smoke HAP 可以不安装，直接提取其中实际打包的 ABC 与动态库并在 QEMU 执行：
 
 ```bash
+DEVECO_SDK_ROOT=/path/to/openharmony-sdk \
+OHOS_QEMU_USE_ABC_FIXTURES=1 \
 scripts/build_hap_smoke.sh arm64
 HDC_TARGET=127.0.0.1:5558 scripts/run_hap_abc_ohos_qemu.sh
 ```
+
+该 portable HAP 路径直接使用 SDK `toolchains` 中的 `app_packing_tool.jar`，不要求 DevEco Studio 或 Hvigor。未设置 `OHOS_QEMU_USE_ABC_FIXTURES` 时仍保留完整 DevEco/Hvigor 构建路径，用于应用工程集成验证。
 
 ## 内存增长检查
 
