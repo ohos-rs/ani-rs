@@ -14,7 +14,7 @@ description: ANI-RS 的 API、架构、运行时和验证层级。
 | 兼容模式 | `api23` 使用 class constructor/method primitive wrapper 路径 |
 | ArkTS | ArkTS 1.2 / ETS |
 
-API 23/24 当前声明为“交叉编译兼容”；只有 API 26 具有真实 guest 运行时证据。`.github/workflows/qemu.yml` 对 API profile × 三架构执行 9 组编译门禁，并对 `20260731-jitfix` API 26 的 ARM64/x86_64/ARMv7A 镜像执行同一 commit、同一 52 场景、HAP、JIT 50/100 轮内存压力与性能报告。
+API 23/24 当前声明为“交叉编译兼容”；只有 API 26 具有真实 guest 运行时证据。常规 `.github/workflows/ci.yml` 只执行格式检查、全 feature Clippy、workspace 单测和一次依赖安全审计。`.github/workflows/qemu.yml` 在每个架构 leg 内依次检查 API 23/24/26 编译 profile，再对 `20260731-jitfix` API 26 的 ARM64/x86_64/ARMv7A 镜像执行同一 commit、同一 52 场景、HAP、JIT 50/100 轮内存压力与性能报告。其他检查脚本保留为本地或发布诊断工具，不再拆成常规 Actions job。
 
 `scripts/header.sh --check` 会同时验证头文件校验和、API 24 符号和 bindgen 输出漂移。
 

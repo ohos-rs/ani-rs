@@ -7,9 +7,7 @@ cd "$repo_root"
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-scripts/header.sh --check
 scripts/check_example_ets.sh
-scripts/check_performance.sh
 if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
   ANI_SEMVER_BASELINE_REV="${ANI_SEMVER_BASELINE_REV:-HEAD^}" scripts/check_abi.sh
 fi

@@ -2,6 +2,8 @@ name: OpenHarmony QEMU
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   workflow_dispatch:
@@ -61,49 +63,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: ohos-qemu-${{ github.sha }}
+  # All matrix legs share one HDC port and one self-hosted QEMU machine.
+  # Serialize workflow runs as well as architectures to prevent cross-run
+  # guests from connecting to or stopping each other.
+  group: ohos-qemu
   cancel-in-progress: false
 
 jobs:
-  compile-profiles:
-    name: ${{ matrix.api }} / ${{ matrix.arch }} compile compatibility
-    runs-on: [self-hosted, ohos-qemu]
-    strategy:
-      fail-fast: false
-      matrix:
-        api: [api23, api24, api26]
-        arch:
-          - aarch64-unknown-linux-ohos
-          - x86_64-unknown-linux-ohos
-          - armv7-unknown-linux-ohos
-    steps:
-      - uses: actions/checkout@v7
-      - run: rustup target add "${{ matrix.arch }}"
-      - name: Compile exact API profile
-        env:
-          DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root || '/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony' }}
-        shell: bash
-        run: |
-          case "${{ matrix.arch }}" in
-            aarch64-*) triple=aarch64-unknown-linux-ohos ;;
-            x86_64-*) triple=x86_64-unknown-linux-ohos ;;
-            armv7-*) triple=armv7-unknown-linux-ohos ;;
-          esac
-          linker="$DEVECO_SDK_ROOT/native/llvm/bin/$triple-clang"
-          target_env="CARGO_TARGET_$(printf '%s' '${{ matrix.arch }}' | tr '[:lower:]-' '[:upper:]_')_LINKER"
-          env "$target_env=$linker" cargo check -p ani \
-            --target "${{ matrix.arch }}" --no-default-features --features "${{ matrix.api }}"
-
   qemu:
-    name: API 26 / ${{ matrix.guest_arch }} runtime evidence
-    needs: compile-profiles
-    if: ${{ inputs.guest_arch == '' || inputs.guest_arch == 'all' || inputs.guest_arch == matrix.guest_arch }}
+    name: API 26 / ${{ matrix.guest_arch }} QEMU
     runs-on: [self-hosted, ohos-qemu]
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        guest_arch: [arm64, x86_64, armv7a]
+        guest_arch: ${{ fromJSON((inputs.guest_arch == '' || inputs.guest_arch == 'all') && '["arm64","x86_64","armv7a"]' || format('["{0}"]', inputs.guest_arch)) }}
     timeout-minutes: 90
     env:
       HDC_TARGET: ${{ inputs.hdc_target || '127.0.0.1:5558' }}
@@ -111,7 +85,6 @@ jobs:
       OHOS_QEMU_GUEST_ARCH: ${{ matrix.guest_arch }}
       OHOS_SOURCE_ROOT: ${{ inputs.ohos_source_root || '/Volumes/PSSD/qemu/openharmony' }}
       DEVECO_SDK_ROOT: ${{ inputs.deveco_sdk_root || '/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony' }}
-      OHOS_QEMU_WORK_ROOT: ${{ runner.temp }}/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}
       OHOS_QEMU_REMOTE_ROOT: /data/local/tmp/ani-rs-qemu-${{ github.run_id }}-${{ matrix.guest_arch }}
       OHOS_QEMU_RUNNER_ASAN: ${{ inputs.asan_runner && '1' || '0' }}
       OHOS_QEMU_LSAN: ${{ inputs.lsan && '1' || '0' }}
@@ -143,6 +116,7 @@ jobs:
           esac
           echo "QEMU_PACKAGE_ROOT=$QEMU_PACKAGES_ROOT/$package" >> "$GITHUB_ENV"
           echo "OHOS_RUST_TARGET=$rust_target" >> "$GITHUB_ENV"
+          echo "OHOS_QEMU_WORK_ROOT=$RUNNER_TEMP/ani-rs-qemu-${GITHUB_RUN_ID}-${OHOS_QEMU_GUEST_ARCH}" >> "$GITHUB_ENV"
       - name: Install Rust target
         shell: bash
         run: |
@@ -151,6 +125,16 @@ jobs:
             rustup toolchain install nightly --profile minimal
             rustup target add --toolchain nightly "$OHOS_RUST_TARGET"
           fi
+      - name: Check API 23, 24 and 26 compile profiles
+        shell: bash
+        run: |
+          linker="$DEVECO_SDK_ROOT/native/llvm/bin/$OHOS_RUST_TARGET-clang"
+          test -x "$linker"
+          target_env="CARGO_TARGET_$(printf '%s' "$OHOS_RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          for api in api23 api24 api26; do
+            env "$target_env=$linker" cargo check -p ani \
+              --target "$OHOS_RUST_TARGET" --no-default-features --features "$api"
+          done
       - name: Launch the requested QEMU image
         if: ${{ inputs.auto_launch == true || inputs.auto_launch == '' }}
         shell: bash

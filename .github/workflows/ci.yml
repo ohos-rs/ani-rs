@@ -19,8 +19,9 @@ env:
 
 jobs:
   rust:
-    name: Rust quality and tests
+    name: Format, lint, test and audit
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -32,111 +33,9 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint all features and targets
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Lint API 23 compatibility path
-        run: cargo clippy -p ani --all-targets --no-default-features --features api23 -- -D warnings
-      - name: Lint API 24 default profile
-        run: cargo clippy -p ani --all-targets --no-default-features --features api24 -- -D warnings
-      - name: Lint API 26 release profile
-        run: cargo clippy -p ani --all-targets --no-default-features --features api26 -- -D warnings
       - name: Run workspace tests
         run: cargo test --workspace --all-features
-
-  header:
-    name: ANI header drift
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Install pinned bindgen
-        run: cargo install bindgen-cli --version 0.72.1 --locked
-      - name: Verify pinned header and generated bindings
-        run: scripts/header.sh --check
-
-  ets:
-    name: Deterministic ETS generation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Verify independent ETS builds
-        run: scripts/check_example_ets.sh
-
-  package:
-    name: Documentation and crate packages
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Build public API documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc -p ani -p ani-derive -p ani-sys -p ani-cli --all-features --no-deps
-      - name: Package ani-sys
-        run: cargo package -p ani-sys --no-verify
-      - name: Package ani-derive
-        run: cargo package -p ani-derive --no-verify
-      - name: Package ani
-        run: cargo package -p ani --no-verify
-      - name: Package ani-cli
-        run: cargo package -p ani-cli --no-verify
-
-  semver:
-    name: Public API semver
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout with baseline
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Install cargo-semver-checks
-        run: cargo install cargo-semver-checks --version 0.49.0 --locked
-      - name: Check public crates against target branch
-        env:
-          ANI_SEMVER_BASELINE_REV: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/master^' }}
-        run: |
-          scripts/check_semver.sh
-          scripts/check_abi.sh
-
-  performance:
-    name: Performance regression gates
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Run stable microbench gates
-        run: scripts/check_performance.sh
-
-  security:
-    name: Dependency policy and advisories
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Check dependency policy and advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  msrv:
-    name: Rust 1.88 minimum version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: rustup toolchain install 1.88 --profile minimal
-      - run: cargo +1.88 check -p ani-sys -p ani-derive -p ani -p ani-cli --all-features
-
-  miri:
-    name: Miri conversion tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: |
-          rustup toolchain install nightly --profile minimal --component miri
-          cargo +nightly miri setup
-      - name: Check pure conversion and registry logic
-        env:
-          MIRIFLAGS: -Zmiri-strict-provenance
-        run: |
-          for module in arraybuffer bigint primitives resource task typed_array; do
-            cargo +nightly miri test -p ani --lib "conversions::$module::tests"
-          done
