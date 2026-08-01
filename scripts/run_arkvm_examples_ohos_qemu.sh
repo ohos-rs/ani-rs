@@ -7,9 +7,10 @@ cd "$repo_root"
 hdc_target="${HDC_TARGET:-127.0.0.1:5558}"
 guest_arch="${OHOS_QEMU_GUEST_ARCH:-arm64}"
 ohos_source_root="${OHOS_SOURCE_ROOT:-/tmp/openharmony}"
-deveco_sdk_root="${DEVECO_SDK_ROOT:-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony}"
+deveco_sdk_root="${DEVECO_SDK_ROOT:-${OHOS_BASE_SDK_HOME:-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony}}"
 qemu_packages_root="${QEMU_PACKAGES_ROOT:-}"
 require_package_process="${OHOS_QEMU_REQUIRE_PACKAGE_PROCESS:-0}"
+use_abc_fixtures="${OHOS_QEMU_USE_ABC_FIXTURES:-0}"
 hap_input="${OHOS_QEMU_HAP:-}"
 work_root="${OHOS_QEMU_WORK_ROOT:-$repo_root/target/ohos-qemu}"
 remote_root="${OHOS_QEMU_REMOTE_ROOT:-/data/local/tmp/ani-rs-qemu}"
@@ -51,6 +52,10 @@ if [[ -n "$max_per_iteration_us" && ! "$max_per_iteration_us" =~ ^[0-9]+$ ]]; th
 fi
 if [[ "$runner_iterations" == "0" ]]; then
   echo "OHOS_QEMU_ITERATIONS must be greater than zero" >&2
+  exit 2
+fi
+if [[ "$use_abc_fixtures" != "0" && "$use_abc_fixtures" != "1" ]]; then
+  echo "OHOS_QEMU_USE_ABC_FIXTURES must be 0 or 1" >&2
   exit 2
 fi
 if [[ -z "$hdc_runtime_timeout" ]]; then
@@ -139,12 +144,15 @@ if [[ -n "$qemu_packages_root" ]]; then
   echo "QEMU_PACKAGE: $package_root"
 fi
 
-for required in \
+required_files=(
   "$clang_bin/$clang_triple-clang" \
   "$clang_bin/$clang_triple-clang++" \
-  "$clang_bin/llvm-readelf" \
-  "$es2panda" \
-  "$arktsconfig"; do
+  "$clang_bin/llvm-readelf"
+)
+if [[ "$use_abc_fixtures" == "0" ]]; then
+  required_files+=("$es2panda" "$arktsconfig")
+fi
+for required in "${required_files[@]}"; do
   if [[ ! -f "$required" ]]; then
     echo "missing required tool/file: $required" >&2
     exit 1
@@ -269,16 +277,21 @@ fi
   -ldl \
   -o "$runner"
 
-docker run --rm --platform linux/amd64 \
-  -v "$ohos_source_root:$ohos_source_root:ro" \
-  -v "$repo_root:/repo:ro" \
-  -v "$work_root:/work" \
-  ubuntu:22.04 \
-  "$es2panda" \
-  --extension=ets \
-  --arktsconfig "$arktsconfig" \
-  --output /work/ohos_qemu_abc_launcher.abc \
-  /repo/scripts/ohos_qemu_abc_launcher.ets
+if [[ "$use_abc_fixtures" == "1" ]]; then
+  "$repo_root/scripts/check_qemu_abc_fixtures.sh"
+  cp "$repo_root/scripts/ohos_qemu_abc_launcher.abc" "$launcher_abc"
+else
+  docker run --rm --platform linux/amd64 \
+    -v "$ohos_source_root:$ohos_source_root:ro" \
+    -v "$repo_root:/repo:ro" \
+    -v "$work_root:/work" \
+    ubuntu:22.04 \
+    "$es2panda" \
+    --extension=ets \
+    --arktsconfig "$arktsconfig" \
+    --output /work/ohos_qemu_abc_launcher.abc \
+    /repo/scripts/ohos_qemu_abc_launcher.ets
+fi
 
 if [[ -z "$hap_input" && "${OHOS_QEMU_SKIP_BUILD:-0}" != "1" ]]; then
   cargo_command=(cargo)
@@ -357,21 +370,25 @@ while IFS= read -r cargo_toml; do
   fi
 
   if [[ -z "$hap_input" ]]; then
-    if ! docker run --rm --platform linux/amd64 \
-      -v "$ohos_source_root:$ohos_source_root:ro" \
-      -v "$repo_root:/repo:ro" \
-      -v "$work_root:/work" \
-      ubuntu:22.04 \
-      "$es2panda" \
-      --extension=ets \
-      --arktsconfig "$arktsconfig" \
-      --output "/work/cases/$base/arkvm_test.abc" \
-      "/repo/$test_ets" \
-      >"$case_dir/es2panda.log" 2>&1; then
-      printf '%s\t%s\tOK\tOK\tFAIL\tSKIP\t0\t0\tFAIL\n' \
-        "$guest_arch" "$package" >> "$report"
-      echo "FAIL $package: ABC compile"
-      continue
+    if [[ "$use_abc_fixtures" == "1" ]]; then
+      cp "$example_dir/arkvm_test.abc" "$abc_file"
+    else
+      if ! docker run --rm --platform linux/amd64 \
+        -v "$ohos_source_root:$ohos_source_root:ro" \
+        -v "$repo_root:/repo:ro" \
+        -v "$work_root:/work" \
+        ubuntu:22.04 \
+        "$es2panda" \
+        --extension=ets \
+        --arktsconfig "$arktsconfig" \
+        --output "/work/cases/$base/arkvm_test.abc" \
+        "/repo/$test_ets" \
+        >"$case_dir/es2panda.log" 2>&1; then
+        printf '%s\t%s\tOK\tOK\tFAIL\tSKIP\t0\t0\tFAIL\n' \
+          "$guest_arch" "$package" >> "$report"
+        echo "FAIL $package: ABC compile"
+        continue
+      fi
     fi
   fi
 

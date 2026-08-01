@@ -265,5 +265,5 @@ let promise = stream.next_promise(env)?;
 二进制流可使用 `ohos_byte_stream_channel[_with_error]`，得到 `OhosReadableSource` 与 `OhosWritableSink`。API 23+ 的 `@ohos.util.stream.Readable/Writable` 子类在 ETS 线程调用 pull/write；Rust 端保留 bounded queue、drain、close、error、背压和取消语义。
 
 :::note
-`20260731-jitfix` 沿用的 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。
+上游 QEMU `v20260731` 使用的 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。
 :::

@@ -9,6 +9,8 @@ website/dist
 fuzz/corpus
 
 *.abc
+!examples/*/arkvm_test.abc
+!scripts/ohos_qemu_abc_launcher.abc
 *.log
 *.tsv
 *.txt

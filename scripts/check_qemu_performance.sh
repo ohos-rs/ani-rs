@@ -4,9 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Exercise representative synchronous calls, typed buffers, callbacks and the
-# shared async runtime in the real guest. The 20260731-jitfix release baseline
-# supports repeated RuntimeKernel restart under JIT, so both phases use the
-# same iteration count unless a runner explicitly overrides the async phase.
+# shared async runtime in the real guest. The upstream v20260731 release
+# baseline supports repeated RuntimeKernel restart under JIT, so both phases
+# use the same iteration count unless a runner explicitly overrides the async
+# phase.
 sync_iterations="${OHOS_QEMU_PERF_ITERATIONS:-10}"
 async_iterations="${OHOS_QEMU_PERF_ASYNC_ITERATIONS:-$sync_iterations}"
 export OHOS_QEMU_MAX_PER_ITERATION_US="${OHOS_QEMU_MAX_PER_ITERATION_US:-15000000}"

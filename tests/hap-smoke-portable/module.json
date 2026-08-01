@@ -1,0 +1,23 @@
+{
+  "app": {
+    "bundleName": "org.ohosrs.anirssmoke",
+    "bundleType": "app",
+    "debug": true,
+    "versionCode": 1,
+    "versionName": "1.0.0",
+    "minAPIVersion": 23,
+    "targetAPIVersion": 26,
+    "compileSdkType": "OpenHarmony"
+  },
+  "module": {
+    "name": "entry",
+    "packageName": "entry",
+    "type": "entry",
+    "deviceTypes": ["default"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "compileMode": "esmodule",
+    "virtualMachine": "ark13.0.1.0",
+    "dependencies": []
+  }
+}

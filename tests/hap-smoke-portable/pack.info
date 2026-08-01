@@ -1,0 +1,32 @@
+{
+  "summary": {
+    "app": {
+      "bundleName": "org.ohosrs.anirssmoke",
+      "bundleType": "app",
+      "versionCode": 1,
+      "versionName": "1.0.0"
+    },
+    "modules": [
+      {
+        "apiVersion": {
+          "compatible": 23,
+          "target": 26
+        },
+        "abilities": [],
+        "deviceType": ["default"],
+        "distro": {
+          "deliveryWithInstall": true,
+          "installationFree": false,
+          "moduleName": "entry",
+          "moduleType": "entry"
+        }
+      }
+    ]
+  },
+  "packages": [
+    {
+      "deviceType": ["default"],
+      "moduleName": "entry"
+    }
+  ]
+}

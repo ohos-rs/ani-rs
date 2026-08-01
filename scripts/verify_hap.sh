@@ -7,6 +7,7 @@ Usage: scripts/verify_hap.sh <signed-or-unsigned.hap> [arm64|x86_64|armv7a]
 
 Checks that a HAP contains ABC bytecode and correctly-typed ANI shared
 libraries. Set DEVECO_SDK_ROOT when the SDK is not at the default macOS path.
+OHOS_BASE_SDK_HOME from setup-ohos-sdk is also accepted.
 EOF
 }
 
@@ -17,7 +18,7 @@ fi
 
 hap_file="$1"
 requested_arch="${2:-}"
-sdk_root="${DEVECO_SDK_ROOT:-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony}"
+sdk_root="${DEVECO_SDK_ROOT:-${OHOS_BASE_SDK_HOME:-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony}}"
 llvm_bin="$sdk_root/native/llvm/bin"
 
 if [[ ! -f "$hap_file" ]]; then
