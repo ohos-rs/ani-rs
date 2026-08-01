@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::env::Env;
 use crate::error::{AniErrorPayload, Error, Result, Status};
+use crate::scheduler::RuntimeCancellable;
 use crate::sys;
 
 use super::{PromiseRaw, PromiseValue, ToAni, TypeInfo};
@@ -41,6 +42,12 @@ impl CancellationToken {
         } else {
             Ok(())
         }
+    }
+}
+
+impl RuntimeCancellable for CancellationToken {
+    fn cancel_for_runtime_shutdown(&self) {
+        self.cancel();
     }
 }
 
@@ -107,10 +114,12 @@ where
     pub fn run<'env>(self, env: &Env<'env>) -> Result<PromiseRaw<'env, T::JsValue>> {
         let vm = env.get_vm()?;
         let (deferred, promise) = PromiseRaw::<T::JsValue>::deferred(env)?;
-        let cancellation = self.cancellation;
+        let cancellation = Arc::new(self.cancellation);
+        let registration = crate::scheduler::shared().register_cancellable(&cancellation)?;
         let mut task = self.task;
 
         crate::scheduler::shared().schedule(move || {
+            let _registration = registration;
             let computed = catch_unwind(AssertUnwindSafe(|| {
                 let output = task.compute(&cancellation)?;
                 Ok::<T::Output, T::Error>(output)

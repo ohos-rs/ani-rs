@@ -43,10 +43,31 @@ export class AsyncWidget {
 }
 
 export class CounterAsyncIterator {
+  private __ani_resource: long = 0;
+  private __ani_closed: boolean = false;
+  asyncIterator(): CounterAsyncIterator {
+    return this;
+  }
   native constructor();
   native __ani_native_next(): Promise<int | null>;
   async next(): Promise<IteratorResult<int>> {
     let __ani_result = await this.__ani_native_next();
+    if (__ani_result == null) {
+      return new IteratorResult<int>();
+    }
+    return new IteratorResult<int>(__ani_result);
+  }
+  native __ani_native_return(): Promise<int | null>;
+  async returnIterator(): Promise<IteratorResult<int>> {
+    let __ani_result = await this.__ani_native_return();
+    if (__ani_result == null) {
+      return new IteratorResult<int>();
+    }
+    return new IteratorResult<int>(__ani_result);
+  }
+  native __ani_native_throw(reason: AniRef): Promise<int | null>;
+  async throwIterator(reason: AniRef): Promise<IteratorResult<int>> {
+    let __ani_result = await this.__ani_native_throw(reason);
     if (__ani_result == null) {
       return new IteratorResult<int>();
     }
@@ -70,6 +91,7 @@ export native function async_get_result(task_id: int): int;
 export native function async_object_strict_equals(lhs: Object, rhs: Object): Promise<boolean>;
 export native function async_ref_roundtrip(value: AniRef): Promise<boolean>;
 export native function async_square(n: int): int;
+export native function background_cancellable(delay_ms: int): Promise<int>;
 export native function background_square(input: int): Promise<int>;
 export native function batch_compute(count: int): long;
 export native function cancel_arkts_promise_wait(promise: Promise<string>): boolean;
@@ -77,6 +99,7 @@ export native function custom_async_error(operation: string): Promise<string>;
 export native function env_roundtrip(value: string): Promise<string>;
 export native function fail_async_iterator(operation: string): void;
 export native function finish_async_iterator(): void;
+export native function pending_string_promise(): Promise<string>;
 export native function promise_delayed(delay_ms: int, value: string): long;
 export native function promise_env_rejected(message: string): Promise<string>;
 export native function promise_env_resolved(value: string): Promise<string>;
@@ -89,6 +112,7 @@ export native function promise_resolver_into_deferred(value: string): Promise<st
 export native function promise_resolver_reject_message(message: string): Promise<void>;
 export native function promise_resolver_resolve_value(value: string): Promise<string>;
 export native function push_async_iterator_value(value: int): void;
+export native function runtime_kernel_shutdown_and_restart(): boolean;
 export native function signature_override_echo(value: string): Promise<string>;
 export native function tokio_await_arkts_promise(promise: Promise<string>): Promise<string>;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
@@ -102,6 +126,16 @@ export native function tokio_manual_global_ref_container_ready(value: Object): P
 export native function tokio_manual_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_manual_typed_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_void_async(delay_ms: int): Promise<void>;
+
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
 
 
 
@@ -243,6 +277,29 @@ function main(): void {
     }
   });
   __assert_true("promise_resolver_reject_message", resolverRejected);
+  let incomingResolvedPromise = async (): Promise<string> => "continuation:resolved";
+  let continuationText: string = waitForCompletion(() =>
+    tokio_await_arkts_promise(incomingResolvedPromise()),
+  );
+  __assert_eq_string("promise_continuation_resolve", continuationText, "continuation:resolved");
+  let originalRejection = new Error("continuation:rejected");
+  originalRejection.name = "ApplicationPromiseError";
+  originalRejection.code = 73123;
+  let incomingRejectedPromise = async (): Promise<string> => {
+    throw originalRejection;
+  };
+  let continuationRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await tokio_await_arkts_promise(incomingRejectedPromise());
+      return false;
+    } catch (value) {
+      __assert_true("promise_raw_rejection_identity", value == originalRejection);
+      __assert_eq_string("promise_raw_rejection_name", (value as Error).name, "ApplicationPromiseError");
+      __assert_eq_int("promise_raw_rejection_code", (value as Error).code, 73123);
+      return true;
+    }
+  });
+  __assert_true("promise_continuation_reject", continuationRejected);
   let refPayload: Object = new Object();
   let sameObject: boolean = waitForCompletion(() => async_object_strict_equals(refPayload, refPayload));
   __assert_true("async_object_strict_equals_same", sameObject);
@@ -302,9 +359,15 @@ function main(): void {
       __assert_eq_string("custom_async_error_status", error.name, "AsyncDomainFailure");
       __assert_eq_string("custom_async_error_message", error.message, "domain-specific asynchronous failure");
       let context = error.cause as Record<string, Object>;
-      let metadata = context["metadata"] as Record<string, string>;
-      let operation = metadata["operation"];
+      let metadata = context["metadata"] as Record<string, Object>;
+      let operation = metadata["operation"] as string;
       __assert_true("custom_async_error_metadata", operation != undefined && operation == "qemu-custom-error");
+      __assert_true("custom_async_error_bool", !(metadata["retryable"] as Boolean).valueOf());
+      __assert_eq_string("custom_async_error_number", (metadata["attempt"] as Long).toString(), "2");
+      let details = metadata["details"] as Record<string, Object>;
+      __assert_true("custom_async_error_nested", (details["active"] as Boolean).valueOf());
+      __assert_eq_int("custom_async_error_array", (details["labels"] as Object[]).length, 2);
+      __assert_eq_int("custom_async_error_binary", (metadata["binary"] as ArrayBuffer).byteLength, 3);
       __assert_eq_int("custom_async_error_code", error.code, 71001);
       return true;
     }
@@ -323,6 +386,48 @@ function main(): void {
   __assert_eq_int("async_iterator_second", iteratorSecond.value as int, 20);
   __assert_true("async_iterator_done", iteratorEnd.done);
 
+  let concurrentIterator = new CounterAsyncIterator();
+  __assert_true(
+    "async_iterator_protocol_identity",
+    concurrentIterator.asyncIterator() == concurrentIterator,
+  );
+  let firstPending = concurrentIterator.next();
+  let secondPending = concurrentIterator.next();
+  push_async_iterator_value(31);
+  push_async_iterator_value(32);
+  finish_async_iterator();
+  let firstConcurrent: IteratorResult<int> = waitForCompletion(() => firstPending);
+  let secondConcurrent: IteratorResult<int> = waitForCompletion(() => secondPending);
+  __assert_eq_int("async_iterator_concurrent_first", firstConcurrent.value as int, 31);
+  __assert_eq_int("async_iterator_concurrent_second", secondConcurrent.value as int, 32);
+  let concurrentEnd: IteratorResult<int> = waitForCompletion(() => concurrentIterator.next());
+  __assert_true("async_iterator_concurrent_done", concurrentEnd.done);
+
+  let returnedIterator = new CounterAsyncIterator();
+  let returnPending = returnedIterator.next();
+  let returnedPromise = returnedIterator.returnIterator();
+  let returnedResult: IteratorResult<int> = waitForCompletion(() => returnedPromise);
+  let returnedPendingResult: IteratorResult<int> = waitForCompletion(() => returnPending);
+  let returnedNext: IteratorResult<int> = waitForCompletion(() => returnedIterator.next());
+  __assert_true("async_iterator_return_done", returnedResult.done);
+  __assert_true("async_iterator_return_settles_pending", returnedPendingResult.done);
+  __assert_true("async_iterator_return_closes_next", returnedNext.done);
+
+  let thrownIterator = new CounterAsyncIterator();
+  let consumerError = new Error("consumer-stop");
+  let consumerThrowRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await thrownIterator.throwIterator(consumerError);
+      return false;
+    } catch (value) {
+      __assert_true("async_iterator_throw_identity", value == consumerError);
+      return true;
+    }
+  });
+  __assert_true("async_iterator_throw_rejected", consumerThrowRejected);
+  let thrownNext: IteratorResult<int> = waitForCompletion(() => thrownIterator.next());
+  __assert_true("async_iterator_throw_closes_next", thrownNext.done);
+
   let failingIterator = new CounterAsyncIterator();
   fail_async_iterator("stream-next");
   let streamErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
@@ -335,6 +440,56 @@ function main(): void {
     }
   });
   __assert_true("async_iterator_custom_error_rejected", streamErrorOk);
+  let failingReturned: IteratorResult<int> = waitForCompletion(() => failingIterator.returnIterator());
+  __assert_true("async_iterator_error_return_done", failingReturned.done);
+
+  let shutdownIterator = new CounterAsyncIterator();
+  let shutdownStreamPending = shutdownIterator.next();
+  let shutdownPromisePending = tokio_await_arkts_promise(pending_string_promise());
+  let shutdownTaskPending = background_cancellable(200);
+  let shutdownCallback = (input: string): string => "shutdown:" + input;
+  let shutdownTsfnPending = tokio_manual_function_ref_container_call(shutdownCallback, "tsfn");
+  __assert_true("runtime_kernel_restart", runtime_kernel_shutdown_and_restart());
+  let shutdownStreamRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownStreamPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_stream", shutdownStreamRejected);
+  let shutdownPromiseRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownPromisePending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_promise", shutdownPromiseRejected);
+  let shutdownTaskRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownTaskPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_task", shutdownTaskRejected);
+  let shutdownTsfnRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownTsfnPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_tsfn", shutdownTsfnRejected);
+  let shutdownIteratorReturn: IteratorResult<int> = waitForCompletion(() => shutdownIterator.returnIterator());
+  __assert_true("runtime_shutdown_iterator_cleanup", shutdownIteratorReturn.done);
+  let restartedSquare: int = waitForCompletion(() => background_square(12));
+  __assert_eq_int("runtime_kernel_restarted_task", restartedSquare, 144);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);

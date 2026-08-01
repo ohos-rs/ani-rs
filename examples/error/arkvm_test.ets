@@ -9,13 +9,21 @@ export type AniResolver = Object;
 export native function check_array_bounds(index: int, length: int): void;
 export native function divide(a: double, b: double): double;
 export native function expect_string_type(value: string): string;
-export native function load_config(path: string): string;
 export native function login(username: string, password: string): string;
-export native function process_data(input: string): string;
 export native function read_config(path: string): string;
 export native function reject_with_error_handle(resolver: AniResolver, error: AniError): void;
 export native function throw_existing_error(error: AniError): void;
 export native function validate_age(age: int): string;
+
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
 
 
 

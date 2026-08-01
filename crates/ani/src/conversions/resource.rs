@@ -278,6 +278,8 @@ mod tests {
 
     use super::*;
 
+    static RESOURCE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     struct DropCounter(Arc<AtomicUsize>);
 
     impl Drop for DropCounter {
@@ -288,6 +290,7 @@ mod tests {
 
     #[test]
     fn closes_once_and_rejects_stale_handles() {
+        let _guard = RESOURCE_TEST_LOCK.lock().unwrap();
         let drops = Arc::new(AtomicUsize::new(0));
         let resource = ManagedResource::new(DropCounter(Arc::clone(&drops))).unwrap();
         let stale = resource.clone();
@@ -304,6 +307,7 @@ mod tests {
 
     #[test]
     fn rejects_a_live_handle_with_the_wrong_type() {
+        let _guard = RESOURCE_TEST_LOCK.lock().unwrap();
         let resource = ManagedResource::new(42_u32).unwrap();
         let wrong = ManagedResource::<String>::from_raw(resource.as_raw()).unwrap();
 
@@ -318,6 +322,7 @@ mod tests {
 
     #[test]
     fn serializes_cross_thread_mutation() {
+        let _guard = RESOURCE_TEST_LOCK.lock().unwrap();
         let resource = ManagedResource::new(0_usize).unwrap();
         let mut workers = Vec::new();
         for _ in 0..8 {
@@ -338,6 +343,7 @@ mod tests {
 
     #[test]
     fn rejects_non_positive_handles() {
+        let _guard = RESOURCE_TEST_LOCK.lock().unwrap();
         assert_eq!(
             ManagedResource::<u8>::from_raw(0).unwrap_err().status,
             Status::InvalidArgs
@@ -350,6 +356,7 @@ mod tests {
 
     #[test]
     fn module_cleanup_releases_all_live_resources() {
+        let _guard = RESOURCE_TEST_LOCK.lock().unwrap();
         let drops = Arc::new(AtomicUsize::new(0));
         let first = ManagedResource::new(DropCounter(Arc::clone(&drops))).unwrap();
         let second = ManagedResource::new(DropCounter(Arc::clone(&drops))).unwrap();

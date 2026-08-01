@@ -8,6 +8,16 @@ export type AniType = Object;
 export native function check_type_relation(from: AniType, to: AniType): boolean;
 export native function get_super_class_example(ty: AniType): boolean;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_type_relation");

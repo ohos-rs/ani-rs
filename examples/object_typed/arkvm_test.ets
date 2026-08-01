@@ -11,6 +11,16 @@ export native function field_by_name_roundtrip_long(obj: Object, value: long): l
 export native function field_roundtrip_boolean(obj: Object, field: AniField, value: boolean): boolean;
 export native function property_roundtrip_float(obj: Object, value: float): float;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_object_typed");

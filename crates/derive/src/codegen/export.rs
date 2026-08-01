@@ -27,6 +27,8 @@ pub enum ClassOpKind {
     IteratorFactory { iterator_class: String },
     IteratorNext { item_type: String },
     AsyncIteratorNext { item_type: String },
+    AsyncIteratorReturn { item_type: String },
+    AsyncIteratorThrow { item_type: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,6 +147,11 @@ impl ClassDescriptorMember {
             .and_then(ClassOpKind::iterator_next_item_type)
     }
 
+    pub fn async_iterator_item_type(&self) -> Option<&str> {
+        self.op_kind()
+            .and_then(ClassOpKind::async_iterator_item_type)
+    }
+
     pub fn is_constructor(&self) -> bool {
         matches!(self.render_group(), ClassMemberRenderGroup::Constructor)
     }
@@ -219,6 +226,12 @@ impl ClassOpDescriptor {
             ClassOpKind::AsyncIteratorNext { .. } => {
                 generate_async_iterator_next_ets_binding(sig, skip_first)
             }
+            ClassOpKind::AsyncIteratorReturn { .. } => {
+                crate::types::generate_async_iterator_control_ets_binding(sig, skip_first, "return")
+            }
+            ClassOpKind::AsyncIteratorThrow { .. } => {
+                crate::types::generate_async_iterator_control_ets_binding(sig, skip_first, "throw")
+            }
             _ => generate_fn_ets_binding(
                 EtsDeclKind::Class,
                 sig,
@@ -238,6 +251,8 @@ impl ClassOpKind {
             ClassOpKind::IteratorFactory { .. } => "$_iterator",
             ClassOpKind::IteratorNext { .. } => "next",
             ClassOpKind::AsyncIteratorNext { .. } => "next",
+            ClassOpKind::AsyncIteratorReturn { .. } => "return",
+            ClassOpKind::AsyncIteratorThrow { .. } => "throw",
         }
     }
 
@@ -251,6 +266,15 @@ impl ClassOpKind {
     pub fn iterator_next_item_type(&self) -> Option<&str> {
         match self {
             ClassOpKind::IteratorNext { item_type } => Some(item_type.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn async_iterator_item_type(&self) -> Option<&str> {
+        match self {
+            ClassOpKind::AsyncIteratorNext { item_type }
+            | ClassOpKind::AsyncIteratorReturn { item_type }
+            | ClassOpKind::AsyncIteratorThrow { item_type } => Some(item_type.as_str()),
             _ => None,
         }
     }

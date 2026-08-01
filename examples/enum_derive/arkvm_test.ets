@@ -8,12 +8,145 @@ export enum Status {
   Running = 2,
   Stopped = 3
 }
+export function __ani_materialize_DirectionalMessageOutput(value: Object): DirectionalMessageOutput {
+  let __ani_record = value as Record<string, Object>;
+  let __ani_tag = __ani_record["kind"] as string;
+  if (__ani_tag == "renamedField") {
+    let __ani_value: DirectionalMessageOutputRenamedField = { kind: "renamedField", payloadText: __ani_record["payloadText"] as string };
+    return __ani_value;
+  }
+  if (__ani_tag == "generated") {
+    let __ani_value: DirectionalMessageOutputGenerated = { kind: "generated", value: (__ani_record["value"] as Numeric).toInt() };
+    return __ani_value;
+  }
+  throw new TypeError("unknown structured enum discriminator: " + __ani_tag);
+}
+export function __ani_materialize_EnvelopeOutput<T>(value: Object): EnvelopeOutput<T> {
+  let __ani_record = value as Record<string, Object>;
+  let __ani_tag = __ani_record["type"] as string;
+  if (__ani_tag == "Value") {
+    let __ani_value: EnvelopeOutputValue<T> = { type: "Value", value: __ani_record["value"] as T };
+    return __ani_value;
+  }
+  if (__ani_tag == "Empty") {
+    let __ani_value: EnvelopeOutputEmpty<T> = { type: "Empty" };
+    return __ani_value;
+  }
+  throw new TypeError("unknown structured enum discriminator: " + __ani_tag);
+}
+export function __ani_materialize_MessageOutput(value: Object): MessageOutput {
+  let __ani_record = value as Record<string, Object>;
+  let __ani_tag = __ani_record["type"] as string;
+  if (__ani_tag == "Text") {
+    let __ani_value: MessageOutputText = { type: "Text", value: __ani_record["value"] as string };
+    return __ani_value;
+  }
+  if (__ani_tag == "Point") {
+    let __ani_value: MessageOutputPoint = { type: "Point", x: (__ani_record["x"] as Numeric).toInt(), y: (__ani_record["y"] as Numeric).toInt() };
+    return __ani_value;
+  }
+  if (__ani_tag == "Empty") {
+    let __ani_value: MessageOutputEmpty = { type: "Empty" };
+    return __ani_value;
+  }
+  throw new TypeError("unknown structured enum discriminator: " + __ani_tag);
+}
+export interface DirectionalMessageInputLegacyText {
+  readonly kind: "legacyText";
+  value: string;
+}
+export interface DirectionalMessageInputRenamedField {
+  readonly kind: "renamedField";
+  payloadText: string;
+}
+export interface DirectionalMessageOutputGenerated {
+  readonly kind: "generated";
+  value: int;
+}
+export interface DirectionalMessageOutputRenamedField {
+  readonly kind: "renamedField";
+  payloadText: string;
+}
+export interface EnvelopeInputEmpty<T> {
+  readonly type: "Empty";
+}
+export interface EnvelopeInputValue<T> {
+  readonly type: "Value";
+  value: T;
+}
+export interface EnvelopeOutputEmpty<T> {
+  readonly type: "Empty";
+}
+export interface EnvelopeOutputValue<T> {
+  readonly type: "Value";
+  value: T;
+}
+export interface MessageInputEmpty {
+  readonly type: "Empty";
+}
+export interface MessageInputPoint {
+  readonly type: "Point";
+  x: int;
+  y: int;
+}
+export interface MessageInputText {
+  readonly type: "Text";
+  value: string;
+}
+export interface MessageOutputEmpty {
+  readonly type: "Empty";
+}
+export interface MessageOutputPoint {
+  readonly type: "Point";
+  x: int;
+  y: int;
+}
+export interface MessageOutputText {
+  readonly type: "Text";
+  value: string;
+}
+export native function __ani_native_directional_input(message: Object): string;
+export function directional_input(message: DirectionalMessageInput): string {
+  return __ani_native_directional_input(message);
+}
+export native function __ani_native_directional_output(value: int): Object;
+export function directional_output(value: int): DirectionalMessageOutput {
+  return __ani_materialize_DirectionalMessageOutput(__ani_native_directional_output(value));
+}
+export native function __ani_native_generic_envelope_identity(value: Object): Object;
+export function generic_envelope_identity(value: EnvelopeInput<int>): EnvelopeOutput<int> {
+  return __ani_materialize_EnvelopeOutput<int>(__ani_native_generic_envelope_identity(value));
+}
+export native function __ani_native_message_identity(message: Object): Object;
+export function message_identity(message: MessageInput): MessageOutput {
+  return __ani_materialize_MessageOutput(__ani_native_message_identity(message));
+}
+export native function __ani_native_message_point_sum(message: Object): int;
+export function message_point_sum(message: MessageInput): int {
+  return __ani_native_message_point_sum(message);
+}
 export native function is_terminal(status: Status): boolean;
-export native function message_identity(message: Object): Object;
-export native function message_point_sum(message: Object): int;
 export native function next_status(status: Status): Status;
 export native function status_name(status: Status): string;
-export type Message = Record<string, Object> | string
+export type DirectionalMessage = DirectionalMessageInput | DirectionalMessageOutput;
+export type DirectionalMessageInput = DirectionalMessageInputLegacyText | DirectionalMessageInputRenamedField;
+export type DirectionalMessageOutput = DirectionalMessageOutputRenamedField | DirectionalMessageOutputGenerated;
+export type Envelope<T> = EnvelopeInput<T> | EnvelopeOutput<T>;
+export type EnvelopeInput<T> = EnvelopeInputValue<T> | EnvelopeInputEmpty<T>;
+export type EnvelopeOutput<T> = EnvelopeOutputValue<T> | EnvelopeOutputEmpty<T>;
+export type Message = MessageInput | MessageOutput;
+export type MessageInput = MessageInputText | MessageInputPoint | MessageInputEmpty;
+export type MessageOutput = MessageOutputText | MessageOutputPoint | MessageOutputEmpty;
+
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
 
 
 
@@ -91,12 +224,34 @@ function __assert_throws(name: string, fn: () => void): void {
 console.log("[arkvm] smoke start: ani-example-enum-derive");
 __assert_true("enum_status_terminal", is_terminal(Status.Stopped));
 __assert_eq_string("enum_status_name", status_name(Status.Running), "running");
-let pointData = new Record<string, Object>();
-pointData["x"] = new Int(3);
-pointData["y"] = new Int(4);
-let point = new Record<string, Object>();
-point["Point"] = pointData;
-__assert_eq_int("structured_enum_native_record", message_point_sum(point), 7);
+let point: MessageInputPoint = { type: "Point", x: 3, y: 4 };
+__assert_eq_int("structured_enum_discriminated_union", message_point_sum(point), 7);
+let textMessage: MessageInputText = { type: "Text", value: "ani" };
+let textRoundtrip = message_identity(textMessage) as MessageOutputText;
+__assert_true("structured_enum_exact_variant", textRoundtrip.type == "Text");
+__assert_throws("structured_enum_runtime_schema", (): void => {
+  let invalid = new Record<string, Object>();
+  invalid["type"] = "Point";
+  invalid["x"] = new Int(3);
+  message_point_sum(invalid as MessageInput);
+});
+let renamedInput: DirectionalMessageInputRenamedField = {
+  kind: "renamedField",
+  payloadText: "renamed",
+};
+__assert_eq_string(
+  "structured_enum_rename_and_case",
+  directional_input(renamedInput),
+  "renamed",
+);
+let generatedOutput = directional_output(9) as DirectionalMessageOutputGenerated;
+__assert_true(
+  "structured_enum_directional_output",
+  generatedOutput.kind == "generated" && generatedOutput.value == 9,
+);
+let genericInput: EnvelopeInputValue<int> = { type: "Value", value: 17 };
+let genericOutput = generic_envelope_identity(genericInput) as EnvelopeOutputValue<int>;
+__assert_true("structured_enum_generic", genericOutput.type == "Value" && genericOutput.value == 17);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

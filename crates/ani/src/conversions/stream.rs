@@ -1,20 +1,75 @@
-//! Bounded pull streams used to implement ArkTS-facing async iterators.
+//! Bounded, non-blocking pull streams used by ArkTS-facing async iterators.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::env::Env;
 use crate::error::{AniErrorPayload, DynAniError, Error, Result, Status};
+use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 use crate::sys;
 use crate::types::AniRef;
 
-use super::{AsyncTask, CancellationToken, PromiseValue, Task, ToAni, TypeInfo};
+use super::{PromiseRaw, PromiseValue, ToAni, TypeInfo};
 
 static LIVE_STREAMS: AtomicUsize = AtomicUsize::new(0);
 
+enum StreamSettlement<T, E> {
+    Item(std::result::Result<T, E>),
+    Error(Arc<DynAniError>),
+    End,
+    Cancelled,
+}
+
+struct StreamWaiter<T, E> {
+    settle: Box<dyn FnOnce(StreamSettlement<T, E>) -> Result<()> + Send + 'static>,
+}
+
+impl<T, E> StreamWaiter<T, E> {
+    fn settle(self, settlement: StreamSettlement<T, E>) -> Result<()> {
+        (self.settle)(settlement)
+    }
+}
+
+struct StreamState<T, E> {
+    queue: VecDeque<std::result::Result<T, E>>,
+    waiters: VecDeque<StreamWaiter<T, E>>,
+    senders: usize,
+    closed: bool,
+    terminal_error: Option<Arc<DynAniError>>,
+}
+
 struct StreamInner<T, E> {
-    receiver: Mutex<mpsc::Receiver<std::result::Result<T, E>>>,
+    state: Mutex<StreamState<T, E>>,
+    space_available: Condvar,
+    capacity: usize,
+    registration: Mutex<Option<RuntimeRegistration>>,
+}
+
+impl<T, E> StreamInner<T, E> {
+    fn close_state(
+        &self,
+        terminal_error: Option<Arc<DynAniError>>,
+    ) -> (Vec<StreamWaiter<T, E>>, Option<Arc<DynAniError>>) {
+        let waiters = self
+            .state
+            .lock()
+            .map(|mut state| {
+                if state.closed {
+                    return (Vec::new(), state.terminal_error.clone());
+                }
+                state.closed = true;
+                state.queue.clear();
+                state.terminal_error = terminal_error;
+                (
+                    state.waiters.drain(..).collect::<Vec<_>>(),
+                    state.terminal_error.clone(),
+                )
+            })
+            .unwrap_or_default();
+        self.space_available.notify_all();
+        waiters
+    }
 }
 
 impl<T, E> Drop for StreamInner<T, E> {
@@ -23,52 +78,224 @@ impl<T, E> Drop for StreamInner<T, E> {
     }
 }
 
-/// Sending half of a bounded async-iterator channel.
-pub struct StreamSender<T, E = Error> {
-    sender: mpsc::SyncSender<std::result::Result<T, E>>,
-}
-
-impl<T, E> Clone for StreamSender<T, E> {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
+impl<T, E> RuntimeCancellable for StreamInner<T, E>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    fn cancel_for_runtime_shutdown(&self) {
+        for waiter in self.close_state(None).0 {
+            let _ = waiter.settle(StreamSettlement::Cancelled);
         }
     }
 }
 
-impl<T, E> StreamSender<T, E> {
+/// Sending half of a bounded async-iterator channel.
+pub struct StreamSender<T, E = Error> {
+    inner: Arc<StreamInner<T, E>>,
+}
+
+impl<T, E> Clone for StreamSender<T, E> {
+    fn clone(&self) -> Self {
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.senders = state.senders.saturating_add(1);
+        }
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T, E> Drop for StreamSender<T, E> {
+    fn drop(&mut self) {
+        let should_close = self
+            .inner
+            .state
+            .lock()
+            .map(|mut state| {
+                state.senders = state.senders.saturating_sub(1);
+                state.senders == 0 && !state.closed
+            })
+            .unwrap_or(false);
+        if should_close {
+            finish_stream(&self.inner);
+        }
+    }
+}
+
+impl<T, E> StreamSender<T, E>
+where
+    T: Send + 'static,
+    E: AniErrorPayload,
+    AsyncIteratorValue<T>: for<'env> PromiseValue<'env>,
+{
     /// Send an item with bounded backpressure.
     pub fn send(&self, item: T) -> Result<()> {
         self.send_result(Ok(item))
     }
 
-    /// Send an item or terminal stream error with bounded backpressure.
+    /// Send an item or stream error with bounded backpressure.
     pub fn send_result(&self, item: std::result::Result<T, E>) -> Result<()> {
-        self.sender
-            .send(item)
-            .map_err(|_| Error::new(Status::Closing, "async stream receiver is closed"))
+        let mut item = Some(item);
+        let waiter = {
+            let mut state =
+                self.inner.state.lock().map_err(|_| {
+                    Error::new(Status::GenericFailure, "async stream lock poisoned")
+                })?;
+            while state.queue.len() >= self.inner.capacity
+                && state.waiters.is_empty()
+                && !state.closed
+            {
+                state = self.inner.space_available.wait(state).map_err(|_| {
+                    Error::new(Status::GenericFailure, "async stream lock poisoned")
+                })?;
+            }
+            if state.closed {
+                return Err(Error::new(
+                    Status::Closing,
+                    "async stream receiver is closed",
+                ));
+            }
+            if let Some(waiter) = state.waiters.pop_front() {
+                Some(waiter)
+            } else {
+                state
+                    .queue
+                    .push_back(item.take().expect("stream item is present"));
+                None
+            }
+        };
+        if let Some(waiter) = waiter {
+            waiter.settle(StreamSettlement::Item(
+                item.expect("stream item was not queued"),
+            ))?;
+        }
+        Ok(())
     }
 
     /// Send without blocking when capacity is available.
     pub fn try_send(&self, item: T) -> Result<()> {
-        self.sender.try_send(Ok(item)).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => {
-                Error::new(Status::QueueFull, "async stream queue is full")
-            }
-            mpsc::TrySendError::Disconnected(_) => {
-                Error::new(Status::Closing, "async stream receiver is closed")
-            }
-        })
+        self.try_send_result(Ok(item))
     }
 
     /// Send an error that will reject the next Promise.
     pub fn send_error(&self, error: E) -> Result<()> {
-        self.send_result(Err(error))
+        let error: Arc<DynAniError> = Arc::new(Box::new(error));
+        close_stream_with_error(&self.inner, error);
+        Ok(())
+    }
+
+    /// Close the stream explicitly. Pending `next()` calls resolve as done.
+    pub fn close(&self) {
+        close_stream(&self.inner, None);
+    }
+
+    fn try_send_result(&self, item: std::result::Result<T, E>) -> Result<()> {
+        let mut item = Some(item);
+        let waiter = {
+            let mut state =
+                self.inner.state.lock().map_err(|_| {
+                    Error::new(Status::GenericFailure, "async stream lock poisoned")
+                })?;
+            if state.closed {
+                return Err(Error::new(
+                    Status::Closing,
+                    "async stream receiver is closed",
+                ));
+            }
+            if let Some(waiter) = state.waiters.pop_front() {
+                Some(waiter)
+            } else if state.queue.len() >= self.inner.capacity {
+                return Err(Error::new(Status::QueueFull, "async stream queue is full"));
+            } else {
+                state
+                    .queue
+                    .push_back(item.take().expect("stream item is present"));
+                None
+            }
+        };
+        if let Some(waiter) = waiter {
+            waiter.settle(StreamSettlement::Item(
+                item.expect("stream item was not queued"),
+            ))?;
+        }
+        Ok(())
     }
 }
 
-/// Pull-based bounded stream. Each `next_task` resolves to an item or `null`
-/// when all senders have been dropped.
+fn close_stream<T, E>(inner: &Arc<StreamInner<T, E>>, _reason: Option<Error>) {
+    let (waiters, terminal_error) = inner.close_state(None);
+    for waiter in waiters {
+        let settlement = terminal_error
+            .as_ref()
+            .map(|error| StreamSettlement::Error(Arc::clone(error)))
+            .unwrap_or(StreamSettlement::End);
+        let _ = waiter.settle(settlement);
+    }
+}
+
+/// Mark a producer as naturally exhausted without discarding items that were
+/// accepted before the last sender went away. There cannot normally be both
+/// queued items and waiters, but pairing them here keeps the transition
+/// correct under every send/drop interleaving.
+fn finish_stream<T, E>(inner: &Arc<StreamInner<T, E>>) {
+    let settlements = inner
+        .state
+        .lock()
+        .map(|mut state| {
+            if state.closed {
+                return Vec::new();
+            }
+            state.closed = true;
+            let mut settlements = Vec::with_capacity(state.waiters.len());
+            while let Some(waiter) = state.waiters.pop_front() {
+                let settlement = state
+                    .queue
+                    .pop_front()
+                    .map(StreamSettlement::Item)
+                    .unwrap_or(StreamSettlement::End);
+                settlements.push((waiter, settlement));
+            }
+            settlements
+        })
+        .unwrap_or_default();
+    inner.space_available.notify_all();
+    for (waiter, settlement) in settlements {
+        let _ = waiter.settle(settlement);
+    }
+}
+
+fn return_stream<T, E>(inner: &Arc<StreamInner<T, E>>) {
+    let waiters = inner
+        .state
+        .lock()
+        .map(|mut state| {
+            state.closed = true;
+            state.queue.clear();
+            state.terminal_error = None;
+            state.waiters.drain(..).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    inner.space_available.notify_all();
+    for waiter in waiters {
+        let _ = waiter.settle(StreamSettlement::End);
+    }
+}
+
+fn close_stream_with_error<T, E>(inner: &Arc<StreamInner<T, E>>, error: Arc<DynAniError>) {
+    let (waiters, terminal_error) = inner.close_state(Some(error));
+    for waiter in waiters {
+        let _ = waiter.settle(StreamSettlement::Error(
+            terminal_error
+                .as_ref()
+                .expect("stream terminal error was installed")
+                .clone(),
+        ));
+    }
+}
+
+/// Pull-based bounded stream. Each `next_promise` resolves to an item or
+/// `null` when all senders have been dropped.
 pub struct AsyncStream<T, E = Error> {
     inner: Arc<StreamInner<T, E>>,
 }
@@ -86,10 +313,7 @@ pub type AsyncIterator<T, E = Error> = AsyncStream<T, E>;
 /// Sender alias paired with [`AsyncIterator`].
 pub type AsyncIteratorSender<T, E = Error> = StreamSender<T, E>;
 
-/// Nullable result used internally to resolve an async-iterator `next()`
-/// Promise. The wrapper keeps the public ArkTS type as `T | null` while
-/// avoiding coherence conflicts between primitive Promise boxing and
-/// `Option<T>` conversion implementations.
+/// Nullable result used internally to resolve an async-iterator `next()` Promise.
 pub struct AsyncIteratorValue<T>(pub Option<T>);
 
 impl<T: TypeInfo> TypeInfo for AsyncIteratorValue<T> {
@@ -127,15 +351,24 @@ pub fn stream_channel_with_error<T, E>(
             "async stream capacity must be greater than zero",
         ));
     }
-    let (sender, receiver) = mpsc::sync_channel(capacity);
     LIVE_STREAMS.fetch_add(1, Ordering::AcqRel);
+    let inner = Arc::new(StreamInner {
+        state: Mutex::new(StreamState {
+            queue: VecDeque::with_capacity(capacity),
+            waiters: VecDeque::new(),
+            senders: 1,
+            closed: false,
+            terminal_error: None,
+        }),
+        space_available: Condvar::new(),
+        capacity,
+        registration: Mutex::new(None),
+    });
     Ok((
-        StreamSender { sender },
-        AsyncStream {
-            inner: Arc::new(StreamInner {
-                receiver: Mutex::new(receiver),
-            }),
+        StreamSender {
+            inner: Arc::clone(&inner),
         },
+        AsyncStream { inner },
     ))
 }
 
@@ -145,66 +378,121 @@ where
     E: AniErrorPayload,
     AsyncIteratorValue<T>: for<'env> PromiseValue<'env>,
 {
-    /// Build one scheduler-backed Promise task for an iterator `next()` call.
-    pub fn next_task(&self) -> AsyncTask<StreamNextTask<T, E>, AsyncIteratorValue<T>> {
-        AsyncTask::new(StreamNextTask {
-            inner: Arc::clone(&self.inner),
-        })
+    /// Returns true after a successful producer close once every queued item
+    /// has been consumed. Terminal errors deliberately remain observable until
+    /// the consumer calls [`return_promise`](Self::return_promise).
+    pub fn is_exhausted(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .map(|state| state.closed && state.queue.is_empty() && state.terminal_error.is_none())
+            .unwrap_or(false)
     }
-}
 
-/// Task returned by [`AsyncStream::next_task`].
-pub struct StreamNextTask<T, E = Error> {
-    inner: Arc<StreamInner<T, E>>,
-}
-
-impl<T, E> Task for StreamNextTask<T, E>
-where
-    T: Send + 'static,
-    E: AniErrorPayload,
-    AsyncIteratorValue<T>: for<'env> PromiseValue<'env>,
-{
-    type Output = Option<T>;
-    type JsValue = AsyncIteratorValue<T>;
-    type Error = DynAniError;
-
-    fn compute(
-        &mut self,
-        cancellation: &CancellationToken,
-    ) -> std::result::Result<Self::Output, Self::Error> {
-        loop {
-            cancellation
-                .check()
-                .map_err(|error| -> DynAniError { Box::new(error) })?;
-            let result = self
-                .inner
-                .receiver
-                .lock()
-                .map_err(|_| -> DynAniError {
-                    Box::new(Error::new(
-                        Status::GenericFailure,
-                        "async stream lock poisoned",
-                    ))
-                })?
-                .recv_timeout(Duration::from_millis(10));
-            match result {
-                Ok(item) => {
-                    return item
-                        .map(Some)
-                        .map_err(|error| Box::new(error) as DynAniError);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+    /// Build one Promise for an iterator `next()` call without occupying a
+    /// scheduler worker while the stream is idle.
+    pub fn next_promise<'env>(
+        &self,
+        env: &Env<'env>,
+    ) -> Result<PromiseRaw<'env, AsyncIteratorValue<T>>> {
+        self.ensure_runtime_registration()?;
+        let (deferred, promise) = PromiseRaw::deferred(env)?;
+        let vm = env.get_vm()?;
+        let mut waiter = Some(StreamWaiter {
+            settle: Box::new(move |settlement| {
+                vm.with_attached(|env| match settlement {
+                    StreamSettlement::Item(Ok(item)) => {
+                        deferred.resolve_value(env, AsyncIteratorValue(Some(item)))
+                    }
+                    StreamSettlement::Item(Err(error)) => deferred.reject_with_payload(env, error),
+                    StreamSettlement::Error(error) => deferred.reject_with_payload(env, error),
+                    StreamSettlement::End => deferred.resolve_value(env, AsyncIteratorValue(None)),
+                    StreamSettlement::Cancelled => deferred.reject_with_error(
+                        env,
+                        Error::new(
+                            Status::Cancelled,
+                            "async stream cancelled during runtime shutdown",
+                        ),
+                    ),
+                })
+            }),
+        });
+        let immediate = {
+            let mut state =
+                self.inner.state.lock().map_err(|_| {
+                    Error::new(Status::GenericFailure, "async stream lock poisoned")
+                })?;
+            if let Some(item) = state.queue.pop_front() {
+                self.inner.space_available.notify_one();
+                Some(StreamSettlement::Item(item))
+            } else if state.closed {
+                Some(
+                    state
+                        .terminal_error
+                        .as_ref()
+                        .map(|error| StreamSettlement::Error(Arc::clone(error)))
+                        .unwrap_or(StreamSettlement::End),
+                )
+            } else {
+                state
+                    .waiters
+                    .push_back(waiter.take().expect("stream waiter is present"));
+                None
             }
+        };
+
+        if let Some(settlement) = immediate {
+            waiter
+                .take()
+                .expect("stream waiter was not queued")
+                .settle(settlement)?;
         }
+        Ok(promise)
     }
 
-    fn resolve<'env>(
-        self,
-        _env: &Env<'env>,
-        output: Self::Output,
-    ) -> std::result::Result<Self::JsValue, Self::Error> {
-        Ok(AsyncIteratorValue(output))
+    /// Implement AsyncIterator `return()`: stop the producer-facing stream,
+    /// resolve every outstanding pull as done, and return a done result.
+    pub fn return_promise<'env>(
+        &self,
+        env: &Env<'env>,
+    ) -> Result<PromiseRaw<'env, AsyncIteratorValue<T>>> {
+        return_stream(&self.inner);
+        PromiseRaw::resolve_value(env, AsyncIteratorValue(None))
+    }
+
+    /// Implement AsyncIterator `throw()`: terminate the stream with the exact
+    /// custom error payload and reject both outstanding and future pulls.
+    pub fn throw_promise<'env, P>(
+        &self,
+        env: &Env<'env>,
+        error: P,
+    ) -> Result<PromiseRaw<'env, AsyncIteratorValue<T>>>
+    where
+        P: AniErrorPayload,
+    {
+        let error: Arc<DynAniError> = Arc::new(Box::new(error));
+        close_stream_with_error(&self.inner, Arc::clone(&error));
+        let (deferred, promise) = PromiseRaw::deferred(env)?;
+        deferred.reject_with_payload(env, error)?;
+        Ok(promise)
+    }
+
+    /// Close the receiver and resolve pending pulls as done.
+    pub fn close(&self) {
+        close_stream(&self.inner, None);
+    }
+
+    fn ensure_runtime_registration(&self) -> Result<()> {
+        let mut registration = self.inner.registration.lock().map_err(|_| {
+            Error::new(
+                Status::GenericFailure,
+                "async stream registration lock poisoned",
+            )
+        })?;
+        if registration.is_none() {
+            *registration = Some(crate::scheduler::shared().register_cancellable(&self.inner)?);
+        }
+        Ok(())
     }
 }
 
@@ -241,41 +529,124 @@ mod tests {
     }
 
     #[test]
-    fn stream_preserves_order_error_and_end() {
-        let (sender, stream) = stream_channel(2).unwrap();
+    fn queue_preserves_order_backpressure_and_close() {
+        let (sender, stream) = stream_channel::<i32>(2).unwrap();
         sender.send(1).unwrap();
         sender.send(2).unwrap();
+        assert_eq!(sender.try_send(3).unwrap_err().status, Status::QueueFull);
+        let queued = stream.inner.state.lock().unwrap();
+        assert_eq!(queued.queue.len(), 2);
+        drop(queued);
+        sender.close();
+        assert!(stream.inner.state.lock().unwrap().closed);
+        assert_eq!(sender.send(4).unwrap_err().status, Status::Closing);
+    }
+
+    #[test]
+    fn last_sender_closes_stream_without_a_worker_job() {
+        let (sender, stream) = stream_channel::<i32>(1).unwrap();
+        let completed = crate::scheduler::shared().metrics().completed;
         drop(sender);
-        let mut first = StreamNextTask {
-            inner: Arc::clone(&stream.inner),
-        };
-        let token = CancellationToken::new();
-        assert_eq!(first.compute(&token).unwrap(), Some(1));
-        assert_eq!(first.compute(&token).unwrap(), Some(2));
-        assert_eq!(first.compute(&token).unwrap(), None);
-        drop(first);
-        assert_eq!(Arc::strong_count(&stream.inner), 1);
-        drop(stream);
+        assert!(stream.inner.state.lock().unwrap().closed);
+        assert_eq!(crate::scheduler::shared().metrics().completed, completed);
     }
 
     #[test]
-    fn nonblocking_backpressure_is_reported() {
-        let (sender, stream) = stream_channel(1).unwrap();
-        sender.try_send(1).unwrap();
-        assert_eq!(sender.try_send(2).unwrap_err().status, Status::QueueFull);
-        drop(stream);
+    fn last_sender_preserves_items_accepted_before_natural_end() {
+        let (sender, stream) = stream_channel::<i32>(2).unwrap();
+        sender.send(10).unwrap();
+        sender.send(20).unwrap();
+        drop(sender);
+        let state = stream.inner.state.lock().unwrap();
+        assert!(state.closed);
+        assert_eq!(state.queue.len(), 2);
+        assert!(matches!(state.queue[0], Ok(10)));
+        assert!(matches!(state.queue[1], Ok(20)));
     }
 
     #[test]
-    fn custom_stream_error_is_not_erased() {
+    fn custom_error_type_is_accepted() {
         let (sender, stream) = stream_channel_with_error::<i32, DomainError>(1).unwrap();
         sender.send_error(DomainError).unwrap();
-        let mut next = StreamNextTask {
-            inner: Arc::clone(&stream.inner),
-        };
-        let error = next.compute(&CancellationToken::new()).unwrap_err();
-        assert_eq!(error.ani_status(), "StreamDomainError");
-        assert_eq!(error.ani_code(), 73001);
-        assert_eq!(error.ani_message(), "stream domain error");
+        let state = stream.inner.state.lock().unwrap();
+        assert!(state.closed);
+        assert!(state.terminal_error.is_some());
+    }
+
+    #[test]
+    fn concurrent_waiters_are_fifo_and_do_not_schedule_worker_jobs() {
+        let (sender, stream) = stream_channel::<i32>(2).unwrap();
+        let completed = crate::scheduler::shared().metrics().completed;
+        let (settled_sender, settled_receiver) = std::sync::mpsc::channel();
+        {
+            let mut state = stream.inner.state.lock().unwrap();
+            for index in 0..32 {
+                let settled_sender = settled_sender.clone();
+                state.waiters.push_back(StreamWaiter {
+                    settle: Box::new(move |settlement| {
+                        let value = match settlement {
+                            StreamSettlement::Item(Ok(value)) => value,
+                            _ => -1,
+                        };
+                        settled_sender.send((index, value)).unwrap();
+                        Ok(())
+                    }),
+                });
+            }
+        }
+        for value in 0..32 {
+            sender.send(value).unwrap();
+        }
+        for expected in 0..32 {
+            assert_eq!(settled_receiver.recv().unwrap(), (expected, expected));
+        }
+        assert_eq!(crate::scheduler::shared().metrics().completed, completed);
+    }
+
+    #[test]
+    fn return_overrides_terminal_error_for_future_pulls() {
+        let (sender, stream) = stream_channel_with_error::<i32, DomainError>(1).unwrap();
+        sender.send_error(DomainError).unwrap();
+        return_stream(&stream.inner);
+        let state = stream.inner.state.lock().unwrap();
+        assert!(state.closed);
+        assert!(state.terminal_error.is_none());
+    }
+
+    #[test]
+    fn shutdown_cancellation_settles_all_waiters() {
+        let (_sender, stream) = stream_channel::<i32>(2).unwrap();
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        {
+            let mut state = stream.inner.state.lock().unwrap();
+            for _ in 0..16 {
+                let cancelled = Arc::clone(&cancelled);
+                state.waiters.push_back(StreamWaiter {
+                    settle: Box::new(move |settlement| {
+                        if matches!(settlement, StreamSettlement::Cancelled) {
+                            cancelled.fetch_add(1, Ordering::AcqRel);
+                        }
+                        Ok(())
+                    }),
+                });
+            }
+        }
+        stream.inner.cancel_for_runtime_shutdown();
+        assert_eq!(cancelled.load(Ordering::Acquire), 16);
+        assert!(stream.inner.state.lock().unwrap().closed);
+    }
+
+    #[test]
+    fn blocked_producer_is_released_when_receiver_closes() {
+        let (sender, stream) = stream_channel::<i32>(1).unwrap();
+        sender.send(1).unwrap();
+        let blocked = sender.clone();
+        let producer = std::thread::spawn(move || blocked.send(2));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        stream.close();
+        assert_eq!(
+            producer.join().unwrap().unwrap_err().status,
+            Status::Closing
+        );
     }
 }

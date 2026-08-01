@@ -22,16 +22,16 @@ export class UserProfile {
 }
 
 export native function __ani_native_describe_optional_user_profile(user: UserProfile | null): string;
-function describe_optional_user_profile(user: UserProfile | null | undefined): string {
+export function describe_optional_user_profile(user: UserProfile | null | undefined): string {
   return __ani_native_describe_optional_user_profile(user == undefined ? null : user);
 }
 export native function __ani_native_maybe_user_profile(flag: boolean): UserProfile | null;
-function maybe_user_profile(flag: boolean): UserProfile | null | undefined {
+export function maybe_user_profile(flag: boolean): UserProfile | null | undefined {
   let __ani_result = __ani_native_maybe_user_profile(flag);
   return __ani_result == null ? undefined : __ani_result;
 }
 export native function __ani_native_maybe_user_profile_result(flag: boolean): UserProfile | null;
-function maybe_user_profile_result(flag: boolean): UserProfile | null | undefined {
+export function maybe_user_profile_result(flag: boolean): UserProfile | null | undefined {
   let __ani_result = __ani_native_maybe_user_profile_result(flag);
   return __ani_result == null ? undefined : __ani_result;
 }
@@ -46,6 +46,16 @@ export native function summarize_user_profile_directory(values: Map<string, User
 export native function summarize_user_profile_group(values: Set<UserProfile>): string;
 export native function summarize_user_profile_record(values: Record<string, UserProfile>): string;
 export native function user_profile_result(flag: boolean): UserProfile;
+
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
 
 
 

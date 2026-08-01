@@ -168,7 +168,7 @@ pub enum State {
 }
 ```
 
-unit variants 使用 ANI enum item 映射。包含 tuple 或 struct 字段的 enum 必须同时派生 serde 的 `Serialize`/`Deserialize` 并启用 `ani/serde-json`，运行时通过原生 ArkTS `Record`/`Array`/boxed primitive 对象图传输：
+unit variants 使用 ANI enum item 映射。包含 tuple 或 struct 字段的 enum 必须同时派生 serde 的 `Serialize`/`Deserialize` 并启用 `ani/serde-json`。生成器会为每个 variant 建立精确 interface，并分别生成 input/output discriminated union；运行时通过原生 ArkTS 对象图传输并按同一 schema 校验：
 
 ```rust
 #[derive(Serialize, Deserialize, AniEnum)]
@@ -177,6 +177,20 @@ pub enum Message {
     Point { x: i32, y: i32 },
 }
 ```
+
+结构化 enum 属性：
+
+| 位置 | 属性 | 说明 |
+| --- | --- | --- |
+| enum | `discriminator = "kind"` | 设置联合判别字段，默认为 `type` |
+| enum | `case = "camelCase"` | 统一转换 variant/field 公开名称；支持 snake、kebab、lower、upper、camel、pascal |
+| enum | `nullable` | 在生成的 input/output union 中加入 `null` |
+| enum / variant / field | `input_only` | 只允许 ArkTS→Rust 方向 |
+| enum / variant / field | `output_only` | 只允许 Rust→ArkTS 方向 |
+| variant / field | `rename = "name"` | 覆盖公开名称；`name = "name"` 也可用于 variant |
+| variant / field | `skip` | 从公开 schema 和运行时转换中排除 |
+
+泛型结构化 enum 会保留类型参数。`input_only` 与 `output_only` 不能同时用于同一项；方向冲突、未知 discriminator/variant 和 schema 不匹配会在编译期或运行时明确报错。
 
 ## 自动注入参数
 

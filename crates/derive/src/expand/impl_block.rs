@@ -857,6 +857,14 @@ fn merge_bindgen_attrs(
         is_async: base.is_async || extra.is_async,
         transparent: base.transparent || extra.transparent,
         array: base.array || extra.array,
+        discriminant: extra
+            .discriminant
+            .clone()
+            .or_else(|| base.discriminant.clone()),
+        case: extra.case.clone().or_else(|| base.case.clone()),
+        input_only: base.input_only || extra.input_only,
+        output_only: base.output_only || extra.output_only,
+        nullable: base.nullable || extra.nullable,
     }
 }
 

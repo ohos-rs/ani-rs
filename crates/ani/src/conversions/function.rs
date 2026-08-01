@@ -91,6 +91,7 @@ use std::task::{Context, Poll, Waker};
 use crate::ani_call_ret;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
+use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 use crate::sys;
 use crate::types::{AniRef, GlobalRef};
 use crate::vm::AniVm;
@@ -782,6 +783,29 @@ struct ThreadsafeFunctionInner<Args, Return> {
     callback: Arc<FunctionRef<Args, Return>>,
     draining: AtomicBool,
     closed: AtomicBool,
+    registration: Mutex<Option<RuntimeRegistration>>,
+}
+
+impl<Args, Return> RuntimeCancellable for ThreadsafeFunctionInner<Args, Return>
+where
+    Args: Send + 'static,
+    Return: Send + 'static,
+{
+    fn cancel_for_runtime_shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        let pending = self
+            .queue
+            .lock()
+            .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        self.space_available.notify_all();
+        for message in pending {
+            message.state.finish(Err(Error::new(
+                Status::Cancelled,
+                "ThreadsafeFunction cancelled during runtime shutdown",
+            )));
+        }
+    }
 }
 
 /// A bounded, cloneable cross-thread callback queue.
@@ -822,16 +846,23 @@ where
             ));
         }
 
-        Ok(Self {
-            inner: Arc::new(ThreadsafeFunctionInner {
-                queue: Mutex::new(VecDeque::with_capacity(capacity)),
-                space_available: Condvar::new(),
-                capacity,
-                callback: Arc::new(callback),
-                draining: AtomicBool::new(false),
-                closed: AtomicBool::new(false),
-            }),
-        })
+        let inner = Arc::new(ThreadsafeFunctionInner {
+            queue: Mutex::new(VecDeque::with_capacity(capacity)),
+            space_available: Condvar::new(),
+            capacity,
+            callback: Arc::new(callback),
+            draining: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            registration: Mutex::new(None),
+        });
+        let registration = crate::scheduler::shared().register_cancellable(&inner)?;
+        *inner.registration.lock().map_err(|_| {
+            Error::new(
+                Status::GenericFailure,
+                "ThreadsafeFunction registration lock poisoned",
+            )
+        })? = Some(registration);
+        Ok(Self { inner })
     }
 
     /// Submit a callback invocation with explicit queue behavior.
@@ -891,6 +922,14 @@ where
     pub fn close(&self) {
         if !self.inner.closed.swap(true, Ordering::AcqRel) {
             self.inner.space_available.notify_all();
+        }
+    }
+
+    /// Abort the queue. Pending calls complete with [`Status::Cancelled`].
+    pub fn abort(&self) {
+        self.inner.cancel_for_runtime_shutdown();
+        if let Ok(mut registration) = self.inner.registration.lock() {
+            registration.take();
         }
     }
 
@@ -981,6 +1020,11 @@ where
             .map(|queue| !queue.is_empty())
             .unwrap_or(false);
         if !has_more || inner.draining.swap(true, Ordering::AcqRel) {
+            if inner.closed.load(Ordering::Acquire)
+                && let Ok(mut registration) = inner.registration.lock()
+            {
+                registration.take();
+            }
             return;
         }
     }

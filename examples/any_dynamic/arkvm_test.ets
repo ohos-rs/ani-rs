@@ -9,6 +9,16 @@ export native function dynamic_call(func: AniRef, arg: AniRef): boolean;
 export native function dynamic_construct(ctor: AniRef, arg0: AniRef): boolean;
 export native function dynamic_get_set(obj: AniRef, value: AniRef): boolean;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_any_dynamic");

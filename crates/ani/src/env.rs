@@ -804,6 +804,34 @@ impl<'local> Env<'local> {
         )
     }
 
+    /// Find an unambiguous instance method by name without constraining its
+    /// signature.
+    ///
+    /// This is useful for platform stdlib methods whose source-level optional
+    /// parameters have changed lowering between API levels. ANI returns an
+    /// error when more than one overload matches, so callers cannot
+    /// accidentally select an arbitrary overload.
+    pub fn find_method_by_name(&self, class: &AniClass<'_>, name: &str) -> Result<AniMethod> {
+        let c_name =
+            CString::new(name).map_err(|_| Error::new(Status::Error, "Invalid method name"))?;
+        let raw = self.as_raw();
+        let mut method: sys::ani_method = std::ptr::null_mut();
+        let status = unsafe {
+            let api = &*(*raw);
+            (api.Class_FindMethod.ok_or_else(|| {
+                Error::new(Status::InvalidVersion, "Class_FindMethod is unavailable")
+            })?)(
+                raw,
+                class.as_raw(),
+                c_name.as_ptr(),
+                std::ptr::null(),
+                &mut method,
+            )
+        };
+        check_status(status)?;
+        Ok(unsafe { AniMethod::from_raw(method) })
+    }
+
     /// Find class static method
     pub fn find_static_method(
         &self,
@@ -829,6 +857,11 @@ impl<'local> Env<'local> {
     /// Find constructor
     pub fn find_constructor(&self, class: &AniClass<'_>, signature: &str) -> Result<AniMethod> {
         self.find_method(class, "<ctor>", signature)
+    }
+
+    /// Find the class constructor when it has exactly one runtime overload.
+    pub fn find_constructor_by_name(&self, class: &AniClass<'_>) -> Result<AniMethod> {
+        self.find_method_by_name(class, "<ctor>")
     }
 
     // ========================================================================

@@ -7,7 +7,10 @@
 //! - **ArrayBuffer** — owned buffer; use when you need to own data or return a buffer to ANI
 //!   (ToAni copies data into a new ANI ArrayBuffer).
 
-use ani::prelude::{ArrayBuffer, ArrayBufferSlice, Uint16Array};
+use ani::error::Result;
+use ani::prelude::{
+    ArrayBuffer, ArrayBufferSlice, ClampedU8, DataView, Uint16Array, Uint8ClampedArray,
+};
 use ani_derive::ani;
 
 // ============================================================================
@@ -92,6 +95,41 @@ pub fn sum_u16_array(values: Uint16Array) -> i64 {
         .sum()
 }
 
+/// Mutate an owned/COW typed-array input. The ArkTS input remains unchanged.
+#[ani]
+pub fn replace_first_u16(mut values: Uint16Array) -> Uint16Array {
+    if let Some(first) = values.as_mut_slice().first_mut() {
+        *first = 99;
+    }
+    values
+}
+
+/// Create the native clamped typed-array class.
+#[ani]
+pub fn make_clamped_array() -> Uint8ClampedArray {
+    Uint8ClampedArray::new(vec![ClampedU8(0), ClampedU8(128), ClampedU8(255)])
+}
+
+#[ani]
+pub fn sum_clamped_array(values: Uint8ClampedArray) -> i64 {
+    values
+        .as_slice()
+        .iter()
+        .map(|value| i64::from(value.0))
+        .sum()
+}
+
+/// Return a two-byte DataView over the middle of a four-byte buffer.
+#[ani]
+pub fn make_data_view() -> Result<DataView> {
+    DataView::new(ArrayBuffer::new(vec![1, 2, 3, 4]), 1, 2)
+}
+
+#[ani]
+pub fn sum_data_view(view: DataView) -> i64 {
+    view.as_slice().iter().map(|value| i64::from(*value)).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +171,11 @@ mod tests {
         let mut buffer = replace_first_byte(ArrayBuffer::new(vec![1, 2, 3]), 255);
         assert_eq!(buffer.as_mut_slice(), [255, 2, 3]);
         assert_eq!(sum_u16_array(make_u16_array()), 1 + 0x0102 + 65_535);
+        assert_eq!(
+            replace_first_u16(Uint16Array::new(vec![1, 2])).into_vec(),
+            vec![99, 2]
+        );
+        assert_eq!(sum_clamped_array(make_clamped_array()), 383);
+        assert_eq!(sum_data_view(make_data_view().unwrap()), 5);
     }
 }

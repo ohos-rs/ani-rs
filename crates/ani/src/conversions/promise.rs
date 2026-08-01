@@ -39,29 +39,156 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::task::{Context, Poll, Waker};
-use std::time::Duration;
 
 use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
-use crate::error::{AniErrorPayload, Error, Result, Status};
+use crate::error::{AniErrorPayload, AniErrorValue, Error, Result, Status};
+use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 use crate::sys;
-use crate::types::{AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef};
+use crate::types::{
+    AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef, ani_value_long, ani_value_ref,
+};
 use crate::vm::AniVm;
 use crate::{ani_call, ani_call_2ret};
 
 use super::function::{Function, FunctionRef, ToAniArgs};
-use super::{FromAni, ToAni as ConversionToAni, TypeInfo, Unboxable};
+use super::{FromAni, RefContainer, ToAni as ConversionToAni, TypeInfo, Unboxable};
 
-const PROMISE_STATE_PENDING: i32 = 0;
-const PROMISE_STATE_LINKED: i32 = 1;
-const PROMISE_STATE_RESOLVED: i32 = 2;
-const PROMISE_STATE_REJECTED: i32 = 3;
-const DEFAULT_PROMISE_POLL_INTERVAL: Duration = Duration::from_millis(2);
+const PROMISE_BRIDGE_OBSERVE: &str = "__ani_rs_observe_promise";
+const PROMISE_BRIDGE_RESOLVE: &str = "__ani_rs_promise_resolve\0";
+const PROMISE_BRIDGE_REJECT: &str = "__ani_rs_promise_reject\0";
+const PROMISE_BRIDGE_SETTLE_SIGNATURE: &str = "lC{std.core.Object}:\0";
+const PROMISE_BRIDGE_OBSERVE_SIGNATURE: &str = "C{std.core.Promise}l:";
+
+trait PromiseBridgeObserver: Send + Sync {
+    fn settle(&self, env: &Env<'_>, value: AniRef<'_>, rejected: bool);
+}
+
+type PromiseObserverRegistry = HashMap<u64, Weak<dyn PromiseBridgeObserver>>;
+
+static PROMISE_BRIDGE_MODULES: OnceLock<RwLock<Vec<&'static str>>> = OnceLock::new();
+static PROMISE_OBSERVERS: OnceLock<Mutex<PromiseObserverRegistry>> = OnceLock::new();
+static NEXT_PROMISE_OBSERVER: AtomicU64 = AtomicU64::new(1);
+
+fn promise_bridge_modules() -> &'static RwLock<Vec<&'static str>> {
+    PROMISE_BRIDGE_MODULES.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+fn promise_observers() -> &'static Mutex<PromiseObserverRegistry> {
+    PROMISE_OBSERVERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record a generated ETS module that contains the public Promise
+/// continuation bridge. The derive-generated module constructor calls this
+/// before native bindings are installed.
+#[doc(hidden)]
+pub fn register_promise_bridge_module(module: &'static str) {
+    if let Ok(mut modules) = promise_bridge_modules().write()
+        && !modules.contains(&module)
+    {
+        modules.push(module);
+    }
+}
+
+/// Queue the native settlement callbacks for all generated ETS bridges.
+#[doc(hidden)]
+pub fn queue_registered_promise_bridges() -> sys::ani_status {
+    let Ok(modules) = promise_bridge_modules().read() else {
+        return sys::ani_status_ANI_ERROR;
+    };
+    for module in modules.iter().copied() {
+        for (name, callback) in [
+            (
+                PROMISE_BRIDGE_RESOLVE,
+                promise_bridge_resolve as *const () as *const c_void,
+            ),
+            (
+                PROMISE_BRIDGE_REJECT,
+                promise_bridge_reject as *const () as *const c_void,
+            ),
+        ] {
+            let status = crate::module_register::queue_module_binding(
+                module,
+                name,
+                PROMISE_BRIDGE_SETTLE_SIGNATURE,
+                callback,
+            );
+            if status != sys::ani_status_ANI_OK {
+                return status;
+            }
+        }
+    }
+    sys::ani_status_ANI_OK
+}
+
+fn register_promise_observer(observer: &Arc<dyn PromiseBridgeObserver>) -> Result<u64> {
+    let token = NEXT_PROMISE_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    promise_observers()
+        .lock()
+        .map_err(|_| Error::new(Status::GenericFailure, "Promise observer registry poisoned"))?
+        .insert(token, Arc::downgrade(observer));
+    Ok(token)
+}
+
+fn unregister_promise_observer(token: u64) {
+    if token != 0
+        && let Ok(mut observers) = promise_observers().lock()
+    {
+        observers.remove(&token);
+    }
+}
+
+fn dispatch_promise_settlement(
+    env: *mut sys::ani_env,
+    token: i64,
+    value: sys::ani_ref,
+    rejected: bool,
+) {
+    if env.is_null() || token <= 0 {
+        return;
+    }
+    let observer = promise_observers()
+        .lock()
+        .ok()
+        .and_then(|mut observers| observers.remove(&(token as u64)))
+        .and_then(|observer| observer.upgrade());
+    let Some(observer) = observer else {
+        return;
+    };
+    let env = unsafe { Env::from_raw_unchecked(env) };
+    observer.settle(&env, unsafe { AniRef::from_raw(value) }, rejected);
+}
+
+/// Native target called by the generated ETS `then` continuation.
+#[doc(hidden)]
+pub unsafe extern "C" fn promise_bridge_resolve(
+    env: *mut sys::ani_env,
+    token: i64,
+    value: sys::ani_ref,
+) {
+    let _ = std::panic::catch_unwind(|| {
+        dispatch_promise_settlement(env, token, value, false);
+    });
+}
+
+/// Native target called by the generated ETS rejection continuation.
+#[doc(hidden)]
+pub unsafe extern "C" fn promise_bridge_reject(
+    env: *mut sys::ani_env,
+    token: i64,
+    value: sys::ani_ref,
+) {
+    let _ = std::panic::catch_unwind(|| {
+        dispatch_promise_settlement(env, token, value, true);
+    });
+}
 
 /// Raw Promise value in ANI
 ///
@@ -415,10 +542,12 @@ impl PromiseFutureValue for () {
 struct PromiseFutureState<T> {
     vm: AniVm,
     promise: Mutex<Option<GlobalRef>>,
+    bridge_token: AtomicU64,
     cancelled: AtomicBool,
-    interval_ms: AtomicU64,
+    finished: AtomicBool,
     result: Mutex<Option<Result<T>>>,
     waker: Mutex<Option<Waker>>,
+    registration: Mutex<Option<RuntimeRegistration>>,
 }
 
 impl<T> PromiseFutureState<T> {
@@ -444,22 +573,62 @@ impl<T> PromiseFutureState<T> {
             None => Ok(()),
         }
     }
+
+    fn cancel_wait(&self, message: &'static str) -> bool {
+        if self.cancelled.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        unregister_promise_observer(self.bridge_token.swap(0, Ordering::AcqRel));
+        if !self.finished.swap(true, Ordering::AcqRel) {
+            let result = match self.release_promise() {
+                Ok(()) => Err(Error::new(Status::Cancelled, message)),
+                Err(error) => Err(error),
+            };
+            self.finish(result);
+            if let Ok(mut registration) = self.registration.lock() {
+                registration.take();
+            }
+        }
+        true
+    }
 }
 
-enum PromisePoll<T> {
-    Pending,
-    Ready(Result<T>),
+impl<T: Send + 'static> RuntimeCancellable for PromiseFutureState<T> {
+    fn cancel_for_runtime_shutdown(&self) {
+        self.cancel_wait("Promise future cancelled during runtime shutdown");
+    }
+}
+
+impl<T: PromiseFutureValue> PromiseBridgeObserver for PromiseFutureState<T> {
+    fn settle(&self, env: &Env<'_>, value: AniRef<'_>, rejected: bool) {
+        self.bridge_token.store(0, Ordering::Release);
+        if self.finished.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let result = if rejected {
+            Err(promise_rejection_error(env, value))
+        } else {
+            T::from_promise_ref(env, value)
+        };
+        let result = match self.release_promise() {
+            Ok(()) => result,
+            Err(error) => Err(error),
+        };
+        self.finish(result);
+        if let Ok(mut registration) = self.registration.lock() {
+            registration.take();
+        }
+    }
 }
 
 /// A cancellable Rust [`Future`](std::future::Future) backed by an ArkTS
 /// Promise.
 ///
 /// ANI currently exposes Promise creation and settlement but no native
-/// continuation-registration API. A single background observer therefore
-/// checks the runtime Promise state on a short timer and wakes the Rust task
-/// only when the Promise settles or is cancelled. It never blocks or repeatedly
-/// reschedules the executor, retains the Promise with a global reference, and
-/// automatically attaches the observer to the owning VM.
+/// continuation-registration API. ani-rs therefore asks its generated ETS
+/// bridge to attach public `then` continuations. Those continuations settle a
+/// tokenized Rust waiter directly; no runtime-private Promise fields are read
+/// and no scheduler worker or timer is consumed while the Promise is pending.
 pub struct PromiseFuture<T> {
     state: Arc<PromiseFutureState<T>>,
     completed: bool,
@@ -472,13 +641,29 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
         let state = Arc::new(PromiseFutureState {
             vm: env.get_vm()?,
             promise: Mutex::new(Some(env.create_global_ref(&promise_ref)?)),
+            bridge_token: AtomicU64::new(0),
             result: Mutex::new(None),
             waker: Mutex::new(None),
-            interval_ms: AtomicU64::new(DEFAULT_PROMISE_POLL_INTERVAL.as_millis() as u64),
             cancelled: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            registration: Mutex::new(None),
         });
-        let observer = Arc::clone(&state);
-        if let Err(error) = crate::scheduler::shared().schedule(move || observe_promise(observer)) {
+        let registration = match crate::scheduler::shared().register_cancellable(&state) {
+            Ok(registration) => registration,
+            Err(error) => {
+                let _ = state.release_promise();
+                return Err(error);
+            }
+        };
+        *state.registration.lock().map_err(|_| {
+            Error::new(Status::GenericFailure, "Promise registration lock poisoned")
+        })? = Some(registration);
+
+        let observer: Arc<dyn PromiseBridgeObserver> = state.clone();
+        let token = register_promise_observer(&observer)?;
+        state.bridge_token.store(token, Ordering::Release);
+        if let Err(error) = attach_promise_bridge(env, &promise_ref, token) {
+            unregister_promise_observer(state.bridge_token.swap(0, Ordering::AcqRel));
             let _ = state.release_promise();
             return Err(error);
         }
@@ -488,27 +673,12 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
         })
     }
 
-    /// Changes the interval used while the Promise is pending.
-    ///
-    /// Values below one millisecond are clamped to one millisecond to avoid a
-    /// busy loop.
-    pub fn with_poll_interval(self, interval: Duration) -> Self {
-        self.state.interval_ms.store(
-            interval.max(Duration::from_millis(1)).as_millis() as u64,
-            Ordering::Release,
-        );
-        self
-    }
-
     /// Releases this future's Promise reference.
     ///
     /// Cancellation is idempotent and does not abort the ArkTS operation
     /// itself because ANI has no Promise cancellation primitive.
     pub fn cancel(&mut self) -> Result<bool> {
-        if self.state.cancelled.swap(true, Ordering::AcqRel) {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(self.state.cancel_wait("Promise future was cancelled"))
     }
 
     /// Returns whether the Rust-side wait has been cancelled.
@@ -517,69 +687,38 @@ impl<T: PromiseFutureValue> PromiseFuture<T> {
     }
 }
 
-fn inspect_promise<T: PromiseFutureValue>(state: &PromiseFutureState<T>) -> Result<PromisePoll<T>> {
-    let promise = state
-        .promise
-        .lock()
-        .map_err(|_| Error::new(Status::GenericFailure, "Promise reference lock poisoned"))?;
-    let global = promise.as_ref().ok_or_else(|| {
+fn attach_promise_bridge(env: &Env<'_>, promise: &AniRef<'_>, token: u64) -> Result<()> {
+    let modules = promise_bridge_modules()
+        .read()
+        .map_err(|_| Error::new(Status::GenericFailure, "Promise bridge registry poisoned"))?;
+    let mut last_error = None;
+    for descriptor in modules.iter().rev() {
+        let result = (|| {
+            let module = env.find_module(descriptor)?;
+            let function = env.find_module_function(
+                &module,
+                PROMISE_BRIDGE_OBSERVE,
+                PROMISE_BRIDGE_OBSERVE_SIGNATURE,
+            )?;
+            env.call_function_void(
+                &function,
+                &[
+                    ani_value_ref(promise.as_raw()),
+                    ani_value_long(token as i64),
+                ],
+            )
+        })();
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
         Error::new(
-            Status::GenericFailure,
-            "Promise observer no longer owns a Promise",
+            Status::NotFound,
+            "generated ETS Promise continuation bridge is not registered",
         )
-    })?;
-    state.vm.with_attached(|env| {
-        let promise = env.local_object_from_global_ref(global)?;
-        match env.get_field_by_name_int(&promise, "state")? {
-            PROMISE_STATE_PENDING | PROMISE_STATE_LINKED => Ok(PromisePoll::Pending),
-            PROMISE_STATE_RESOLVED => {
-                let value = env.get_field_by_name_ref(&promise, "value")?;
-                Ok(PromisePoll::Ready(T::from_promise_ref(env, value)))
-            }
-            PROMISE_STATE_REJECTED => {
-                let value = env.get_field_by_name_ref(&promise, "value")?;
-                Ok(PromisePoll::Ready(Err(promise_rejection_error(env, value))))
-            }
-            value => Ok(PromisePoll::Ready(Err(Error::new(
-                Status::Error,
-                format!("ArkTS Promise reported unknown state {value}"),
-            )))),
-        }
-    })
-}
-
-fn observe_promise<T: PromiseFutureValue>(state: Arc<PromiseFutureState<T>>) {
-    if state.cancelled.load(Ordering::Acquire) {
-        finish_promise_observer(
-            state,
-            Err(Error::new(
-                Status::Cancelled,
-                "Promise future was cancelled",
-            )),
-        );
-        return;
-    }
-    match inspect_promise(&state) {
-        Ok(PromisePoll::Pending) => {
-            let interval = Duration::from_millis(state.interval_ms.load(Ordering::Acquire));
-            let next = Arc::clone(&state);
-            if let Err(error) =
-                crate::scheduler::shared().schedule_after(interval, move || observe_promise(next))
-            {
-                finish_promise_observer(state, Err(error));
-            }
-        }
-        Ok(PromisePoll::Ready(result)) => finish_promise_observer(state, result),
-        Err(error) => finish_promise_observer(state, Err(error)),
-    }
-}
-
-fn finish_promise_observer<T>(state: Arc<PromiseFutureState<T>>, result: Result<T>) {
-    let result = match state.release_promise() {
-        Ok(()) => result,
-        Err(error) => Err(error),
-    };
-    state.finish(result);
+    }))
 }
 
 impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
@@ -611,30 +750,94 @@ impl<T: PromiseFutureValue> std::future::Future for PromiseFuture<T> {
 
 impl<T> Drop for PromiseFuture<T> {
     fn drop(&mut self) {
-        self.state.cancelled.store(true, Ordering::Release);
+        self.state.cancel_wait("Promise future was dropped");
     }
 }
 
 fn promise_rejection_error(env: &Env<'_>, value: AniRef<'_>) -> Error {
     let error_object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
-    let reason = env
-        .get_property_by_name_ref(&error_object, "message")
-        .and_then(|message| {
-            let message = unsafe { AniString::from_raw(message.as_raw() as sys::ani_string) };
-            env.get_string(&message)
-        })
-        .unwrap_or_else(|_| "ArkTS Promise rejected".to_string());
-    let status = env
-        .get_property_by_name_ref(&error_object, "name")
-        .and_then(|status| {
-            let status = unsafe { AniString::from_raw(status.as_raw() as sys::ani_string) };
-            env.get_string(&status)
-        })
-        .unwrap_or_else(|_| "GenericFailure".to_string());
+    let string_property = |name: &str| {
+        env.get_property_by_name_ref(&error_object, name)
+            .and_then(|value| {
+                if env.is_nullish(&value)? {
+                    return Err(Error::new(
+                        Status::NotFound,
+                        "error string property is absent",
+                    ));
+                }
+                let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+                let string_class = env.find_class("std.core.String")?;
+                if !env.object_instance_of(&object, &string_class)? {
+                    return Err(Error::new(
+                        Status::InvalidType,
+                        "error property is not a string",
+                    ));
+                }
+                let value = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+                env.get_string(&value)
+            })
+            .ok()
+    };
+    let reason = string_property("message").unwrap_or_else(|| {
+        let value = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+        env.get_string(&value)
+            .unwrap_or_else(|_| "ArkTS Promise rejected".to_string())
+    });
+    let status = string_property("name").unwrap_or_else(|| "GenericFailure".to_string());
     let code = env.get_property_by_name_int(&error_object, "code").ok();
     let mut error = Error::new(Status::GenericFailure, reason).with_status_name(status);
     error.code = code;
+    error.set_stack(string_property("stack"));
+    error.preserve_rejection(RefContainer::new(env, &value).ok());
+
+    if let Ok(context) = env.get_property_by_name_ref(&error_object, "cause")
+        && !env.is_nullish(&context).unwrap_or(true)
+    {
+        decode_error_context(env, &context, &mut error);
+    }
     error
+}
+
+fn decode_error_context(env: &Env<'_>, context: &AniRef<'_>, error: &mut Error) {
+    if env.is_nullish(context).unwrap_or(true) {
+        return;
+    }
+    let context_object = unsafe { AniObject::from_raw(context.as_raw() as sys::ani_object) };
+    let Ok(values) = (unsafe {
+        std::collections::HashMap::<String, AniRef<'_>>::from_ani(env, context_object.as_raw())
+    }) else {
+        error.cause = Some(Box::new(promise_rejection_error(env, unsafe {
+            AniRef::from_raw(context.as_raw())
+        })));
+        return;
+    };
+
+    if let Some(status) = values.get("status") {
+        let status = unsafe { AniString::from_raw(status.as_raw() as sys::ani_string) };
+        if let Ok(status) = env.get_string(&status) {
+            error.status_name = Some(status);
+        }
+    }
+    if let Some(metadata) = values.get("metadata") {
+        let metadata = unsafe { AniObject::from_raw(metadata.as_raw() as sys::ani_object) };
+        if let Ok(properties) = unsafe {
+            std::collections::HashMap::<String, AniRef<'_>>::from_ani(env, metadata.as_raw())
+        } {
+            for (key, value) in properties {
+                if let Ok(value) = AniErrorValue::from_ani_ref(env, &value) {
+                    if let AniErrorValue::String(text) = &value {
+                        error.metadata.insert(key.clone(), text.clone());
+                    }
+                    error.insert_property(key, value);
+                }
+            }
+        }
+    }
+    if let Some(cause) = values.get("cause") {
+        error.cause = Some(Box::new(promise_rejection_error(env, unsafe {
+            AniRef::from_raw(cause.as_raw())
+        })));
+    }
 }
 
 /// Deferred resolver for Promise

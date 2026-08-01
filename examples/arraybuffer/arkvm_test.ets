@@ -7,11 +7,26 @@ export native function buffer_length(buf: ArrayBuffer): int;
 export native function concat_buffers(a: ArrayBuffer, b: ArrayBuffer): ArrayBuffer;
 export native function create_buffer(size: int): ArrayBuffer;
 export native function first_byte(buffer: ArrayBuffer): short;
+export native function make_clamped_array(): Uint8ClampedArray;
+export native function make_data_view(): DataView;
 export native function make_u16_array(): Uint16Array;
 export native function process_buffer(buf: ArrayBuffer): int;
 export native function replace_first_byte(buffer: ArrayBuffer, value: short): ArrayBuffer;
+export native function replace_first_u16(values: Uint16Array): Uint16Array;
 export native function sum_bytes(buf: ArrayBuffer): long;
+export native function sum_clamped_array(values: Uint8ClampedArray): long;
+export native function sum_data_view(view: DataView): long;
 export native function sum_u16_array(values: Uint16Array): long;
+
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
 
 
 
@@ -102,6 +117,13 @@ typedInput[0] = 4;
 typedInput[1] = 5;
 typedInput[2] = 6;
 __assert_eq_long("typed_array_native_input", sum_u16_array(typedInput), 15);
+let changedTyped = replace_first_u16(typedInput);
+__assert_eq_long("typed_array_cow_result", sum_u16_array(changedTyped), 110);
+__assert_eq_long("typed_array_cow_input_unchanged", sum_u16_array(typedInput), 15);
+let clamped = make_clamped_array();
+__assert_eq_long("uint8_clamped_roundtrip", sum_clamped_array(clamped), 383);
+let view = make_data_view();
+__assert_eq_long("data_view_range", sum_data_view(view), 5);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

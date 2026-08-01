@@ -486,6 +486,12 @@ impl ClassMemberPlanKind {
             ClassMemberPlanKind::Op(
                 ClassOpKind::IteratorNext { .. } | ClassOpKind::AsyncIteratorNext { .. },
             ) => "__ani_native_next".to_string(),
+            ClassMemberPlanKind::Op(ClassOpKind::AsyncIteratorReturn { .. }) => {
+                "__ani_native_return".to_string()
+            }
+            ClassMemberPlanKind::Op(ClassOpKind::AsyncIteratorThrow { .. }) => {
+                "__ani_native_throw".to_string()
+            }
             ClassMemberPlanKind::Method { .. } | ClassMemberPlanKind::Op(..)
                 if requires_nullish_bridge =>
             {
@@ -572,6 +578,34 @@ fn qualify_class_target(owner: &str, target: &str) -> String {
         format!("{namespace}.{target}")
     } else {
         target.to_string()
+    }
+}
+
+fn async_iterator_item_type(sig: &Signature) -> syn::Result<String> {
+    let ReturnType::Type(_, ty) = &sig.output else {
+        return Err(syn::Error::new_spanned(
+            sig,
+            "async iterator protocol methods must return Promise<Option<T>>",
+        ));
+    };
+    let return_type = match AniType::from_syn_type(ty) {
+        AniType::Wrapper(WrapperType::Result(inner)) => *inner,
+        other => other,
+    };
+    match return_type {
+        AniType::Promise(promise) => match promise.inner.as_deref() {
+            Some(AniType::Wrapper(WrapperType::Option(inner))) => {
+                Ok(ets_public_type_for_ani_type(inner))
+            }
+            _ => Err(syn::Error::new_spanned(
+                ty,
+                "async iterator Promise must resolve to Option<T>",
+            )),
+        },
+        _ => Err(syn::Error::new_spanned(
+            ty,
+            "async iterator protocol methods must return Promise<Option<T>>",
+        )),
     }
 }
 
@@ -666,32 +700,30 @@ fn resolve_class_op_kind(
                     "async iterator next() cannot expose parameters",
                 ));
             }
-            let ReturnType::Type(_, ty) = &sig.output else {
+            ClassOpKind::AsyncIteratorNext {
+                item_type: async_iterator_item_type(sig)?,
+            }
+        }
+        "return" if owner_short_name(owner).ends_with("AsyncIterator") => {
+            if binding_input.exposed_arg_count(sig) != 0 {
                 return Err(syn::Error::new_spanned(
                     sig,
-                    "async iterator next() must return Promise<Option<T>> or AsyncTask<_, Option<T>>",
+                    "async iterator return() cannot expose parameters",
                 ));
-            };
-            match AniType::from_syn_type(ty) {
-                AniType::Promise(promise) => match promise.inner.as_deref() {
-                    Some(AniType::Wrapper(WrapperType::Option(inner))) => {
-                        ClassOpKind::AsyncIteratorNext {
-                            item_type: ets_public_type_for_ani_type(inner),
-                        }
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            ty,
-                            "async iterator next() Promise must resolve to Option<T>",
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(syn::Error::new_spanned(
-                        ty,
-                        "async iterator next() must return Promise<Option<T>> or AsyncTask<_, Option<T>>",
-                    ));
-                }
+            }
+            ClassOpKind::AsyncIteratorReturn {
+                item_type: async_iterator_item_type(sig)?,
+            }
+        }
+        "throw" if owner_short_name(owner).ends_with("AsyncIterator") => {
+            if binding_input.exposed_arg_count(sig) != 1 {
+                return Err(syn::Error::new_spanned(
+                    sig,
+                    "async iterator throw() requires exactly one rejection parameter",
+                ));
+            }
+            ClassOpKind::AsyncIteratorThrow {
+                item_type: async_iterator_item_type(sig)?,
             }
         }
         "next" if owner_short_name(owner).ends_with("Iterator") => {
@@ -1505,7 +1537,7 @@ mod tests {
                     kind: EtsDeclKind::Global,
                     target: String::new(),
                 },
-                rendered: "native function __ani_native_maybe_name(name: string | null): string | null;\nfunction maybe_name(name: string | null | undefined): string | null | undefined {\n  let __ani_result = __ani_native_maybe_name(name == undefined ? null : name);\n  return __ani_result == null ? undefined : __ani_result;\n}".to_string(),
+                rendered: "native function __ani_native_maybe_name(name: string | null): string | null;\nexport function maybe_name(name: string | null | undefined): string | null | undefined {\n  let __ani_result = __ani_native_maybe_name(name == undefined ? null : name);\n  return __ani_result == null ? undefined : __ani_result;\n}".to_string(),
             }
         );
     }

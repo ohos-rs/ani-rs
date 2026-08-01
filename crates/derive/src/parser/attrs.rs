@@ -65,6 +65,16 @@ pub struct AniAttrs {
     pub transparent: bool,
     /// Delegate a single-field collection newtype to its inner ANI array type.
     pub array: bool,
+    /// Structured-enum discriminator field.
+    pub discriminant: Option<String>,
+    /// Variant-name case transform.
+    pub case: Option<String>,
+    /// Accept/emit this item only on the ArkTS-to-Rust path.
+    pub input_only: bool,
+    /// Accept/emit this item only on the Rust-to-ArkTS path.
+    pub output_only: bool,
+    /// Explicit nullable surface marker.
+    pub nullable: bool,
 }
 
 impl Parse for AniAttrs {
@@ -113,7 +123,7 @@ impl Parse for AniAttrs {
                 "static" | "is_static" => {
                     attrs.is_static = true;
                 }
-                "name" => {
+                "name" | "rename" => {
                     if let Some(AttrValue::Str(s)) = item.value {
                         attrs.name = Some(s);
                     }
@@ -153,6 +163,19 @@ impl Parse for AniAttrs {
                 "array" => {
                     attrs.array = true;
                 }
+                "discriminant" | "discriminator" | "tag" => {
+                    if let Some(AttrValue::Str(s)) = item.value {
+                        attrs.discriminant = Some(s);
+                    }
+                }
+                "case" | "rename_all" => {
+                    if let Some(AttrValue::Str(s)) = item.value {
+                        attrs.case = Some(s);
+                    }
+                }
+                "input_only" => attrs.input_only = true,
+                "output_only" => attrs.output_only = true,
+                "nullable" => attrs.nullable = true,
                 other => {
                     return Err(syn::Error::new_spanned(
                         item.key,
@@ -187,6 +210,11 @@ pub struct BindgenAttrs {
     pub is_async: bool,
     pub transparent: bool,
     pub array: bool,
+    pub discriminant: Option<String>,
+    pub case: Option<String>,
+    pub input_only: bool,
+    pub output_only: bool,
+    pub nullable: bool,
 }
 
 impl From<AniAttrs> for BindgenAttrs {
@@ -205,6 +233,11 @@ impl From<AniAttrs> for BindgenAttrs {
             is_async: attrs.is_async,
             transparent: attrs.transparent,
             array: attrs.array,
+            discriminant: attrs.discriminant,
+            case: attrs.case,
+            input_only: attrs.input_only,
+            output_only: attrs.output_only,
+            nullable: attrs.nullable,
         }
     }
 }

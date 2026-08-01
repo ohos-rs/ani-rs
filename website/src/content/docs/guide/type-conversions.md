@@ -119,7 +119,7 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 
 ## TypedArray
 
-`Int8Array`、`Uint8Array`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。公开 ABI 使用对应的 ArkTS 原生 TypedArray class；返回值构造原生数组，输入读取它的 `buffer`、`byteOffset` 和 `byteLength`。内部复制使用 little-endian，`TypedArraySlice<'env, T>` 可提供当前调用作用域内的只读零拷贝视图：
+`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `TypedArray<T>` 的别名。`TypedArrayRef<T>` 是其 owned/global-reference/COW 语义名称。公开 ABI 使用对应的 ArkTS 原生 TypedArray class，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
 
 ```rust
 use ani::prelude::*;
@@ -136,11 +136,19 @@ pub fn sequence() -> Uint16Array {
 }
 ```
 
-class 不匹配、范围越界或字节数不能被元素宽度整除时会返回结构化错误。
+- ANI 输入由 global ref 保活；只读 `as_slice()` 不复制，第一次 `as_mut_slice()` 使用 COW 分离为 Rust owned 存储。
+- `TypedArraySlice<'env, T>` 提供仅限当前 ANI scope 的只读零拷贝视图。
+- `TypedArraySliceMut<'env, T>::from_ani_unchecked` 提供显式作用域的可变零拷贝视图，但调用者必须证明 ArkTS/Rust 均无别名，因此它不会作为安全的自动参数转换出现。
+- `Uint8ClampedArray` 的元素类型为 `ClampedU8`；`DataView` 保留 byte offset/length，并在可变访问时遵循同一 COW 规则。
+- class 不匹配、范围越界、未对齐或字节数不能被元素宽度整除时返回结构化错误。
+
+:::caution
+ANI 当前没有 external ArrayBuffer API。Rust 返回 TypedArray 或 DataView 时必须创建 VM-owned ArrayBuffer 并复制数据；ani-rs 不承诺 Rust→ArkTS 零拷贝。输入只读借用和返回值复制是两个不同方向的语义。
+:::
 
 ## 结构化 Object 与 Enum
 
-启用 `serde-json` feature 后，`Json<T>`、`serde_json::Value` 和带字段的 `AniEnum` 会递归映射为 ArkTS 原生 `Record`、`Array`、`String`、boxed number/boolean 与 `null`，不会在 ABI 边界传递 JSON 文本：
+启用 `serde-json` feature 后，`Json<T>`、`serde_json::Value` 和带字段的 `AniEnum` 会递归映射为 ArkTS 原生 `Record`、`Array`、`String`、boxed number/boolean 与 `null`，不会在 ABI 边界传递 JSON 文本。带数据 enum 会为每个 variant 生成精确 interface，以及独立的 `*Input`/`*Output` discriminated union；泛型参数会保留在声明中：
 
 ```rust
 use ani::prelude::Json;
@@ -160,6 +168,18 @@ pub fn normalize(config: Json<Config>) -> Json<Config> {
 ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["serde-json"] }
 serde = { version = "1", features = ["derive"] }
 ```
+
+```rust
+#[derive(Serialize, Deserialize, AniEnum)]
+#[ani(discriminator = "kind", case = "camelCase")]
+pub enum Message<T> {
+    Text { #[ani(rename = "payloadText")] value: String },
+    Data(T),
+    #[ani(output_only)] Closed,
+}
+```
+
+运行时会校验 discriminator、variant、字段方向和字段类型；未知 variant、向输入传 output-only variant、或传入被 skip 的字段都会失败。enum、variant 和字段支持 `rename`/`skip`/`input_only`/`output_only`，enum 还支持 `discriminator`、`case` 和 `nullable`。完整规则见 [宏属性参考](/reference/macros/)。
 
 ## Union
 

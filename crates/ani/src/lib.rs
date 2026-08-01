@@ -71,9 +71,11 @@ pub mod vm;
 pub mod prelude {
     pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{
-        AniErrorPayload, BusinessError, DynAniError, Error, Result, Status, check_status,
+        AniErrorPayload, AniErrorValue, BusinessError, DynAniError, Error, PreservedArktsError,
+        Result, Status, check_status,
     };
     pub use crate::runtime::{RuntimeMetrics, assert_no_runtime_leaks, runtime_metrics};
+    pub use crate::scheduler::{RuntimeKernel, SchedulerMetrics, runtime_kernel, shutdown_runtime};
     pub use crate::types::{
         AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
         AniEnum, AniEnumItem, AniError, AniField, AniFixedArray, AniFixedArrayBoolean,

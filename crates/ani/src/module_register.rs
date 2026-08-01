@@ -512,6 +512,11 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         }
     }
 
+    let bridge_status = crate::conversions::queue_registered_promise_bridges();
+    if bridge_status != sys::ani_status_ANI_OK {
+        return bridge_status;
+    }
+
     let pending = PENDING_BINDINGS
         .read()
         .expect("Failed to acquire read lock for PENDING_BINDINGS");

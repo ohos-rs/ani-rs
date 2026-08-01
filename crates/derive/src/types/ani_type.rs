@@ -237,6 +237,8 @@ pub enum AniType {
     TypeParam(String),
     /// Nominal custom object path that should not collapse into `Unknown`.
     CustomObject(Box<TypePath>),
+    /// Structural ArkTS type alias transported through the Object ABI.
+    StructuredObject(Box<TypePath>),
     /// Unknown/custom type - fallback to object
     Unknown(Box<Type>),
 }
@@ -258,6 +260,7 @@ static OBJECT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock
 static OBJECT_TYPE_MEMBERS: OnceLock<Mutex<BTreeMap<String, Vec<ObjectMemberDescriptor>>>> =
     OnceLock::new();
 static EXACT_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+static STRUCTURED_TYPE_ALIASES: OnceLock<Mutex<BTreeMap<String, ()>>> = OnceLock::new();
 
 fn object_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
     OBJECT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -269,6 +272,34 @@ fn object_type_members() -> &'static Mutex<BTreeMap<String, Vec<ObjectMemberDesc
 
 fn exact_type_aliases() -> &'static Mutex<BTreeMap<String, String>> {
     EXACT_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn structured_type_aliases() -> &'static Mutex<BTreeMap<String, ()>> {
+    STRUCTURED_TYPE_ALIASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+pub fn register_structured_type_alias(rust_name: &str) {
+    let rust_name = normalize_object_alias_key(rust_name);
+    if !rust_name.is_empty() {
+        structured_type_aliases()
+            .lock()
+            .expect("failed to lock structured type aliases")
+            .insert(rust_name, ());
+    }
+}
+
+fn is_structured_type_alias(type_path: &TypePath) -> bool {
+    let qualified = normalize_object_alias_key(&type_path_qualified_name(type_path));
+    let ident = type_path
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .unwrap_or_default();
+    let aliases = structured_type_aliases()
+        .lock()
+        .expect("failed to lock structured type aliases");
+    aliases.contains_key(&qualified) || aliases.contains_key(&ident)
 }
 
 pub fn register_exact_type_alias(rust_name: &str, inner_type: &Type) {
@@ -442,6 +473,10 @@ impl AniType {
             return AniType::TypeParam(ident);
         }
 
+        if is_structured_type_alias(type_path) {
+            return AniType::StructuredObject(Box::new(type_path.clone()));
+        }
+
         if let Some(alias) = resolve_exact_type_alias(type_path) {
             return alias;
         }
@@ -559,6 +594,9 @@ impl AniType {
         // Check for ArrayBuffer and native TypedArray types.
         if let Some(class_name) = parse_typed_array_class(&ident, &segment.arguments) {
             return AniType::TypedArray(class_name.to_string());
+        }
+        if ident == "DataView" {
+            return AniType::TypedArray("DataView".to_string());
         }
         if matches!(
             ident.as_str(),
@@ -837,6 +875,7 @@ impl AniType {
             AniType::FixedArray(p) => p.to_fixed_array_ani_c_type(),
             AniType::TypeParam(_) => quote! { ani::sys::ani_object },
             AniType::CustomObject(_) => quote! { ani::sys::ani_object },
+            AniType::StructuredObject(_) => quote! { ani::sys::ani_object },
             AniType::Unknown(_) => quote! { ani::sys::ani_object },
         }
     }
@@ -1043,6 +1082,7 @@ impl AniType {
             AniType::TypeParam(_) => "Lstd/core/Object;".to_string(),
             AniType::CustomObject(type_path) => custom_object_path_signature(type_path.as_ref())
                 .unwrap_or_else(|| "Lstd/core/Object;".to_string()),
+            AniType::StructuredObject(_) => "Lstd/core/Object;".to_string(),
             AniType::Tuple(elements) => {
                 // Tuple generates signature for each element
                 elements
@@ -1079,6 +1119,7 @@ impl AniType {
             AniType::CustomObject(type_path) => custom_object_path_signature(type_path.as_ref())
                 .map(|sig| to_new_style_ref_signature(&sig))
                 .unwrap_or_else(|| "C{std.core.Object}".to_string()),
+            AniType::StructuredObject(_) => "C{std.core.Object}".to_string(),
             AniType::Record(_) => "C{std.core.Record}".to_string(),
             AniType::Set(_) => to_new_style_ref_signature("Lstd/core/Set;"),
             AniType::Map(_) => to_new_style_ref_signature("Lstd/core/Map;"),
@@ -1347,6 +1388,7 @@ fn parse_typed_array_class<'a>(ident: &str, args: &'a PathArguments) -> Option<&
     match ident {
         "Int8Array" => Some("Int8Array"),
         "Uint8Array" => Some("Uint8Array"),
+        "Uint8ClampedArray" => Some("Uint8ClampedArray"),
         "Int16Array" => Some("Int16Array"),
         "Uint16Array" => Some("Uint16Array"),
         "Int32Array" => Some("Int32Array"),
@@ -1355,12 +1397,13 @@ fn parse_typed_array_class<'a>(ident: &str, args: &'a PathArguments) -> Option<&
         "BigUint64Array" => Some("BigUint64Array"),
         "Float32Array" => Some("Float32Array"),
         "Float64Array" => Some("Float64Array"),
-        "TypedArray" | "TypedArraySlice" => {
+        "TypedArray" | "TypedArrayRef" | "TypedArraySlice" | "TypedArraySliceMut" => {
             let inner = extract_first_generic_type(args)?;
             let Type::Path(path) = inner else { return None };
             match path.path.segments.last()?.ident.to_string().as_str() {
                 "i8" => Some("Int8Array"),
                 "u8" => Some("Uint8Array"),
+                "ClampedU8" => Some("Uint8ClampedArray"),
                 "i16" => Some("Int16Array"),
                 "u16" => Some("Uint16Array"),
                 "i32" => Some("Int32Array"),

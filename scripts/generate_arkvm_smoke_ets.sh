@@ -142,6 +142,13 @@ typedInput[0] = 4;
 typedInput[1] = 5;
 typedInput[2] = 6;
 __assert_eq_long("typed_array_native_input", __ANI_GENERATED__.sum_u16_array(typedInput), 15);
+let changedTyped = __ANI_GENERATED__.replace_first_u16(typedInput);
+__assert_eq_long("typed_array_cow_result", __ANI_GENERATED__.sum_u16_array(changedTyped), 110);
+__assert_eq_long("typed_array_cow_input_unchanged", __ANI_GENERATED__.sum_u16_array(typedInput), 15);
+let clamped = __ANI_GENERATED__.make_clamped_array();
+__assert_eq_long("uint8_clamped_roundtrip", __ANI_GENERATED__.sum_clamped_array(clamped), 383);
+let view = __ANI_GENERATED__.make_data_view();
+__assert_eq_long("data_view_range", __ANI_GENERATED__.sum_data_view(view), 5);
 ETS
       ;;
     ani-example-async-wrapper)
@@ -212,6 +219,29 @@ function main(): void {
     }
   });
   __assert_true("promise_resolver_reject_message", resolverRejected);
+  let incomingResolvedPromise = async (): Promise<string> => "continuation:resolved";
+  let continuationText: string = waitForCompletion(() =>
+    __ANI_GENERATED__.tokio_await_arkts_promise(incomingResolvedPromise()),
+  );
+  __assert_eq_string("promise_continuation_resolve", continuationText, "continuation:resolved");
+  let originalRejection = new Error("continuation:rejected");
+  originalRejection.name = "ApplicationPromiseError";
+  originalRejection.code = 73123;
+  let incomingRejectedPromise = async (): Promise<string> => {
+    throw originalRejection;
+  };
+  let continuationRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await __ANI_GENERATED__.tokio_await_arkts_promise(incomingRejectedPromise());
+      return false;
+    } catch (value) {
+      __assert_true("promise_raw_rejection_identity", value == originalRejection);
+      __assert_eq_string("promise_raw_rejection_name", (value as Error).name, "ApplicationPromiseError");
+      __assert_eq_int("promise_raw_rejection_code", (value as Error).code, 73123);
+      return true;
+    }
+  });
+  __assert_true("promise_continuation_reject", continuationRejected);
   let refPayload: Object = new Object();
   let sameObject: boolean = waitForCompletion(() => __ANI_GENERATED__.async_object_strict_equals(refPayload, refPayload));
   __assert_true("async_object_strict_equals_same", sameObject);
@@ -271,9 +301,15 @@ function main(): void {
       __assert_eq_string("custom_async_error_status", error.name, "AsyncDomainFailure");
       __assert_eq_string("custom_async_error_message", error.message, "domain-specific asynchronous failure");
       let context = error.cause as Record<string, Object>;
-      let metadata = context["metadata"] as Record<string, string>;
-      let operation = metadata["operation"];
+      let metadata = context["metadata"] as Record<string, Object>;
+      let operation = metadata["operation"] as string;
       __assert_true("custom_async_error_metadata", operation != undefined && operation == "qemu-custom-error");
+      __assert_true("custom_async_error_bool", !(metadata["retryable"] as Boolean).valueOf());
+      __assert_eq_string("custom_async_error_number", (metadata["attempt"] as Long).toString(), "2");
+      let details = metadata["details"] as Record<string, Object>;
+      __assert_true("custom_async_error_nested", (details["active"] as Boolean).valueOf());
+      __assert_eq_int("custom_async_error_array", (details["labels"] as Object[]).length, 2);
+      __assert_eq_int("custom_async_error_binary", (metadata["binary"] as ArrayBuffer).byteLength, 3);
       __assert_eq_int("custom_async_error_code", error.code, 71001);
       return true;
     }
@@ -292,6 +328,48 @@ function main(): void {
   __assert_eq_int("async_iterator_second", iteratorSecond.value as int, 20);
   __assert_true("async_iterator_done", iteratorEnd.done);
 
+  let concurrentIterator = new CounterAsyncIterator();
+  __assert_true(
+    "async_iterator_protocol_identity",
+    concurrentIterator.asyncIterator() == concurrentIterator,
+  );
+  let firstPending = concurrentIterator.next();
+  let secondPending = concurrentIterator.next();
+  __ANI_GENERATED__.push_async_iterator_value(31);
+  __ANI_GENERATED__.push_async_iterator_value(32);
+  __ANI_GENERATED__.finish_async_iterator();
+  let firstConcurrent: IteratorResult<int> = waitForCompletion(() => firstPending);
+  let secondConcurrent: IteratorResult<int> = waitForCompletion(() => secondPending);
+  __assert_eq_int("async_iterator_concurrent_first", firstConcurrent.value as int, 31);
+  __assert_eq_int("async_iterator_concurrent_second", secondConcurrent.value as int, 32);
+  let concurrentEnd: IteratorResult<int> = waitForCompletion(() => concurrentIterator.next());
+  __assert_true("async_iterator_concurrent_done", concurrentEnd.done);
+
+  let returnedIterator = new CounterAsyncIterator();
+  let returnPending = returnedIterator.next();
+  let returnedPromise = returnedIterator.returnIterator();
+  let returnedResult: IteratorResult<int> = waitForCompletion(() => returnedPromise);
+  let returnedPendingResult: IteratorResult<int> = waitForCompletion(() => returnPending);
+  let returnedNext: IteratorResult<int> = waitForCompletion(() => returnedIterator.next());
+  __assert_true("async_iterator_return_done", returnedResult.done);
+  __assert_true("async_iterator_return_settles_pending", returnedPendingResult.done);
+  __assert_true("async_iterator_return_closes_next", returnedNext.done);
+
+  let thrownIterator = new CounterAsyncIterator();
+  let consumerError = new Error("consumer-stop");
+  let consumerThrowRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await thrownIterator.throwIterator(consumerError);
+      return false;
+    } catch (value) {
+      __assert_true("async_iterator_throw_identity", value == consumerError);
+      return true;
+    }
+  });
+  __assert_true("async_iterator_throw_rejected", consumerThrowRejected);
+  let thrownNext: IteratorResult<int> = waitForCompletion(() => thrownIterator.next());
+  __assert_true("async_iterator_throw_closes_next", thrownNext.done);
+
   let failingIterator = new CounterAsyncIterator();
   __ANI_GENERATED__.fail_async_iterator("stream-next");
   let streamErrorOk: boolean = waitForCompletion(async (): Promise<boolean> => {
@@ -304,6 +382,56 @@ function main(): void {
     }
   });
   __assert_true("async_iterator_custom_error_rejected", streamErrorOk);
+  let failingReturned: IteratorResult<int> = waitForCompletion(() => failingIterator.returnIterator());
+  __assert_true("async_iterator_error_return_done", failingReturned.done);
+
+  let shutdownIterator = new CounterAsyncIterator();
+  let shutdownStreamPending = shutdownIterator.next();
+  let shutdownPromisePending = tokio_await_arkts_promise(pending_string_promise());
+  let shutdownTaskPending = background_cancellable(200);
+  let shutdownCallback = (input: string): string => "shutdown:" + input;
+  let shutdownTsfnPending = tokio_manual_function_ref_container_call(shutdownCallback, "tsfn");
+  __assert_true("runtime_kernel_restart", runtime_kernel_shutdown_and_restart());
+  let shutdownStreamRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownStreamPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_stream", shutdownStreamRejected);
+  let shutdownPromiseRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownPromisePending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_promise", shutdownPromiseRejected);
+  let shutdownTaskRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownTaskPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_task", shutdownTaskRejected);
+  let shutdownTsfnRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
+    try {
+      await shutdownTsfnPending;
+      return false;
+    } catch (_e) {
+      return true;
+    }
+  });
+  __assert_true("runtime_shutdown_cancels_tsfn", shutdownTsfnRejected);
+  let shutdownIteratorReturn: IteratorResult<int> = waitForCompletion(() => shutdownIterator.returnIterator());
+  __assert_true("runtime_shutdown_iterator_cleanup", shutdownIteratorReturn.done);
+  let restartedSquare: int = waitForCompletion(() => background_square(12));
+  __assert_eq_int("runtime_kernel_restarted_task", restartedSquare, 144);
 
   if (__ani_fail_count > 0) {
     throw new Error("arkvm assertions failed: " + __ani_fail_count);
@@ -376,12 +504,34 @@ ETS
       cat <<'ETS'
 __assert_true("enum_status_terminal", __ANI_GENERATED__.is_terminal(Status.Stopped));
 __assert_eq_string("enum_status_name", __ANI_GENERATED__.status_name(Status.Running), "running");
-let pointData = new Record<string, Object>();
-pointData["x"] = new Int(3);
-pointData["y"] = new Int(4);
-let point = new Record<string, Object>();
-point["Point"] = pointData;
-__assert_eq_int("structured_enum_native_record", __ANI_GENERATED__.message_point_sum(point), 7);
+let point: MessageInputPoint = { type: "Point", x: 3, y: 4 };
+__assert_eq_int("structured_enum_discriminated_union", __ANI_GENERATED__.message_point_sum(point), 7);
+let textMessage: MessageInputText = { type: "Text", value: "ani" };
+let textRoundtrip = __ANI_GENERATED__.message_identity(textMessage) as MessageOutputText;
+__assert_true("structured_enum_exact_variant", textRoundtrip.type == "Text");
+__assert_throws("structured_enum_runtime_schema", (): void => {
+  let invalid = new Record<string, Object>();
+  invalid["type"] = "Point";
+  invalid["x"] = new Int(3);
+  __ANI_GENERATED__.message_point_sum(invalid as MessageInput);
+});
+let renamedInput: DirectionalMessageInputRenamedField = {
+  kind: "renamedField",
+  payloadText: "renamed",
+};
+__assert_eq_string(
+  "structured_enum_rename_and_case",
+  __ANI_GENERATED__.directional_input(renamedInput),
+  "renamed",
+);
+let generatedOutput = __ANI_GENERATED__.directional_output(9) as DirectionalMessageOutputGenerated;
+__assert_true(
+  "structured_enum_directional_output",
+  generatedOutput.kind == "generated" && generatedOutput.value == 9,
+);
+let genericInput: EnvelopeInputValue<int> = { type: "Value", value: 17 };
+let genericOutput = __ANI_GENERATED__.generic_envelope_identity(genericInput) as EnvelopeOutputValue<int>;
+__assert_true("structured_enum_generic", genericOutput.type == "Value" && genericOutput.value == 17);
 ETS
       ;;
     ani-example-call-method)

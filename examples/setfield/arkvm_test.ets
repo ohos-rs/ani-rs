@@ -20,6 +20,16 @@ export native function set_age(person: Object, age: int): void;
 export native function set_field_by_handle(target: Object, field: AniField, value: int): void;
 export native function set_price(product: Object, price: double): void;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_setfield");

@@ -7,6 +7,16 @@ export native function resolve_getter_and_setter(cls: Class, name: string): bool
 export native function resolve_getter_and_setter_by_name(class_name: string, name: string): boolean;
 export native function resolve_indexable_and_iterator(cls: Class, getter_signature: string, setter_signature: string): boolean;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_class_reflect");

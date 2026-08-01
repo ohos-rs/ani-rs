@@ -58,4 +58,6 @@ scripts/run_arkvm_examples_ohos_qemu.sh
 | 公共 API semver | `scripts/check_semver.sh` |
 | 发布前完整检查 | `scripts/check_release.sh` |
 
+异步运行时门禁还覆盖 RuntimeKernel shutdown/drain/join/restart、closing 拒绝、Promise continuation、并发 stream waiter、return/throw/cancel 竞态，以及 Promise/Task/TSFN/Stream 的统一析构取消。TypedArray 门禁区分 ANI→Rust 借用/COW 与 Rust→ANI 必须复制的能力边界。
+
 HAP 验证要求存在 `resources/rawfile/ani_rs_smoke.abc`，并检查 `libs/<abi>/` 下每个 ANI 动态库的架构以及 `ANI_Constructor`、`ANI_Destructor` 导出。当前 arm64 基准为指定的 20260728 QEMU 包、OpenHarmony 7.0.0.32 / API 26；其他架构由同一 workflow 与 manifest/ELF 门禁覆盖，但发布结论应以对应 guest 的实际运行报告为准。

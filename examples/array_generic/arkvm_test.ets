@@ -21,6 +21,16 @@ export native function make_user_array(): Array<ArrayUser>;
 export native function sum_i32_linked_list(values: ValueArray<int>): int;
 export native function summarize_user_array(values: Array<ArrayUser>): string;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_array_generic");

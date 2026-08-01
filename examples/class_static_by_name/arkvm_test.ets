@@ -16,6 +16,16 @@ export native function static_method_tag_by_name_named(class_name: string): stri
 export native function static_ref_by_name_roundtrip(cls: Class, value: AniRef): boolean;
 export native function static_ref_by_name_roundtrip_named(class_name: string, value: AniRef): boolean;
 
+// Public Promise continuation bridge used by PromiseFuture.
+export native function __ani_rs_promise_resolve(token: long, value: Object): void;
+export native function __ani_rs_promise_reject(token: long, reason: Object): void;
+export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
+promise.then(
+(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
+(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
+);
+}
+
 
 
 loadLibrary("ani_example_class_static_by_name");

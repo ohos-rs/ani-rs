@@ -1,13 +1,14 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
 use ani::conversions::{
-    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, PromiseRaw, RefContainer, StreamNextTask,
-    StreamSender, ThreadsafeFunction,
+    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, ManagedResource, PromiseRaw,
+    RefContainer, StreamSender, ThreadsafeFunction,
 };
 use ani::prelude::*;
 use ani_derive::{ani, AniClass};
+use std::collections::BTreeMap;
 use std::sync::{
-    atomic::{AtomicI32, Ordering},
+    atomic::{AtomicI32, AtomicI64, Ordering},
     Mutex, OnceLock,
 };
 use std::thread;
@@ -38,7 +39,22 @@ impl AniErrorPayload for AsyncDomainError {
     }
     fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
         visitor("operation", &self.operation);
-        visitor("retryable", "false");
+    }
+    fn visit_ani_properties(&self, visitor: &mut dyn FnMut(&str, &AniErrorValue)) {
+        let retryable = AniErrorValue::Bool(false);
+        let attempt = AniErrorValue::Integer(2);
+        let binary = AniErrorValue::Binary(vec![0x41, 0x4e, 0x49]);
+        let mut details = BTreeMap::new();
+        details.insert(
+            "labels".to_string(),
+            AniErrorValue::Array(vec!["async".into(), "qemu".into()]),
+        );
+        details.insert("active".to_string(), AniErrorValue::Bool(true));
+        let details = AniErrorValue::Object(details);
+        visitor("retryable", &retryable);
+        visitor("attempt", &attempt);
+        visitor("binary", &binary);
+        visitor("details", &details);
     }
 }
 
@@ -60,7 +76,7 @@ struct CounterAsyncIteratorState {
     stream: AsyncStream<i32, AsyncDomainError>,
 }
 
-static ASYNC_ITERATOR_STATE: OnceLock<Mutex<Option<CounterAsyncIteratorState>>> = OnceLock::new();
+static LATEST_ASYNC_ITERATOR: AtomicI64 = AtomicI64::new(0);
 
 fn async_ctor_note_store() -> &'static Mutex<String> {
     ASYNC_CTOR_NOTE.get_or_init(|| Mutex::new(String::new()))
@@ -70,74 +86,114 @@ fn async_accessor_note_store() -> &'static Mutex<String> {
     ASYNC_ACCESSOR_NOTE.get_or_init(|| Mutex::new(String::new()))
 }
 
-fn async_iterator_store() -> &'static Mutex<Option<CounterAsyncIteratorState>> {
-    ASYNC_ITERATOR_STATE.get_or_init(|| Mutex::new(None))
+fn iterator_resource(
+    env: &Env<'_>,
+    this: &AniObject<'_>,
+) -> Result<ManagedResource<CounterAsyncIteratorState>> {
+    ManagedResource::from_raw(env.get_field_by_name_long(this, "__ani_resource")?)
 }
 
-#[ani(class = "CounterAsyncIterator", constructor)]
-pub fn counter_async_iterator_new() -> Result<()> {
-    let (sender, stream) = ani::conversions::stream_channel_with_error(16)?;
-    *async_iterator_store()
-        .lock()
-        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))? =
-        Some(CounterAsyncIteratorState {
-            sender: Some(sender),
-            stream,
-        });
-    Ok(())
-}
-
-#[ani(class = "CounterAsyncIterator", name = "next")]
-pub fn counter_async_iterator_next(
-) -> AsyncTask<StreamNextTask<i32, AsyncDomainError>, AsyncIteratorValue<i32>> {
-    async_iterator_store()
-        .lock()
-        .expect("async iterator lock poisoned")
-        .as_ref()
-        .expect("CounterAsyncIterator constructor must run first")
-        .stream
-        .next_task()
-}
-
-#[ani]
-pub fn push_async_iterator_value(value: i32) -> Result<()> {
-    async_iterator_store()
-        .lock()
-        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?
-        .as_ref()
-        .ok_or_else(|| Error::new(Status::NotFound, "CounterAsyncIterator is not initialized"))?
-        .sender
-        .as_ref()
-        .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
-        .send(value)
-}
-
-#[ani]
-pub fn finish_async_iterator() -> Result<()> {
-    let mut state = async_iterator_store()
-        .lock()
-        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?;
-    let Some(state) = state.as_mut() else {
+fn latest_iterator_resource() -> Result<ManagedResource<CounterAsyncIteratorState>> {
+    let handle = LATEST_ASYNC_ITERATOR.load(Ordering::Acquire);
+    if handle <= 0 {
         return Err(Error::new(
             Status::NotFound,
             "CounterAsyncIterator is not initialized",
         ));
-    };
-    state.sender.take();
+    }
+    ManagedResource::from_raw(handle)
+}
+
+#[ani(class = "CounterAsyncIterator", constructor)]
+pub fn counter_async_iterator_new(env: &Env<'_>, this: &AniObject<'_>) -> Result<()> {
+    let (sender, stream) = ani::conversions::stream_channel_with_error(16)?;
+    let resource = ManagedResource::new(CounterAsyncIteratorState {
+        sender: Some(sender),
+        stream,
+    })?;
+    env.set_field_by_name_long(this, "__ani_resource", resource.as_raw())?;
+    env.set_field_by_name_boolean(this, "__ani_closed", false)?;
+    LATEST_ASYNC_ITERATOR.store(resource.as_raw(), Ordering::Release);
     Ok(())
+}
+
+#[ani(class = "CounterAsyncIterator", name = "next")]
+pub fn counter_async_iterator_next<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.next_promise(env))??;
+    let exhausted = resource.with(|state| state.stream.is_exhausted())?;
+    if exhausted {
+        let _ = resource.close()?;
+        env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    }
+    Ok(promise)
+}
+
+#[ani(class = "CounterAsyncIterator", name = "return")]
+pub fn counter_async_iterator_return<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.return_promise(env))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+#[ani(class = "CounterAsyncIterator", name = "throw")]
+pub fn counter_async_iterator_throw<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+    reason: AniRef<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    let error = PreservedArktsError::new(env, &reason)?;
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::reject_with_payload(env, error);
+    }
+    let resource = iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.throw_promise(env, error))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+#[ani]
+pub fn push_async_iterator_value(value: i32) -> Result<()> {
+    latest_iterator_resource()?.with(|state| {
+        state
+            .sender
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
+            .send(value)
+    })?
+}
+
+#[ani]
+pub fn finish_async_iterator() -> Result<()> {
+    latest_iterator_resource()?.with_mut(|state| {
+        state.sender.take();
+    })
 }
 
 #[ani]
 pub fn fail_async_iterator(operation: String) -> Result<()> {
-    async_iterator_store()
-        .lock()
-        .map_err(|_| Error::new(Status::GenericFailure, "async iterator lock poisoned"))?
-        .as_ref()
-        .ok_or_else(|| Error::new(Status::NotFound, "CounterAsyncIterator is not initialized"))?
-        .sender
-        .as_ref()
-        .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
-        .send_error(AsyncDomainError { operation })
+    latest_iterator_resource()?.with(|state| {
+        state
+            .sender
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
+            .send_error(AsyncDomainError { operation })
+    })?
 }
 
 #[derive(Debug, Default, PartialEq, Eq, AniClass)]
@@ -459,6 +515,12 @@ pub fn tokio_await_arkts_promise(
 }
 
 #[ani]
+pub fn pending_string_promise<'env>(env: &Env<'env>) -> Result<PromiseRaw<'env, String>> {
+    let (_resolver, promise) = PromiseRaw::deferred(env)?;
+    Ok(promise)
+}
+
+#[ani]
 pub fn cancel_arkts_promise_wait(env: &Env<'_>, promise: PromiseRaw<'_, String>) -> Result<bool> {
     let mut future = promise.into_future(env)?;
     let first = future.cancel()?;
@@ -552,6 +614,32 @@ pub struct SquareTask {
     input: i32,
 }
 
+pub struct SlowCancellableTask {
+    delay_ms: i32,
+}
+
+impl Task for SlowCancellableTask {
+    type Output = i32;
+    type JsValue = i32;
+    type Error = Error;
+
+    fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output> {
+        let mut remaining = self.delay_ms.max(0) as u64;
+        while remaining > 0 {
+            cancellation.check()?;
+            let slice = remaining.min(5);
+            thread::sleep(Duration::from_millis(slice));
+            remaining -= slice;
+        }
+        cancellation.check()?;
+        Ok(self.delay_ms)
+    }
+
+    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
 impl Task for SquareTask {
     type Output = i32;
     type JsValue = i32;
@@ -570,6 +658,32 @@ impl Task for SquareTask {
 #[ani]
 pub fn background_square(input: i32) -> AsyncTask<SquareTask, i32> {
     AsyncTask::new(SquareTask { input })
+}
+
+#[ani]
+pub fn background_cancellable(delay_ms: i32) -> AsyncTask<SlowCancellableTask, i32> {
+    AsyncTask::new(SlowCancellableTask { delay_ms })
+}
+
+/// Cancel the current shared generation, join every worker/timer, then prove
+/// that a new submission lazily starts a clean generation.
+#[ani]
+pub fn runtime_kernel_shutdown_and_restart() -> Result<bool> {
+    let kernel = runtime_kernel();
+    let before = kernel.metrics().generation;
+    shutdown_runtime()?;
+    let drained = kernel.metrics().workers == 0;
+    let marker = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let scheduled_marker = std::sync::Arc::clone(&marker);
+    kernel.schedule(move || scheduled_marker.store(true, Ordering::Release))?;
+    if !kernel.wait_idle(Duration::from_secs(2)) {
+        return Err(Error::new(
+            Status::GenericFailure,
+            "restarted RuntimeKernel did not drain",
+        ));
+    }
+    let after = kernel.metrics().generation;
+    Ok(drained && after > before && marker.load(Ordering::Acquire))
 }
 
 // ============================================================================

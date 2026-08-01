@@ -49,7 +49,7 @@ try {
 
 ## 可扩展业务错误
 
-`Error<S>` 可通过 `with_code`、`with_metadata` 和 `with_cause` 扩展。业务错误也可以直接实现 `AniErrorPayload`，无需先映射到框架 `Status` 或字符串：
+`Error<S>` 可通过 `with_code`、`with_metadata`、`with_property`、`with_stack` 和 `with_cause` 扩展。`AniErrorValue` 支持 `null`、bool、integer、number、string、object、array 和 binary。业务错误也可以直接实现 `AniErrorPayload`，无需先映射到框架 `Status` 或字符串：
 
 ```rust
 #[derive(Debug)]
@@ -70,6 +70,13 @@ impl AniErrorPayload for AuthError {
     fn visit_ani_metadata(&self, visit: &mut dyn FnMut(&str, &str)) {
         visit("operation", &self.operation);
     }
+    fn visit_ani_properties(
+        &self,
+        visit: &mut dyn FnMut(&str, &AniErrorValue),
+    ) {
+        let retryable = AniErrorValue::Bool(false);
+        visit("retryable", &retryable);
+    }
 }
 
 #[ani(async)]
@@ -80,7 +87,9 @@ async fn authenticate(token: String)
 }
 ```
 
-同步 `Result`、`#[ani(async)]`、`AsyncTask`、`Deferred` 和 async stream 共用这一协议。Promise rejection 使用标准 ArkTS `Error`：`name` 保存 status，`code` 和 `message` 保持业务值，`cause` 保存可扩展的 `Record` 上下文（`status`、`metadata` 和可选嵌套 `cause`）。因此新增业务字段不需要修改调度器或宏生成代码。
+同步 `Result`、`#[ani(async)]`、`AsyncTask`、`Deferred`、`ThreadsafeFunction` 和 async stream 共用这一协议。默认 materializer 创建 ArkTS `Error`：`name` 保存 status，`code` 和 `message` 保持业务值，`stack`、嵌套 `cause` 与 typed metadata 不被字符串化。自定义错误还可以覆盖对象安全的 `materialize_ani_error`，直接构造应用自己的 Error subclass。
+
+ArkTS Promise rejection 进入 Rust 时，生成的 ETS continuation bridge 会把原始 rejection 提升为 global ref，同时读取 name/message/code/stack/cause/metadata。若它再次跨回同一 VM，会优先返回完全相同的 rejection 对象，因此自定义 Error 类型和未知业务字段不会被固定框架结构抹掉。
 
 ```ts
 try {
@@ -89,10 +98,12 @@ try {
   const error = value as Error
   console.log(error.name, error.code, error.message)
   const context = error.cause as Record<string, Object>
-  const metadata = context['metadata'] as Record<string, string>
-  console.log(metadata['operation'])
+  const metadata = context['metadata'] as Record<string, Object>
+  console.log(metadata['operation'], metadata['retryable'])
 }
 ```
+
+这套设计不是一个封闭的固定 Error DTO：新增业务属性通过 visitor 或 materializer 扩展，调度器只传递 `AniErrorPayload`，不会假设具体错误类型。
 
 ## anyhow 集成
 

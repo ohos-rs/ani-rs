@@ -18,9 +18,7 @@ pub fn await_arkts(
 }
 ```
 
-Future 持有全局 ANI 引用，并在实际轮询线程自动 attach。`cancel()` 和 Drop 都会释放该引用；ANI 没有 Promise 取消原语，因此取消停止的是 Rust 侧等待，不会强制终止 ArkTS 操作。
-
-每个入站 Promise 只启动一个后台状态观察器。Rust executor 在 Promise settle 或取消前保持休眠，不会因每次 `poll` 新建线程；完成、取消和 Drop 都只释放一次 global ref。
+Future 持有全局 ANI 引用。生成的 ETS continuation bridge 在原 Promise 上注册 `then`/reject 回调，settle 时直接唤醒 Rust waiter；等待过程不读取 Promise 的私有字段，也不占用 worker 或 timer。`cancel()` 和 Drop 都会注销等待并释放引用；ANI 没有 Promise 取消原语，因此取消不会强制终止 ArkTS 自身的操作。
 
 异步 I/O 或需要等待的 Rust API，优先写成 `#[ani(async)] async fn`。生成的 ArkTS 返回类型是 `Promise<T>`。
 
@@ -183,6 +181,24 @@ pub fn square_in_background(input: i32) -> AsyncTask<Square> {
 
 `Task::Error` 不固定为 ani-rs 的 `Error`；任何实现 `AniErrorPayload` 的业务错误都可以直接使用，调度边界不会先转换为字符串。
 
+## RuntimeKernel 生命周期
+
+Promise、`AsyncTask`、`ThreadsafeFunction` 和 async stream 共用一个惰性初始化的 `RuntimeKernel`。模块析构会先进入 closing 状态，拒绝新任务，统一取消仍在等待的操作，drain 已接收的工作并 join worker/timer；完成后内核回到 dormant，后续调用会建立新的 generation。
+
+应用通常不需要手动管理它。测试或需要显式停机的宿主可以使用：
+
+```rust
+use ani::prelude::{runtime_kernel, shutdown_runtime};
+
+let before = runtime_kernel().metrics();
+shutdown_runtime()?;
+
+// 下一次提交会自动初始化新的 generation。
+let after = runtime_kernel().metrics();
+```
+
+不要从 RuntimeKernel 自己的 worker 内调用同步 shutdown；该路径会返回错误，以免等待当前线程造成死锁。
+
 ## 跨线程回调
 
 `ThreadsafeFunction<Args, Return>` 是带容量的可克隆队列。dispatcher 在调用 ArkTS 前 attach 到所属 VM；`Blocking` 提供背压，`NonBlocking` 在队列满时返回 `Status::QueueFull`。`call` 返回的 `ThreadsafeFunctionCall` 既可以 `.wait()`，也可以作为 Future `await`；`close()` 后拒绝新任务并排空已入队任务。
@@ -199,7 +215,7 @@ let result = pending.wait()?;
 
 ## Async Iterator 与 Stream
 
-`stream_channel(capacity)` 创建默认错误类型的有界 pull stream；需要自定义业务错误时使用 `stream_channel_with_error::<T, E>(capacity)`。每次 `next_task()` 返回一个共享调度器驱动的 Promise，channel 断开时解析为 `null`，生成的 `*AsyncIterator.next()` 包装为 `IteratorResult<T>`：
+`stream_channel(capacity)` 创建默认错误类型的有界 pull stream；需要自定义业务错误时使用 `stream_channel_with_error::<T, E>(capacity)`。每次 `next_promise()` 注册一个 FIFO waiter；没有数据时 waiter 保持休眠，数据、关闭、错误或取消发生时才被唤醒，不占用共享 worker。channel 自然断开时会先交付已经接收的队列项，再解析为 done：
 
 ```rust
 #[derive(Debug)]
@@ -221,7 +237,11 @@ let (sender, stream) =
     stream_channel_with_error::<i32, FeedError>(32)?;
 sender.send(1)?;
 sender.send_error(FeedError { message: "closed".into() })?;
-let task = stream.next_task();
+let promise = stream.next_promise(env)?;
 ```
 
-队列有界并提供背压；取消、队列关闭和业务错误最终都进入同一结构化 Promise rejection 通道。
+队列有界并提供背压；多个并发 `next()` 按注册顺序完成。生成的 iterator 还提供 `returnIterator()` 和 `throwIterator(reason)`：前者取消生产者并完成所有 waiter，后者保留原始 ArkTS rejection 对象并拒绝 waiter。RuntimeKernel shutdown 会走同一取消路径。
+
+:::note
+20260728 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。
+:::

@@ -18,6 +18,28 @@ pub enum Message {
     Empty,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AniEnum)]
+#[ani(discriminator = "kind", case = "camelCase")]
+pub enum DirectionalMessage {
+    #[ani(rename = "legacyText", input_only)]
+    Legacy(String),
+    RenamedField {
+        #[ani(rename = "payloadText")]
+        payload: String,
+        #[ani(skip)]
+        #[serde(default)]
+        local_only: bool,
+    },
+    #[ani(output_only)]
+    Generated(i32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AniEnum)]
+pub enum Envelope<T> {
+    Value(T),
+    Empty,
+}
+
 #[ani]
 pub fn message_identity(message: Message) -> Message {
     message
@@ -30,6 +52,25 @@ pub fn message_point_sum(message: Message) -> i32 {
         Message::Text(text) => text.len() as i32,
         Message::Empty => 0,
     }
+}
+
+#[ani]
+pub fn directional_input(message: DirectionalMessage) -> String {
+    match message {
+        DirectionalMessage::Legacy(value) => value,
+        DirectionalMessage::RenamedField { payload, .. } => payload,
+        DirectionalMessage::Generated(value) => value.to_string(),
+    }
+}
+
+#[ani]
+pub fn directional_output(value: i32) -> DirectionalMessage {
+    DirectionalMessage::Generated(value)
+}
+
+#[ani]
+pub fn generic_envelope_identity(value: Envelope<i32>) -> Envelope<i32> {
+    value
 }
 
 #[ani]

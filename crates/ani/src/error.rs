@@ -60,9 +60,164 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use crate::conversions::{ArrayBuffer, Boxable, FromAni, RefContainer, ToAni, Unboxable};
 use crate::env::Env;
 use crate::sys;
-use crate::types::{AniError, AniRef};
+use crate::types::{AniError, AniObject, AniRef, AniString};
+
+/// Recursive, runtime-independent value used for custom error metadata.
+///
+/// Unlike a string-only error map this preserves the application schema across
+/// Promise, task, threadsafe-function, and stream boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AniErrorValue {
+    /// ArkTS `null`.
+    Null,
+    /// Boolean property.
+    Bool(bool),
+    /// Signed integral property.
+    Integer(i64),
+    /// Floating-point property.
+    Number(f64),
+    /// UTF-8 string property.
+    String(String),
+    /// Ordered structured object/Record.
+    Object(BTreeMap<String, AniErrorValue>),
+    /// Structured array.
+    Array(Vec<AniErrorValue>),
+    /// Binary ArrayBuffer payload.
+    Binary(Vec<u8>),
+}
+
+impl From<bool> for AniErrorValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<i32> for AniErrorValue {
+    fn from(value: i32) -> Self {
+        Self::Integer(value as i64)
+    }
+}
+
+impl From<i64> for AniErrorValue {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<f64> for AniErrorValue {
+    fn from(value: f64) -> Self {
+        Self::Number(value)
+    }
+}
+
+impl From<String> for AniErrorValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for AniErrorValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl AniErrorValue {
+    /// Materialize this owned value in the current ANI scope.
+    pub fn to_ani_ref<'env>(&self, env: &Env<'env>) -> Result<AniRef<'env>> {
+        fn object_ref(object: AniObject<'_>) -> AniRef<'_> {
+            unsafe { AniRef::from_raw(object.into_raw() as sys::ani_ref) }
+        }
+
+        match self {
+            Self::Null => Ok(unsafe { AniRef::from_raw(env.get_null_object()? as sys::ani_ref) }),
+            Self::Bool(value) => (*value).box_value(env).map(object_ref),
+            Self::Integer(value) => (*value).box_value(env).map(object_ref),
+            Self::Number(value) => (*value).box_value(env).map(object_ref),
+            Self::String(value) => env
+                .create_string(value)
+                .map(|value| unsafe { AniRef::from_raw(value.into_raw() as sys::ani_ref) }),
+            Self::Array(values) => values
+                .iter()
+                .map(|value| value.to_ani_ref(env))
+                .collect::<Result<Vec<_>>>()?
+                .to_ani(env)
+                .map(|value| unsafe { AniRef::from_raw(value as sys::ani_ref) }),
+            Self::Object(values) => values
+                .iter()
+                .map(|(key, value)| value.to_ani_ref(env).map(|value| (key.clone(), value)))
+                .collect::<Result<HashMap<_, _>>>()?
+                .to_ani(env)
+                .map(object_ref),
+            Self::Binary(value) => ArrayBuffer::from(value.as_slice())
+                .to_ani(env)
+                .map(|value| unsafe { AniRef::from_raw(value as sys::ani_ref) }),
+        }
+    }
+
+    /// Decode a structured ArkTS value without relying on JSON serialization.
+    pub fn from_ani_ref(env: &Env<'_>, value: &AniRef<'_>) -> Result<Self> {
+        if env.is_nullish(value)? {
+            return Ok(Self::Null);
+        }
+        let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
+        let instance_of = |descriptor: &str| {
+            env.find_class(descriptor)
+                .and_then(|class| env.object_instance_of(&object, &class))
+                .unwrap_or(false)
+        };
+        if instance_of("std.core.String") {
+            let string = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
+            return env.get_string(&string).map(Self::String);
+        }
+        if instance_of("std.core.Boolean") {
+            return bool::unbox(env, &object).map(Self::Bool);
+        }
+        if instance_of("std.core.Int") {
+            return i32::unbox(env, &object).map(|value| Self::Integer(value as i64));
+        }
+        if instance_of("std.core.Long") {
+            return i64::unbox(env, &object).map(Self::Integer);
+        }
+        if instance_of("std.core.Float") {
+            return f32::unbox(env, &object).map(|value| Self::Number(value as f64));
+        }
+        if instance_of("std.core.Double") {
+            return f64::unbox(env, &object).map(Self::Number);
+        }
+        if instance_of("std.core.Array") {
+            let values =
+                unsafe { Vec::<AniRef<'_>>::from_ani(env, value.as_raw() as sys::ani_array) }?;
+            return values
+                .iter()
+                .map(|value| Self::from_ani_ref(env, value))
+                .collect::<Result<Vec<_>>>()
+                .map(Self::Array);
+        }
+        if instance_of("std.core.Record") {
+            let values = unsafe { HashMap::<String, AniRef<'_>>::from_ani(env, object.as_raw()) }?;
+            return values
+                .iter()
+                .map(|(key, value)| {
+                    Self::from_ani_ref(env, value).map(|value| (key.clone(), value))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()
+                .map(Self::Object);
+        }
+        if instance_of("escompat.ArrayBuffer") || instance_of("std.core.ArrayBuffer") {
+            let buffer =
+                unsafe { ArrayBuffer::from_ani(env, value.as_raw() as sys::ani_arraybuffer) }?;
+            return Ok(Self::Binary(buffer.as_ref().to_vec()));
+        }
+        Err(Error::new(
+            Status::InvalidType,
+            "error property must be null, bool, number, string, Record, Array, or ArrayBuffer",
+        ))
+    }
+}
 
 // ============================================================================
 // Status Code
@@ -232,6 +387,7 @@ impl From<Status> for sys::ani_status {
 /// let custom_err: Error<MyStatus> = Error::new(MyStatus::CustomError, "Something went wrong");
 /// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Error<S: AsRef<str> = Status> {
     /// The status/error code
     pub status: S,
@@ -243,8 +399,18 @@ pub struct Error<S: AsRef<str> = Status> {
     pub code: Option<i32>,
     /// Additional string metadata copied to the ArkTS error object.
     pub metadata: BTreeMap<String, String>,
+    /// Extensible payload is kept out of line so the error remains cheap to
+    /// return through the crate-wide `Result` ABI.
+    extension: Box<ErrorExtension>,
     /// Optional cause of this error
     pub cause: Option<Box<Error<Status>>>,
+}
+
+#[derive(Debug, Default)]
+struct ErrorExtension {
+    properties: BTreeMap<String, AniErrorValue>,
+    stack: Option<String>,
+    raw_rejection: Option<RefContainer>,
 }
 
 impl<S: AsRef<str>> Error<S> {
@@ -269,6 +435,7 @@ impl<S: AsRef<str>> Error<S> {
             status_name: None,
             code: None,
             metadata: BTreeMap::new(),
+            extension: Box::default(),
             cause: None,
         }
     }
@@ -292,6 +459,7 @@ impl<S: AsRef<str>> Error<S> {
             status_name: None,
             code: None,
             metadata: BTreeMap::new(),
+            extension: Box::default(),
             cause: None,
         }
     }
@@ -318,6 +486,7 @@ impl<S: AsRef<str>> Error<S> {
             status_name: None,
             code: None,
             metadata: BTreeMap::new(),
+            extension: Box::default(),
             cause: Some(Box::new(cause)),
         }
     }
@@ -338,6 +507,44 @@ impl<S: AsRef<str>> Error<S> {
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
+    }
+
+    /// Attach typed application metadata to the ArkTS error object.
+    pub fn with_property(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<AniErrorValue>,
+    ) -> Self {
+        self.extension.properties.insert(key.into(), value.into());
+        self
+    }
+
+    /// Preserve or override an ArkTS-compatible stack trace.
+    pub fn with_stack(mut self, stack: impl Into<String>) -> Self {
+        self.extension.stack = Some(stack.into());
+        self
+    }
+
+    /// Typed application properties retained across asynchronous boundaries.
+    pub fn properties(&self) -> &BTreeMap<String, AniErrorValue> {
+        &self.extension.properties
+    }
+
+    /// Preserved ArkTS stack trace, if one was available.
+    pub fn stack(&self) -> Option<&str> {
+        self.extension.stack.as_deref()
+    }
+
+    pub(crate) fn insert_property(&mut self, key: String, value: AniErrorValue) {
+        self.extension.properties.insert(key, value);
+    }
+
+    pub(crate) fn set_stack(&mut self, stack: Option<String>) {
+        self.extension.stack = stack;
+    }
+
+    pub(crate) fn preserve_rejection(&mut self, rejection: Option<RefContainer>) {
+        self.extension.raw_rejection = rejection;
     }
 
     /// Get the status code as a string reference
@@ -375,6 +582,21 @@ pub trait AniErrorPayload: fmt::Debug + fmt::Display + Send + Sync + 'static {
 
     /// Visit extra string properties to attach to the ArkTS error.
     fn visit_ani_metadata(&self, _visitor: &mut dyn FnMut(&str, &str)) {}
+
+    /// Visit typed properties. Custom errors can expose arbitrary nested
+    /// structured metadata without first serializing it to strings.
+    fn visit_ani_properties(&self, _visitor: &mut dyn FnMut(&str, &AniErrorValue)) {}
+
+    /// Optional preserved stack trace.
+    fn ani_stack(&self) -> Option<&str> {
+        None
+    }
+
+    /// Object-safe materializer hook for application-defined ArkTS Error
+    /// subclasses or a previously retained rejection object.
+    fn materialize_ani_error<'env>(&self, _env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        Ok(None)
+    }
 }
 
 impl<S> AniErrorPayload for Error<S>
@@ -405,10 +627,73 @@ where
             visitor(key, value);
         }
     }
+
+    fn visit_ani_properties(&self, visitor: &mut dyn FnMut(&str, &AniErrorValue)) {
+        for (key, value) in &self.extension.properties {
+            visitor(key, value);
+        }
+    }
+
+    fn ani_stack(&self) -> Option<&str> {
+        self.extension.stack.as_deref()
+    }
+
+    fn materialize_ani_error<'env>(&self, env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        self.extension
+            .raw_rejection
+            .as_ref()
+            .map(|rejection| rejection.to_local::<AniError<'env>>(env))
+            .transpose()
+    }
 }
 
 /// Type-erased error retained across an asynchronous scheduler boundary.
 pub type DynAniError = Box<dyn AniErrorPayload>;
+
+/// Exact ArkTS rejection retained for cancellation/iterator `throw()` paths.
+#[derive(Debug)]
+pub struct PreservedArktsError {
+    rejection: RefContainer,
+    message: String,
+}
+
+impl PreservedArktsError {
+    /// Promote an ArkTS rejection object to a VM-owned global reference.
+    pub fn new(env: &Env<'_>, rejection: &AniRef<'_>) -> Result<Self> {
+        let object = unsafe { AniObject::from_raw(rejection.as_raw() as sys::ani_object) };
+        let message = env
+            .get_property_by_name_ref(&object, "message")
+            .and_then(|message| {
+                let message = unsafe { AniString::from_raw(message.as_raw() as sys::ani_string) };
+                env.get_string(&message)
+            })
+            .unwrap_or_else(|_| "ArkTS async iterator was thrown".to_string());
+        Ok(Self {
+            rejection: RefContainer::new(env, rejection)?,
+            message,
+        })
+    }
+}
+
+impl fmt::Display for PreservedArktsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl AniErrorPayload for PreservedArktsError {
+    fn ani_status(&self) -> &str {
+        "ArktsRejection"
+    }
+
+    fn ani_message(&self) -> &str {
+        &self.message
+    }
+
+    fn materialize_ani_error<'env>(&self, env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        self.rejection.to_local(env).map(Some)
+    }
+}
 
 impl<T> AniErrorPayload for Box<T>
 where
@@ -428,6 +713,45 @@ where
     }
     fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
         (**self).visit_ani_metadata(visitor);
+    }
+    fn visit_ani_properties(&self, visitor: &mut dyn FnMut(&str, &AniErrorValue)) {
+        (**self).visit_ani_properties(visitor);
+    }
+    fn ani_stack(&self) -> Option<&str> {
+        (**self).ani_stack()
+    }
+    fn materialize_ani_error<'env>(&self, env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        (**self).materialize_ani_error(env)
+    }
+}
+
+impl<T> AniErrorPayload for std::sync::Arc<T>
+where
+    T: AniErrorPayload + ?Sized,
+{
+    fn ani_status(&self) -> &str {
+        (**self).ani_status()
+    }
+    fn ani_code(&self) -> i32 {
+        (**self).ani_code()
+    }
+    fn ani_message(&self) -> &str {
+        (**self).ani_message()
+    }
+    fn ani_cause(&self) -> Option<&dyn AniErrorPayload> {
+        (**self).ani_cause()
+    }
+    fn visit_ani_metadata(&self, visitor: &mut dyn FnMut(&str, &str)) {
+        (**self).visit_ani_metadata(visitor);
+    }
+    fn visit_ani_properties(&self, visitor: &mut dyn FnMut(&str, &AniErrorValue)) {
+        (**self).visit_ani_properties(visitor);
+    }
+    fn ani_stack(&self) -> Option<&str> {
+        (**self).ani_stack()
+    }
+    fn materialize_ani_error<'env>(&self, env: &Env<'env>) -> Result<Option<AniError<'env>>> {
+        (**self).materialize_ani_error(env)
     }
 }
 
@@ -693,6 +1017,9 @@ pub fn payload_to_ani_error<'env>(
     env: &Env<'env>,
     payload: &dyn AniErrorPayload,
 ) -> Result<AniError<'env>> {
+    if let Some(error) = payload.materialize_ani_error(env)? {
+        return Ok(error);
+    }
     let raw = create_error_payload(env, payload).ok_or_else(|| {
         Error::new(
             Status::GenericFailure,
@@ -725,15 +1052,29 @@ fn attach_error_context(
     object: &crate::types::AniObject<'_>,
     payload: &dyn AniErrorPayload,
 ) {
-    use crate::conversions::ToAni;
-
-    let mut metadata = HashMap::<String, String>::new();
+    let mut metadata = BTreeMap::<String, AniErrorValue>::new();
     payload.visit_ani_metadata(&mut |key, value| {
-        metadata.insert(key.to_string(), value.to_string());
+        metadata.insert(key.to_string(), AniErrorValue::String(value.to_string()));
     });
-    let Ok(metadata) = metadata.to_ani(env) else {
+    payload.visit_ani_properties(&mut |key, value| {
+        metadata.insert(key.to_string(), value.clone());
+    });
+    let metadata_values = metadata
+        .iter()
+        .map(|(key, value)| value.to_ani_ref(env).map(|value| (key.clone(), value)))
+        .collect::<Result<HashMap<_, _>>>();
+    let Ok(metadata_values) = metadata_values else {
         return;
     };
+    let Ok(metadata_object) = metadata_values.to_ani(env) else {
+        return;
+    };
+
+    for (key, value) in metadata {
+        if let Ok(value) = value.to_ani_ref(env) {
+            let _ = env.set_property_by_name_ref(object, &key, &value);
+        }
+    }
     let Ok(status) = env.create_string(payload.ani_status()) else {
         return;
     };
@@ -742,7 +1083,7 @@ fn attach_error_context(
         AniRef::from_raw(status.into_raw() as sys::ani_ref)
     });
     context.insert("metadata".to_string(), unsafe {
-        AniRef::from_raw(metadata.into_raw() as sys::ani_ref)
+        AniRef::from_raw(metadata_object.into_raw() as sys::ani_ref)
     });
     if let Some(cause) = payload.ani_cause()
         && let Some(cause) = create_error_payload(env, cause)
@@ -755,12 +1096,21 @@ fn attach_error_context(
         let context = unsafe { AniRef::from_raw(context.into_raw() as sys::ani_ref) };
         let _ = env.set_property_by_name_ref(object, "cause", &context);
     }
+    if let Some(stack) = payload.ani_stack()
+        && let Ok(stack) = env.create_string(stack)
+    {
+        let stack = unsafe { AniRef::from_raw(stack.into_raw() as sys::ani_ref) };
+        let _ = env.set_property_by_name_ref(object, "stack", &stack);
+    }
 }
 
 fn create_error_payload(
     env_ref: &Env<'_>,
     payload: &dyn AniErrorPayload,
 ) -> Option<sys::ani_error> {
+    if let Ok(Some(error)) = payload.materialize_ani_error(env_ref) {
+        return Some(error.into_raw());
+    }
     let status = payload.ani_status();
     let message = payload.ani_message();
     let code = payload.ani_code();
@@ -903,7 +1253,20 @@ mod tests {
         let error = Error::new(Status::GenericFailure, "remote")
             .with_status_name("RemoteDomainFailure")
             .with_code(74001)
-            .with_metadata("operation", "read");
+            .with_metadata("operation", "read")
+            .with_property("retryable", false)
+            .with_property(
+                "details",
+                AniErrorValue::Object(BTreeMap::from([
+                    (
+                        "labels".to_string(),
+                        AniErrorValue::Array(vec!["remote".into(), "async".into()]),
+                    ),
+                    ("attempt".to_string(), AniErrorValue::Integer(2)),
+                ])),
+            )
+            .with_property("binary", AniErrorValue::Binary(vec![1, 2, 3]))
+            .with_stack("RemoteError: remote\n  at asyncCall");
         let erased: DynAniError = Box::new(error);
         assert_eq!(erased.ani_status(), "RemoteDomainFailure");
         assert_eq!(erased.ani_code(), 74001);
@@ -912,5 +1275,22 @@ mod tests {
             metadata.insert(key.to_string(), value.to_string());
         });
         assert_eq!(metadata.get("operation").map(String::as_str), Some("read"));
+        let mut properties = BTreeMap::new();
+        erased.visit_ani_properties(&mut |key, value| {
+            properties.insert(key.to_string(), value.clone());
+        });
+        assert_eq!(
+            properties.get("retryable"),
+            Some(&AniErrorValue::Bool(false))
+        );
+        assert_eq!(
+            properties.get("binary"),
+            Some(&AniErrorValue::Binary(vec![1, 2, 3]))
+        );
+        assert!(matches!(
+            properties.get("details"),
+            Some(AniErrorValue::Object(_))
+        ));
+        assert!(erased.ani_stack().unwrap().contains("asyncCall"));
     }
 }

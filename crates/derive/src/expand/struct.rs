@@ -13,13 +13,14 @@ use syn::{
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    AniType, ObjectMemberAccessKind, ObjectMemberDescriptor, register_exact_type_alias,
-    register_object_type_alias, register_object_type_members,
+    AniType, ObjectMemberAccessKind, ObjectMemberDescriptor, PrimitiveType,
+    register_exact_type_alias, register_object_type_alias, register_object_type_members,
+    register_structured_type_alias,
 };
 use crate::types::{
     EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind, current_module_name,
-    emit_compile_ets_object, emit_compile_ets_rendered_decl, generate_object_field_ets_decl,
-    generate_object_property_ets_decl, qualify_member_descriptor,
+    emit_compile_ets_object, emit_compile_ets_rendered_decl, ets_public_type_for_syn_type,
+    generate_object_field_ets_decl, generate_object_property_ets_decl, qualify_member_descriptor,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +58,41 @@ struct EnumVariantSpec {
     rust_ident: Ident,
     arkts_name: String,
     discriminant: i32,
+}
+
+#[derive(Clone, Debug)]
+struct StructuredEnumFieldSpec {
+    rust_name: String,
+    arkts_name: String,
+    ty: syn::Type,
+    input: bool,
+    output: bool,
+}
+
+#[derive(Clone, Debug)]
+enum StructuredEnumShapeSpec {
+    Unit,
+    Newtype(syn::Type),
+    Tuple(Vec<syn::Type>),
+    Struct(Vec<StructuredEnumFieldSpec>),
+}
+
+#[derive(Clone, Debug)]
+struct StructuredEnumVariantSpec {
+    serde_name: String,
+    arkts_name: String,
+    input: bool,
+    output: bool,
+    shape: StructuredEnumShapeSpec,
+}
+
+#[derive(Clone, Debug)]
+struct StructuredEnumOptions {
+    discriminator: String,
+    case: Option<String>,
+    nullable: bool,
+    input_only: bool,
+    output_only: bool,
 }
 
 /// Expand `#[ani]` for structs
@@ -814,10 +850,15 @@ fn validate_enum_derive_input(input: &DeriveInput) -> syn::Result<&syn::DataEnum
         ));
     };
 
-    if !input.generics.params.is_empty() {
+    if let Some(parameter) = input
+        .generics
+        .params
+        .iter()
+        .find(|parameter| !matches!(parameter, GenericParam::Type(_)))
+    {
         return Err(syn::Error::new_spanned(
-            &input.generics,
-            "#[derive(AniEnum)] does not support generic enums yet",
+            parameter,
+            "#[derive(AniEnum)] supports generic type parameters, but not lifetime or const parameters",
         ));
     }
 
@@ -1015,24 +1056,529 @@ fn expand_enum_type_impls(
     }
 }
 
-fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStream {
-    let object_type: syn::Type = syn::parse_quote!(ani::types::AniObject<'static>);
-    register_exact_type_alias(&enum_name.to_string(), &object_type);
+fn rename_case(value: &str, case: Option<&str>) -> String {
+    let Some(case) = case else {
+        return value.to_string();
+    };
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if ch == '_' || ch == '-' || ch == ' ' {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if ch.is_uppercase() && index != 0 && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        current.extend(ch.to_lowercase());
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    match case {
+        "snake_case" | "snake" => words.join("_"),
+        "kebab-case" | "kebab" => words.join("-"),
+        "lowercase" | "lower" => words.join(""),
+        "UPPERCASE" | "upper" => words.join("").to_uppercase(),
+        "camelCase" | "camel" => words
+            .iter()
+            .enumerate()
+            .map(|(index, word)| {
+                if index == 0 {
+                    word.clone()
+                } else {
+                    let mut chars = word.chars();
+                    chars
+                        .next()
+                        .map(|head| head.to_uppercase().collect::<String>() + chars.as_str())
+                        .unwrap_or_default()
+                }
+            })
+            .collect(),
+        "PascalCase" | "pascal" => words
+            .iter()
+            .map(|word| {
+                let mut chars = word.chars();
+                chars
+                    .next()
+                    .map(|head| head.to_uppercase().collect::<String>() + chars.as_str())
+                    .unwrap_or_default()
+            })
+            .collect(),
+        _ => value.to_string(),
+    }
+}
+
+fn serde_rename(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    let mut rename = None;
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("serde")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                rename = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+            }
+            Ok(())
+        })?;
+    }
+    Ok(rename)
+}
+
+fn item_ani_attrs(attrs: &[syn::Attribute]) -> syn::Result<AniAttrs> {
+    let mut merged = AniAttrs::default();
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("ani")) {
+        let parsed = attr.parse_args::<AniAttrs>()?;
+        if parsed.name.is_some() {
+            merged.name = parsed.name;
+        }
+        if parsed.discriminant.is_some() {
+            merged.discriminant = parsed.discriminant;
+        }
+        if parsed.case.is_some() {
+            merged.case = parsed.case;
+        }
+        merged.skip |= parsed.skip;
+        merged.input_only |= parsed.input_only;
+        merged.output_only |= parsed.output_only;
+        merged.nullable |= parsed.nullable;
+    }
+    if merged.input_only && merged.output_only {
+        return Err(syn::Error::new_spanned(
+            attrs.first().unwrap_or_else(|| unreachable!()),
+            "an ANI enum item cannot be both input_only and output_only",
+        ));
+    }
+    Ok(merged)
+}
+
+fn collect_structured_enum_specs(
+    input: &DeriveInput,
+    data: &syn::DataEnum,
+) -> syn::Result<(StructuredEnumOptions, Vec<StructuredEnumVariantSpec>)> {
+    let attrs = item_ani_attrs(&input.attrs)?;
+    let options = StructuredEnumOptions {
+        discriminator: attrs.discriminant.unwrap_or_else(|| "type".to_string()),
+        case: attrs.case,
+        nullable: attrs.nullable,
+        input_only: attrs.input_only,
+        output_only: attrs.output_only,
+    };
+    let mut variants = Vec::new();
+    for variant in &data.variants {
+        let attrs = item_ani_attrs(&variant.attrs)?;
+        let rust_name = variant.ident.to_string();
+        let serde_name = serde_rename(&variant.attrs)?.unwrap_or_else(|| rust_name.clone());
+        let arkts_name = attrs
+            .name
+            .unwrap_or_else(|| rename_case(&rust_name, options.case.as_deref()));
+        let input = !options.output_only && !attrs.output_only && !attrs.skip;
+        let output = !options.input_only && !attrs.input_only && !attrs.skip;
+        let shape = match &variant.fields {
+            Fields::Unit => StructuredEnumShapeSpec::Unit,
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                StructuredEnumShapeSpec::Newtype(fields.unnamed[0].ty.clone())
+            }
+            Fields::Unnamed(fields) => StructuredEnumShapeSpec::Tuple(
+                fields
+                    .unnamed
+                    .iter()
+                    .map(|field| field.ty.clone())
+                    .collect(),
+            ),
+            Fields::Named(fields) => {
+                let mut specs = Vec::new();
+                for field in &fields.named {
+                    let field_attrs = item_ani_attrs(&field.attrs)?;
+                    let rust_name = field.ident.as_ref().expect("named field").to_string();
+                    let serde_name =
+                        serde_rename(&field.attrs)?.unwrap_or_else(|| rust_name.clone());
+                    let arkts_name = field_attrs
+                        .name
+                        .unwrap_or_else(|| rename_case(&rust_name, options.case.as_deref()));
+                    specs.push(StructuredEnumFieldSpec {
+                        rust_name: serde_name,
+                        arkts_name,
+                        ty: field.ty.clone(),
+                        input: input && !field_attrs.output_only && !field_attrs.skip,
+                        output: output && !field_attrs.input_only && !field_attrs.skip,
+                    });
+                }
+                StructuredEnumShapeSpec::Struct(specs)
+            }
+        };
+        variants.push(StructuredEnumVariantSpec {
+            serde_name,
+            arkts_name,
+            input,
+            output,
+            shape,
+        });
+    }
+    Ok((options, variants))
+}
+
+fn ets_identifier_fragment(value: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize = true;
+    for character in value.chars() {
+        if !character.is_ascii_alphanumeric() {
+            capitalize = true;
+            continue;
+        }
+        if output.is_empty() && character.is_ascii_digit() {
+            output.push('V');
+        }
+        if capitalize {
+            output.extend(character.to_uppercase());
+            capitalize = false;
+        } else {
+            output.push(character);
+        }
+    }
+    if output.is_empty() {
+        "Variant".to_string()
+    } else {
+        output
+    }
+}
+
+fn render_structured_variant_interface(
+    enum_name: &str,
+    variant: &StructuredEnumVariantSpec,
+    discriminator: &str,
+    input: bool,
+    alias_parameters: &str,
+) -> Option<(String, String)> {
+    if (input && !variant.input) || (!input && !variant.output) {
+        return None;
+    }
+    let direction = if input { "Input" } else { "Output" };
+    let interface_name = format!(
+        "{enum_name}{direction}{}",
+        ets_identifier_fragment(&variant.arkts_name)
+    );
+    let mut fields = vec![format!(
+        "  readonly {}: {:?};",
+        ets_property_key(discriminator),
+        variant.arkts_name
+    )];
+    match &variant.shape {
+        StructuredEnumShapeSpec::Unit => {}
+        StructuredEnumShapeSpec::Newtype(ty) => {
+            fields.push(format!("  value: {};", ets_public_type_for_syn_type(ty)));
+        }
+        StructuredEnumShapeSpec::Tuple(types) => {
+            fields.push(format!(
+                "  value: [{}];",
+                types
+                    .iter()
+                    .map(ets_public_type_for_syn_type)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        StructuredEnumShapeSpec::Struct(specs) => {
+            fields.extend(specs.iter().filter_map(|field| {
+                let enabled = if input { field.input } else { field.output };
+                enabled.then(|| {
+                    format!(
+                        "  {}: {};",
+                        ets_property_key(&field.arkts_name),
+                        ets_public_type_for_syn_type(&field.ty)
+                    )
+                })
+            }));
+        }
+    }
+    Some((
+        format!("{interface_name}{alias_parameters}"),
+        format!(
+            "interface {interface_name}{alias_parameters} {{\n{}\n}}",
+            fields.join("\n")
+        ),
+    ))
+}
+
+fn ets_property_key(value: &str) -> String {
+    let mut characters = value.chars();
+    let valid_start = characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic());
+    let valid_rest =
+        characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
+    if valid_start && valid_rest {
+        value.to_string()
+    } else {
+        format!("{value:?}")
+    }
+}
+
+fn structured_materializer_value_expr(ty: &syn::Type, value: &str) -> String {
+    match AniType::from_syn_type(ty) {
+        AniType::Primitive(PrimitiveType::Bool) => {
+            format!("({value} as Boolean).valueOf()")
+        }
+        AniType::Primitive(PrimitiveType::I8) => format!("({value} as Numeric).toByte()"),
+        AniType::Primitive(PrimitiveType::U8 | PrimitiveType::I16) => {
+            format!("({value} as Numeric).toShort()")
+        }
+        AniType::Primitive(PrimitiveType::U16) => {
+            format!("({value} as Numeric).toInt().toChar()")
+        }
+        AniType::Primitive(PrimitiveType::I32) => format!("({value} as Numeric).toInt()"),
+        AniType::Primitive(
+            PrimitiveType::U32 | PrimitiveType::I64 | PrimitiveType::Isize | PrimitiveType::Usize,
+        ) => format!("({value} as Numeric).toLong()"),
+        AniType::Primitive(PrimitiveType::F32) => format!("({value} as Numeric).toFloat()"),
+        AniType::Primitive(PrimitiveType::F64) => format!("({value} as Numeric).toDouble()"),
+        _ => format!("{value} as {}", ets_public_type_for_syn_type(ty)),
+    }
+}
+
+fn render_structured_output_materializer(
+    qualified_name: &str,
+    variants: &[StructuredEnumVariantSpec],
+    discriminator: &str,
+    alias_parameters: &str,
+) -> String {
+    let directional = format!("{qualified_name}Output");
+    let helper = directional
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let namespace = qualified_name
+        .rsplit_once('.')
+        .map(|(namespace, _)| format!("{namespace}."))
+        .unwrap_or_default();
+    let enum_name = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+    let discriminator_key = ets_property_key(discriminator);
+    let mut branches = Vec::new();
+    for variant in variants.iter().filter(|variant| variant.output) {
+        let variant_type = format!(
+            "{namespace}{enum_name}Output{}{}",
+            ets_identifier_fragment(&variant.arkts_name),
+            alias_parameters
+        );
+        let mut fields = vec![format!("{}: {:?}", discriminator_key, variant.arkts_name)];
+        let mut prefix = String::new();
+        match &variant.shape {
+            StructuredEnumShapeSpec::Unit => {}
+            StructuredEnumShapeSpec::Newtype(ty) => fields.push(format!(
+                "value: {}",
+                structured_materializer_value_expr(ty, "__ani_record[\"value\"]")
+            )),
+            StructuredEnumShapeSpec::Tuple(types) => {
+                prefix.push_str("    let __ani_values = __ani_record[\"value\"] as Object[];\n");
+                let values = types
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ty)| {
+                        structured_materializer_value_expr(ty, &format!("__ani_values[{index}]"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                fields.push(format!("value: [{values}]"));
+            }
+            StructuredEnumShapeSpec::Struct(specs) => {
+                for field in specs.iter().filter(|field| field.output) {
+                    let key = ets_property_key(&field.arkts_name);
+                    let access = format!("__ani_record[{:?}]", field.arkts_name);
+                    fields.push(format!(
+                        "{key}: {}",
+                        structured_materializer_value_expr(&field.ty, &access)
+                    ));
+                }
+            }
+        }
+        branches.push(format!(
+            "  if (__ani_tag == {:?}) {{\n{prefix}    let __ani_value: {variant_type} = {{ {} }};\n    return __ani_value;\n  }}",
+            variant.arkts_name,
+            fields.join(", ")
+        ));
+    }
+    format!(
+        "function __ani_materialize_{helper}{alias_parameters}(value: Object): {directional}{alias_parameters} {{\n  let __ani_record = value as Record<string, Object>;\n  let __ani_tag = __ani_record[{discriminator:?}] as string;\n{}\n  throw new TypeError(\"unknown structured enum discriminator: \" + __ani_tag);\n}}",
+        branches.join("\n")
+    )
+}
+
+fn structured_value_kind_tokens(ty: &syn::Type) -> TokenStream {
+    let kind = match AniType::from_syn_type(ty) {
+        AniType::Primitive(PrimitiveType::Bool) => quote! { Boolean },
+        AniType::Primitive(PrimitiveType::I8) => quote! { Byte },
+        AniType::Primitive(PrimitiveType::U8 | PrimitiveType::I16) => quote! { Short },
+        AniType::Primitive(PrimitiveType::U16) => quote! { Char },
+        AniType::Primitive(PrimitiveType::I32) => quote! { Int },
+        AniType::Primitive(
+            PrimitiveType::U32 | PrimitiveType::I64 | PrimitiveType::Isize | PrimitiveType::Usize,
+        ) => quote! { Long },
+        AniType::Primitive(PrimitiveType::F32) => quote! { Float },
+        AniType::Primitive(PrimitiveType::F64) => quote! { Double },
+        _ => quote! { Ref },
+    };
+    quote! { ani::conversions::StructuredEnumValueKind::#kind }
+}
+
+fn expand_structured_enum(
+    input: &DeriveInput,
+    data: &syn::DataEnum,
+    qualified_name: &str,
+) -> TokenStream {
+    let enum_name = &input.ident;
+    let (options, variants) = match collect_structured_enum_specs(input, data) {
+        Ok(specs) => specs,
+        Err(error) => return error.to_compile_error(),
+    };
+    register_structured_type_alias(&enum_name.to_string());
 
     let mut parts = qualified_name
         .split('.')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     let ets_name = parts.pop().unwrap_or(qualified_name);
-    let rendered = format!("type {ets_name} = Record<string, Object> | string");
-    if parts.is_empty() {
-        emit_compile_ets_rendered_decl(EtsDeclKind::Global, "", &rendered);
+    let type_parameters = input
+        .generics
+        .type_params()
+        .map(|parameter| parameter.ident.to_string())
+        .collect::<Vec<_>>();
+    let alias_parameters = if type_parameters.is_empty() {
+        String::new()
     } else {
-        emit_compile_ets_rendered_decl(EtsDeclKind::Namespace, &parts.join("."), &rendered);
+        format!("<{}>", type_parameters.join(", "))
+    };
+    let render_direction = |input| {
+        let interfaces = variants
+            .iter()
+            .filter_map(|variant| {
+                render_structured_variant_interface(
+                    ets_name,
+                    variant,
+                    &options.discriminator,
+                    input,
+                    &alias_parameters,
+                )
+            })
+            .collect::<Vec<_>>();
+        let union = if interfaces.is_empty() {
+            "never".to_string()
+        } else {
+            interfaces
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        (interfaces, union)
+    };
+    let (input_interfaces, input_union) = render_direction(true);
+    let (output_interfaces, output_union) = render_direction(false);
+    let nullable = if options.nullable { " | null" } else { "" };
+    let mut rendered = input_interfaces
+        .into_iter()
+        .chain(output_interfaces)
+        .map(|(_, declaration)| declaration)
+        .collect::<Vec<_>>();
+    rendered.extend([
+        format!("type {ets_name}Input{alias_parameters} = {input_union}{nullable};"),
+        format!("type {ets_name}Output{alias_parameters} = {output_union}{nullable};"),
+        format!(
+            "type {ets_name}{alias_parameters} = {ets_name}Input{alias_parameters} | {ets_name}Output{alias_parameters};"
+        ),
+    ]);
+    if parts.is_empty() {
+        for declaration in rendered {
+            emit_compile_ets_rendered_decl(EtsDeclKind::Global, "", &declaration);
+        }
+    } else {
+        for declaration in rendered {
+            emit_compile_ets_rendered_decl(EtsDeclKind::Namespace, &parts.join("."), &declaration);
+        }
     }
+    emit_compile_ets_rendered_decl(
+        EtsDeclKind::Global,
+        "",
+        &render_structured_output_materializer(
+            qualified_name,
+            &variants,
+            &options.discriminator,
+            &alias_parameters,
+        ),
+    );
+
+    let discriminator = syn::LitStr::new(&options.discriminator, Span::call_site());
+    let schema_variants = variants
+        .iter()
+        .map(|variant| {
+            let rust_name = syn::LitStr::new(&variant.serde_name, Span::call_site());
+            let arkts_name = syn::LitStr::new(&variant.arkts_name, Span::call_site());
+            let input = variant.input;
+            let output = variant.output;
+            let shape = match &variant.shape {
+                StructuredEnumShapeSpec::Unit => {
+                    quote! { ani::conversions::StructuredEnumShape::Unit }
+                }
+                StructuredEnumShapeSpec::Newtype(ty) => {
+                    let kind = structured_value_kind_tokens(ty);
+                    quote! { ani::conversions::StructuredEnumShape::Newtype(#kind) }
+                }
+                StructuredEnumShapeSpec::Tuple(types) => {
+                    let kinds = types.iter().map(structured_value_kind_tokens);
+                    quote! { ani::conversions::StructuredEnumShape::Tuple(&[#(#kinds),*]) }
+                }
+                StructuredEnumShapeSpec::Struct(fields) => {
+                    let fields = fields.iter().map(|field| {
+                        let rust_name = syn::LitStr::new(&field.rust_name, Span::call_site());
+                        let arkts_name = syn::LitStr::new(&field.arkts_name, Span::call_site());
+                        let input = field.input;
+                        let output = field.output;
+                        let kind = structured_value_kind_tokens(&field.ty);
+                        quote! {
+                            ani::conversions::StructuredEnumField {
+                                rust_name: #rust_name,
+                                arkts_name: #arkts_name,
+                                kind: #kind,
+                                input: #input,
+                                output: #output,
+                            }
+                        }
+                    });
+                    quote! { ani::conversions::StructuredEnumShape::Struct(&[#(#fields),*]) }
+                }
+            };
+            quote! {
+                ani::conversions::StructuredEnumVariant {
+                    rust_name: #rust_name,
+                    arkts_name: #arkts_name,
+                    shape: #shape,
+                    input: #input,
+                    output: #output,
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    let schema_variants_to = schema_variants.clone();
+    let schema_variants_from = schema_variants;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let mut env_generics = input.generics.clone();
+    env_generics.params.insert(0, syn::parse_quote!('env));
+    let (env_impl_generics, _, _) = env_generics.split_for_impl();
+    let serialize_where = render_where_clause(
+        input.generics.where_clause.as_ref(),
+        &[quote! { Self: ani::serde::Serialize }],
+    );
+    let deserialize_where = render_where_clause(
+        input.generics.where_clause.as_ref(),
+        &[quote! { Self: ani::serde::de::DeserializeOwned }],
+    );
 
     quote! {
-        impl ani::conversions::TypeInfo for #enum_name {
+        impl #impl_generics ani::conversions::TypeInfo for #enum_name #ty_generics #where_clause {
             fn type_signature() -> &'static str {
                 "Lstd/core/Object;"
             }
@@ -1042,20 +1588,27 @@ fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStrea
             }
         }
 
-        impl<'env> ani::conversions::ToAni<'env> for #enum_name
-        where
-            Self: ani::serde::Serialize,
+        impl #env_impl_generics ani::conversions::ToAni<'env> for #enum_name #ty_generics
+        #serialize_where
         {
             type Output = ani::sys::ani_object;
 
             fn to_ani(self, env: &ani::env::Env<'env>) -> ani::error::Result<Self::Output> {
-                ani::conversions::ToAni::to_ani(ani::conversions::Json::new(self), env)
+                let value = ani::serde_json::to_value(self).map_err(|error| {
+                    ani::error::Error::new(ani::error::Status::InvalidType, error.to_string())
+                })?;
+                let schema = &[#(#schema_variants_to),*];
+                let value = ani::conversions::encode_structured_enum(
+                    value,
+                    #discriminator,
+                    schema,
+                )?;
+                ani::conversions::ToAni::to_ani(ani::conversions::Json::new(value), env)
             }
         }
 
-        impl<'env> ani::conversions::FromAni<'env> for #enum_name
-        where
-            Self: ani::serde::de::DeserializeOwned,
+        impl #env_impl_generics ani::conversions::FromAni<'env> for #enum_name #ty_generics
+        #deserialize_where
         {
             type Input = ani::sys::ani_object;
 
@@ -1063,13 +1616,18 @@ fn expand_structured_enum(enum_name: &Ident, qualified_name: &str) -> TokenStrea
                 env: &ani::env::Env<'env>,
                 value: Self::Input,
             ) -> ani::error::Result<Self> {
+                let schema = &[#(#schema_variants_from),*];
                 let value = unsafe {
-                    <ani::conversions::Json<Self> as ani::conversions::FromAni<'env>>::from_ani(
+                    ani::conversions::decode_structured_enum_from_ani(
                         env,
                         value,
-                    )
-                }?;
-                Ok(value.into_inner())
+                        #discriminator,
+                        schema,
+                    )?
+                };
+                ani::serde_json::from_value(value).map_err(|error| {
+                    ani::error::Error::new(ani::error::Status::InvalidType, error.to_string())
+                })
             }
         }
     }
@@ -1091,7 +1649,7 @@ pub fn expand_enum_derive(input: DeriveInput) -> TokenStream {
         .iter()
         .any(|variant| !matches!(variant.fields, Fields::Unit))
     {
-        return expand_structured_enum(&input.ident, &enum_name);
+        return expand_structured_enum(&input, data, &enum_name);
     }
     let variants = match collect_enum_variant_specs(data) {
         Ok(variants) => variants,
@@ -1259,13 +1817,27 @@ mod tests {
     #[test]
     fn derive_ani_enum_supports_structured_variants_through_native_objects() {
         let input: DeriveInput = parse_quote! {
-            enum BadEnum {
-                Value(i32),
+            #[ani(discriminator = "kind", case = "camelCase", nullable)]
+            enum Payload<T> {
+                #[ani(input_only)]
+                Legacy(T),
+                RenamedField {
+                    #[ani(rename = "payloadText")]
+                    payload: T,
+                    #[ani(skip)]
+                    local_only: bool,
+                },
+                #[ani(output_only)]
+                Generated(T),
             }
         };
         let expanded = expand_enum_derive(input).to_string();
         assert!(expanded.contains("conversions :: Json :: new"));
         assert!(expanded.contains("ani_object"));
+        assert!(expanded.contains("encode_structured_enum"));
+        assert!(expanded.contains("decode_structured_enum"));
+        assert!(expanded.contains("payloadText"));
+        assert!(expanded.contains("StructuredEnumVariant"));
         assert!(!expanded.contains("AniString"));
     }
 }

@@ -57,7 +57,9 @@ pub fn assert_no_runtime_leaks(
         && current.async_streams == baseline.async_streams
         && current.scheduler.queued == 0
         && current.scheduler.active == 0
-        && current.scheduler.timers == 0;
+        && current.scheduler.timers == 0
+        && current.scheduler.cancellables == baseline.scheduler.cancellables
+        && !current.scheduler.closing;
     if stable {
         return Ok(current);
     }
