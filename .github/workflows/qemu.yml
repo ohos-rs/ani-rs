@@ -262,18 +262,7 @@ jobs:
           grep -q "\"guest_arch\": \"$OHOS_QEMU_GUEST_ARCH\"" "$QEMU_PACKAGE_ROOT/manifest.json"
       - name: Verify connected OpenHarmony API level
         shell: bash
-        run: |
-          if command -v hdc >/dev/null 2>&1; then
-            HDC_BIN="$(command -v hdc)"
-          else
-            HDC_BIN="$DEVECO_SDK_ROOT/toolchains/hdc"
-          fi
-          api_level="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.ohos.apiversion' | tr -d '\r[:space:]')"
-          kernel="$("$HDC_BIN" -t "$HDC_TARGET" shell uname -r | tr -d '\r[:space:]')"
-          version="$("$HDC_BIN" -t "$HDC_TARGET" shell 'param get const.product.software.version' | tr -d '\r')"
-          echo "OpenHarmony: $version (API $api_level, kernel $kernel)"
-          test "$api_level" -eq 26
-          test "$kernel" = 6.6.101
+        run: scripts/verify_ohos_qemu_guest.sh
       - name: Run cross-build, ABC compatibility and QEMU runtime suite
         run: scripts/run_arkvm_examples_ohos_qemu.sh
       - name: Build and verify HAP smoke artifact

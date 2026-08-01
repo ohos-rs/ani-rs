@@ -74,7 +74,7 @@ mkdir -p "$work_root"
 if [[ -d "$project_root" ]]; then
   rm -rf -- "$project_root"
 fi
-mkdir -p "$project_root" "$native_target" "$sdk_base"
+mkdir -p "$project_root" "$sdk_base"
 if [[ "$portable_pack" == "0" ]]; then
   cp -R "$repo_root/tests/hap-smoke/." "$project_root/"
   if [[ -L "$sdk_base/24" ]]; then
@@ -98,14 +98,16 @@ fi
 ets_output="$native_target/ani-ets/ani_example_new_basic.ets"
 target_env="$(printf '%s' "$rust_target" | tr '[:lower:]-' '[:upper:]_')"
 cc_env="$(printf '%s' "$rust_target" | tr '-' '_')"
-mkdir -p "$(dirname "$ets_output")"
 
 # Proc-macro output paths are compile-time inputs that Cargo cannot track.
 # Recompile the leaf cdylib so a deleted project copy can never leave stale or
-# missing ETS declarations behind.
+# missing ETS declarations behind. Do not create native_target before this
+# command: Cargo refuses to clean a custom target directory without the
+# CACHEDIR.TAG that Cargo itself writes when it initializes the directory.
 cargo clean --manifest-path "$repo_root/Cargo.toml" \
   --target-dir "$native_target" --target "$rust_target" \
   --package ani-example-new-basic
+mkdir -p "$(dirname "$ets_output")"
 
 env \
   ANI_MODULE_DESCRIPTOR=arkvm_test \
