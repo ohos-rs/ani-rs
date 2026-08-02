@@ -135,9 +135,15 @@ if [[ "$guest_arch" == "x86_64" ]]; then
     }' <<<"$cpuinfo"
   )"
 
-  if [[ "$cpu_vendor" != "GenuineIntel" || "$cpu_family" != "6" ||
-    "$cpu_model_id" != "60" ]]; then
-    echo "::error::Expected $x86_cpu_baseline CPUID GenuineIntel/6/60, got ${cpu_vendor:-unknown}/${cpu_family:-unknown}/${cpu_model_id:-unknown}." >&2
+  case "$cpu_vendor" in
+    GenuineIntel | AuthenticAMD) ;;
+    *)
+      echo "::error::$x86_cpu_baseline guest has unsupported CPU vendor ${cpu_vendor:-unknown}." >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$cpu_family" != "6" || "$cpu_model_id" != "60" ]]; then
+    echo "::error::Expected $x86_cpu_baseline CPUID family/model 6/60, got ${cpu_family:-unknown}/${cpu_model_id:-unknown} from $cpu_vendor." >&2
     exit 1
   fi
   for required_flag in xsave avx avx2; do
@@ -153,5 +159,5 @@ if [[ "$guest_arch" == "x86_64" ]]; then
     fi
   done
 
-  echo "x86 CPU: $cpu_model_name ($x86_cpu_baseline, AVX/AVX2 enabled, AVX-512 disabled)"
+  echo "x86 CPU: $cpu_vendor $cpu_model_name ($x86_cpu_baseline, AVX/AVX2 enabled, AVX-512 disabled)"
 fi

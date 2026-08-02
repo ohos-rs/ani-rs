@@ -29,6 +29,8 @@ jobs:
         run: |
           rustup default stable
           rustup component add rustfmt clippy
+      - name: Validate QEMU guest CPU verifier
+        run: tests/qemu/verify_ohos_qemu_guest.sh
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint all features and targets
