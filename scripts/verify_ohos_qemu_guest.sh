@@ -4,6 +4,8 @@ set -euo pipefail
 hdc_target="${HDC_TARGET:-}"
 expected_api_level="${OHOS_QEMU_EXPECTED_API_LEVEL:-26}"
 expected_kernel="${OHOS_QEMU_EXPECTED_KERNEL:-6.6.101}"
+guest_arch="${OHOS_QEMU_GUEST_ARCH:-}"
+x86_cpu_baseline="${OHOS_QEMU_X86_CPU_MODEL:-Haswell-v2}"
 
 if [[ -z "$hdc_target" ]]; then
   echo "HDC_TARGET is required" >&2
@@ -86,4 +88,76 @@ fi
 if [[ "$kernel" != "$expected_kernel" ]]; then
   echo "::error::Expected OpenHarmony kernel $expected_kernel, got $kernel." >&2
   exit 1
+fi
+
+if [[ "$guest_arch" == "x86_64" ]]; then
+  if [[ "$x86_cpu_baseline" != "Haswell-v2" ]]; then
+    echo "::error::Unsupported x86_64 CPU baseline: $x86_cpu_baseline." >&2
+    exit 2
+  fi
+
+  cpuinfo="$(
+    "$hdc_bin" -t "$hdc_target" shell cat /proc/cpuinfo | tr -d '\r'
+  )"
+  cpu_vendor="$(
+    awk -F: '/^vendor_id[[:space:]]*:/ {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }' <<<"$cpuinfo"
+  )"
+  cpu_family="$(
+    awk -F: '/^cpu family[[:space:]]*:/ {
+      gsub(/[[:space:]]/, "", $2)
+      print $2
+      exit
+    }' <<<"$cpuinfo"
+  )"
+  cpu_model_id="$(
+    awk -F: '/^model[[:space:]]*:/ {
+      gsub(/[[:space:]]/, "", $2)
+      print $2
+      exit
+    }' <<<"$cpuinfo"
+  )"
+  cpu_model_name="$(
+    awk -F: '/^model name[[:space:]]*:/ {
+      sub(/^[^:]*:[[:space:]]*/, "")
+      print
+      exit
+    }' <<<"$cpuinfo"
+  )"
+  cpu_flags="$(
+    awk -F: '/^flags[[:space:]]*:/ {
+      sub(/^[^:]*:[[:space:]]*/, "")
+      print
+      exit
+    }' <<<"$cpuinfo"
+  )"
+
+  case "$cpu_vendor" in
+    GenuineIntel | AuthenticAMD) ;;
+    *)
+      echo "::error::$x86_cpu_baseline guest has unsupported CPU vendor ${cpu_vendor:-unknown}." >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$cpu_family" != "6" || "$cpu_model_id" != "60" ]]; then
+    echo "::error::Expected $x86_cpu_baseline CPUID family/model 6/60, got ${cpu_family:-unknown}/${cpu_model_id:-unknown} from $cpu_vendor." >&2
+    exit 1
+  fi
+  for required_flag in xsave avx avx2; do
+    if [[ " $cpu_flags " != *" $required_flag "* ]]; then
+      echo "::error::$x86_cpu_baseline guest CPU is missing required flag $required_flag." >&2
+      exit 1
+    fi
+  done
+  for cpu_flag in $cpu_flags; do
+    if [[ "$cpu_flag" == avx512* ]]; then
+      echo "::error::$x86_cpu_baseline guest unexpectedly exposes $cpu_flag." >&2
+      exit 1
+    fi
+  done
+
+  echo "x86 CPU: $cpu_vendor $cpu_model_name ($x86_cpu_baseline, AVX/AVX2 enabled, AVX-512 disabled)"
 fi
