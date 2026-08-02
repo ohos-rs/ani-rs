@@ -18,6 +18,7 @@ case_timeout="${OHOS_QEMU_CASE_TIMEOUT:-45}"
 case_attempts="${OHOS_QEMU_CASE_ATTEMPTS:-3}"
 hdc_timeout="${OHOS_QEMU_HDC_TIMEOUT:-60}"
 hdc_runtime_timeout="${OHOS_QEMU_HDC_RUNTIME_TIMEOUT:-}"
+hilog_poll_attempts="${OHOS_QEMU_HILOG_POLL_ATTEMPTS:-25}"
 package_filter="${OHOS_QEMU_PACKAGE_FILTER:-}"
 runner_asan="${OHOS_QEMU_RUNNER_ASAN:-0}"
 rust_asan="${OHOS_QEMU_RUST_ASAN:-0}"
@@ -32,7 +33,8 @@ for numeric in \
   "$memory_sample" \
   "$case_timeout" \
   "$case_attempts" \
-  "$hdc_timeout"; do
+  "$hdc_timeout" \
+  "$hilog_poll_attempts"; do
   if [[ ! "$numeric" =~ ^[0-9]+$ ]]; then
     echo "QEMU iteration, attempt, and timeout values must be non-negative integers" >&2
     exit 2
@@ -62,7 +64,8 @@ if [[ -z "$hdc_runtime_timeout" ]]; then
   hdc_runtime_timeout=$((case_timeout + 30))
 fi
 if [[ "$case_timeout" == "0" || "$case_attempts" == "0" || \
-  "$hdc_timeout" == "0" || "$hdc_runtime_timeout" == "0" ]]; then
+  "$hdc_timeout" == "0" || "$hdc_runtime_timeout" == "0" || \
+  "$hilog_poll_attempts" == "0" ]]; then
   echo "QEMU case, attempt, and HDC timeout values must be greater than zero" >&2
   exit 2
 fi
@@ -211,6 +214,53 @@ run_with_timeout() {
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
   return "$status"
+}
+
+read_filtered_hilog() {
+  local output_file="$1"
+  local filter='\[arkvm\]|\[ASSERT PASS\]|\[ASSERT FAIL\]|\[QEMU ERROR\]'
+
+  run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" shell \
+    "hilog -x | grep -E '$filter'" >"$output_file" 2>&1 || true
+}
+
+wait_for_hilog_clear() {
+  local output_file="$1"
+  local empty_reads=0
+  local poll
+
+  hilog_clear_polls=0
+  for ((poll = 1; poll <= hilog_poll_attempts; poll += 1)); do
+    hilog_clear_polls="$poll"
+    read_filtered_hilog "$output_file"
+    if [[ ! -s "$output_file" ]]; then
+      ((empty_reads += 1))
+      if ((empty_reads >= 2)); then
+        return 0
+      fi
+    else
+      empty_reads=0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+wait_for_hilog_completion() {
+  local output_file="$1"
+  local package="$2"
+  local poll
+
+  hilog_completion_polls=0
+  for ((poll = 1; poll <= hilog_poll_attempts; poll += 1)); do
+    hilog_completion_polls="$poll"
+    read_filtered_hilog "$output_file"
+    if grep -Fq "[arkvm] smoke done: $package" "$output_file"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
 }
 
 target_connected() {
@@ -406,22 +456,67 @@ while IFS= read -r cargo_toml; do
   elapsed_us=-1
   per_iteration_us=-1
   performance_status=FAIL
+  failure_reason="runtime was not attempted"
   for ((attempt = 1; attempt <= case_attempts; attempt += 1)); do
-    run_with_timeout "$hdc_timeout" \
-      "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null
-    case_runtime_env="$runner_runtime_env ANI_QEMU_DESTRUCTOR_LIBRARY=$remote_root/lib${base}.so"
-    set +e
-    run_with_timeout "$hdc_runtime_timeout" "$hdc_bin" -t "$hdc_target" shell \
-      "$case_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root" \
-      >"$run_log" 2>&1
-    device_exit=$?
-    set -e
-    printf 'ANI_HDC_SHELL_EXIT=%s\n' "$device_exit" >>"$run_log"
-    run_with_timeout "$hdc_timeout" "$hdc_bin" -t "$hdc_target" shell \
-      "hilog -x | grep -E '\\[arkvm\\]|\\[ASSERT PASS\\]|\\[ASSERT FAIL\\]|\\[QEMU ERROR\\]'" \
-      >"$hilog_file" 2>&1 || true
-    cp "$run_log" "$case_dir/runtime.attempt-$attempt.log"
-    cp "$hilog_file" "$case_dir/hilog.attempt-$attempt.log"
+    attempt_ok=0
+    runner_completed=0
+    hilog_completed=0
+    device_exit=-1
+    remote_exit=""
+    hilog_clear_polls=0
+    hilog_completion_polls=0
+    failure_reason=""
+    : >"$run_log"
+    : >"$hilog_file"
+
+    if ! run_with_timeout "$hdc_timeout" \
+      "$hdc_bin" -t "$hdc_target" shell hilog -r >/dev/null 2>&1; then
+      failure_reason="hilog reset command failed"
+    elif ! wait_for_hilog_clear "$hilog_file"; then
+      failure_reason="hilog reset did not reach an empty state after $hilog_poll_attempts polls"
+    else
+      case_runtime_env="$runner_runtime_env ANI_QEMU_DESTRUCTOR_LIBRARY=$remote_root/lib${base}.so"
+      remote_command="$case_runtime_env ANI_TEST_MODULE_NAME=arkvm_test LD_LIBRARY_PATH=/system/lib64:$remote_root timeout -k 5 $case_timeout $remote_root/ani_abc_runner $remote_root/ohos_qemu_abc_launcher.abc $remote_root/arkvm_test.abc arkvm_test.ETSGLOBAL main $remote_root; ani_remote_exit=\$?; printf '\\nANI_REMOTE_EXIT=%s\\n' \"\$ani_remote_exit\"; exit \"\$ani_remote_exit\""
+      device_exit=0
+      run_with_timeout "$hdc_runtime_timeout" "$hdc_bin" -t "$hdc_target" shell \
+        "$remote_command" >"$run_log" 2>&1 || device_exit=$?
+      printf 'ANI_HDC_SHELL_EXIT=%s\n' "$device_exit" >>"$run_log"
+      remote_exit="$(
+        awk -F= '/^ANI_REMOTE_EXIT=/ { value=$2 } END {
+          if (value != "") print value
+        }' "$run_log" | tr -d '\r[:space:]'
+      )"
+
+      if [[ "$remote_exit" =~ ^[0-9]+$ ]]; then
+        if ((remote_exit == 124)); then
+          failure_reason="runtime timed out after $case_timeout seconds (status 124)"
+        elif ((remote_exit >= 128)); then
+          failure_reason="runtime process terminated by signal $((remote_exit - 128)) (status $remote_exit)"
+        elif ((remote_exit != 0)); then
+          failure_reason="runtime process exited with status $remote_exit"
+        elif ((device_exit != 0)); then
+          failure_reason="HDC shell exited with status $device_exit after the runtime completed"
+        elif ! grep -Fq 'ANI_ABC_RUNNER_OK' "$run_log"; then
+          failure_reason="runtime exited cleanly without ANI_ABC_RUNNER_OK"
+        else
+          runner_completed=1
+        fi
+      elif ((device_exit != 0)); then
+        failure_reason="HDC shell exited with status $device_exit before reporting the runtime status"
+      else
+        failure_reason="runtime exit status marker is missing"
+      fi
+
+      if ((runner_completed == 1)); then
+        if wait_for_hilog_completion "$hilog_file" "$package"; then
+          hilog_completed=1
+        else
+          failure_reason="runtime completed, but hilog completion was not visible after $hilog_poll_attempts polls"
+        fi
+      else
+        read_filtered_hilog "$hilog_file"
+      fi
+    fi
 
     assert_pass="$(awk '/\[ASSERT PASS\]/{count += 1} END{print count + 0}' "$hilog_file")"
     assert_fail="$(awk '/\[ASSERT FAIL\]/{count += 1} END{print count + 0}' "$hilog_file")"
@@ -452,18 +547,37 @@ while IFS= read -r cargo_toml; do
         memory_status=FAIL
       fi
     fi
-    if grep -q 'ANI_ABC_RUNNER_OK' "$run_log" &&
-      grep -q '\[arkvm\] smoke done:' "$hilog_file" &&
-      [[ "$assert_fail" == "0" ]] &&
-      { [[ "$package" != "ani-example-init-lifecycle" ]] ||
-        grep -q 'ANI_FINALIZER_OK count=1' "$run_log"; } &&
-      [[ "$memory_status" != "FAIL" ]] &&
-      [[ "$performance_status" != "FAIL" ]]; then
+    if [[ -z "$failure_reason" && "$runner_completed" != "1" ]]; then
+      failure_reason="runtime completion protocol failed"
+    elif [[ -z "$failure_reason" && "$hilog_completed" != "1" ]]; then
+      failure_reason="runtime completed, but hilog completion is missing"
+    elif [[ -z "$failure_reason" && "$assert_fail" != "0" ]]; then
+      failure_reason="$assert_fail ArkTS assertions failed"
+    elif [[ -z "$failure_reason" && \
+      "$package" == "ani-example-init-lifecycle" ]] &&
+      ! grep -Fq 'ANI_FINALIZER_OK count=1' "$run_log"; then
+      failure_reason="lifecycle finalizer did not complete exactly once"
+    elif [[ -z "$failure_reason" && "$memory_status" == "FAIL" ]]; then
+      failure_reason="memory gate failed"
+    elif [[ -z "$failure_reason" && "$performance_status" == "FAIL" ]]; then
+      failure_reason="performance sample or gate failed"
+    elif [[ -z "$failure_reason" ]]; then
+      attempt_ok=1
+    fi
+
+    printf 'ANI_HILOG_CLEAR_POLLS=%s\n' "$hilog_clear_polls" >>"$run_log"
+    printf 'ANI_HILOG_COMPLETION_POLLS=%s\n' "$hilog_completion_polls" >>"$run_log"
+    printf 'ANI_RUNTIME_CLASSIFICATION=%s\n' \
+      "${failure_reason:-success}" >>"$run_log"
+    cp "$run_log" "$case_dir/runtime.attempt-$attempt.log"
+    cp "$hilog_file" "$case_dir/hilog.attempt-$attempt.log"
+
+    if ((attempt_ok == 1)); then
       runtime_ok=1
       break
     fi
     if ((attempt < case_attempts)); then
-      echo "RETRY $package: QEMU runtime attempt $attempt/$case_attempts"
+      echo "RETRY $package: QEMU runtime attempt $attempt/$case_attempts ($failure_reason)"
       sleep 1
     fi
   done
@@ -476,7 +590,7 @@ while IFS= read -r cargo_toml; do
   else
     printf '%s\t%s\tOK\tOK\tOK\tFAIL\t%s\t%s\tFAIL\n' \
       "$guest_arch" "$package" "$assert_pass" "$assert_fail" >> "$report"
-    echo "FAIL $package: QEMU runtime ($assert_pass pass, $assert_fail fail)"
+    echo "FAIL $package: QEMU runtime: $failure_reason ($assert_pass pass, $assert_fail fail)"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$guest_arch" "$package" "$runner_iterations" "$start_pss" "$end_pss" \

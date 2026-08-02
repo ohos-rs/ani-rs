@@ -63,6 +63,9 @@ jobs:
       OHOS_QEMU_LSAN: ${{ inputs.lsan && '1' || '0' }}
       OHOS_QEMU_RUST_ASAN: ${{ inputs.rust_asan && '1' || '0' }}
       OHOS_QEMU_HDC_TIMEOUT: 60
+      # Haswell-v2 is a cross-host AVX/AVX2 baseline without AVX-512. Do not
+      # let `-cpu max` expose a different guest CPU on Intel and AMD runners.
+      OHOS_QEMU_X86_CPU_MODEL: Haswell-v2
       # The pinned v20260731 release is the JIT-fixed baseline. Correctness,
       # lifecycle, memory, and performance gates all exercise Ark JIT.
       OHOS_QEMU_DISABLE_JIT: 0
@@ -227,6 +230,17 @@ jobs:
             *) launcher="$QEMU_PACKAGE_ROOT/launch/linux.sh" ;;
           esac
           if [[ "$OHOS_QEMU_GUEST_ARCH" == x86_64 ]]; then
+            source_launcher="$QEMU_PACKAGE_ROOT/launch/qemu_run.sh"
+            launcher="$RUNNER_TEMP/qemu-run-x86_64.sh"
+            if [[ "$(grep -Fc -- '-cpu max \' "$source_launcher")" != 1 ]]; then
+              echo "x86_64 QEMU launcher no longer has the expected -cpu max argument" >&2
+              exit 1
+            fi
+            sed 's/-cpu max \\/-cpu "${OHOS_QEMU_X86_CPU_MODEL}" \\/' \
+              "$source_launcher" > "$launcher"
+            chmod +x "$launcher"
+            grep -Fq -- '-cpu "${OHOS_QEMU_X86_CPU_MODEL}" \' "$launcher"
+            export OHOS_IMG="$QEMU_PACKAGE_ROOT/images"
             qemu_accel=kvm
             wait_attempts=300
             wait_interval=2
