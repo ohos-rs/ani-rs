@@ -73,7 +73,7 @@ description: 按使用场景查找可以直接运行和修改的 ani-rs 示例�
 | `reference` | `Ref<T>` 与 `GlobalRef` |
 | `reference_scope` | local reference scope |
 | `weak_ref` | 弱引用和 upgrade |
-| `async_wrapper` | async fn、Promise、Deferred 与引用托管 |
+| `async_wrapper` | async fn、Promise、Deferred、引用托管与 tokio-stream |
 | `error` | `Result`、`Status` 和异常 |
 | `wrap_native_ptr` | 原生指针包装与显式释放 |
 

@@ -82,7 +82,7 @@ fn sum3(a: i32, b: i32, c: i32) -> i32 { a + b + c }
 ani = { git = "https://github.com/ohos-rs/ani-rs", features = ["async"] }
 ```
 
-使用 `tokio::time`、`tokio::fs` 等模块时，还要开启对应 `ani` passthrough feature 和 Tokio 自身 feature。
+使用 `tokio::time`、`tokio::fs`、`tokio_stream::StreamExt` 等模块时，还要开启对应 `ani` passthrough feature（`tokio_time`、`tokio_fs`、`tokio_stream`）以及 Tokio / tokio-stream 自身 feature。
 
 只启用 `async-runtime` 时还必须在第一次调用前 `register_async_runtime(...)`；它是完全自定义 backend 模式，不会自动选择 Tokio。
 

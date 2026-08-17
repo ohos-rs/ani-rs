@@ -28,6 +28,7 @@ description: 按需启用 ani-rs 的错误集成、异步运行时和 Tokio 功�
 | `tokio_sync` | 启用 Tokio 同步原语 |
 | `tokio_test_util` | 启用 Tokio 测试工具 |
 | `tokio_time` | 启用 Tokio 时间 API |
+| `tokio_stream` | 启用 `tokio-stream`，并把 `Stream` 接到 `AsyncStream` |
 
 ## 同步模块
 
@@ -45,7 +46,7 @@ ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 [dependencies]
 ani = {
   git = "https://github.com/ohos-rs/ani-rs",
-  features = ["async", "tokio_fs", "tokio_time"]
+  features = ["async", "tokio_fs", "tokio_time", "tokio_stream"]
 }
 ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 tokio = {
@@ -55,7 +56,7 @@ tokio = {
 }
 ```
 
-`ani` 的 Tokio feature 会透传给内部 Tokio 依赖。你的 crate 如果直接调用 `tokio::fs` 或 `tokio::time`，仍应在自己的 `tokio` 依赖中开启相同模块。
+`ani` 的 Tokio feature 会透传给内部 Tokio 依赖。你的 crate 如果直接调用 `tokio::fs` 或 `tokio::time`，仍应在自己的 `tokio` 依赖中开启相同模块。`tokio_stream` 额外引入 `tokio-stream`，并重新导出为 `ani::tokio_stream`，因此可以直接 `use ani::tokio_stream::StreamExt`。
 
 已有平台线程池或自有执行器时，只开启 `async-runtime`，并在首次异步调用前 `register_async_runtime(...)`。生成宏、Task 和 TSFN 不要求 backend 是 Tokio。
 
@@ -89,6 +90,7 @@ serde = { version = "1", features = ["derive"] }
 - 只有 async Promise：使用 `async`。
 - 完全自定义执行器：只使用 `async-runtime`。
 - 使用具体 Tokio 模块：在 `async` 之外增加对应 `tokio_*`。
+- 把 `tokio-stream::Stream` 接到 Async Iterator：增加 `tokio_stream`。
 - 库代码希望控制体积与依赖：不要直接使用 `tokio_full`。
 - 已有 anyhow 错误链：增加 `error_anyhow`。
 - 需要 serde 消息或结构化 enum：增加 `serde-json`。

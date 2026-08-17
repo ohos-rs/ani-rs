@@ -33,7 +33,7 @@ ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 tokio = { version = "1", default-features = false, features = ["time"] }
 ```
 
-`async-runtime` 只提供执行器无关 SPI；`async` 额外选择内置 Tokio backend。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync` 等 feature。
+`async-runtime` 只提供执行器无关 SPI；`async` 额外选择内置 Tokio backend。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync`、`tokio_stream` 等 feature。
 
 :::caution
 仅启用 `async-runtime` 时，应用必须在第一次异步调用前注册 `AsyncRuntime`；否则 Promise 以结构化错误 reject。自定义 runtime 不需要链接 Tokio。
@@ -263,6 +263,32 @@ let promise = stream.next_promise(env)?;
 队列有界并提供背压；多个并发 `next()` 按注册顺序完成。生成的 iterator 还提供 `returnIterator()` 和 `throwIterator(reason)`：前者取消生产者并完成所有 waiter，后者保留原始 ArkTS rejection 对象并拒绝 waiter。RuntimeDomain shutdown 会走同一取消路径。
 
 二进制流可使用 `ohos_byte_stream_channel[_with_error]`，得到 `OhosReadableSource` 与 `OhosWritableSink`。API 23+ 的 `@ohos.util.stream.Readable/Writable` 子类在 ETS 线程调用 pull/write；Rust 端保留 bounded queue、drain、close、error、背压和取消语义。
+
+## Tokio Stream
+
+开启 `tokio_stream` 后，可以把任意 `tokio_stream::Stream<Item = Result<T, E>>` 泵进现有的有界 `AsyncStream`，也可以把 pull stream 当成 `Stream` 使用 `StreamExt`：
+
+```rust
+use ani::prelude::*;
+use ani::tokio_stream::StreamExt;
+
+let values = ani::tokio::spawn_stream(
+    tokio_stream::iter([Ok(1), Ok(2), Ok(3)]),
+    8,
+)?;
+
+let first = values.recv().await?;
+let rest = values
+    .into_tokio_stream()
+    .collect::<Result<Vec<_>>>()
+    .await?;
+```
+
+`spawn_stream_factory` 在 runtime 线程上构建 `!Send` stream。生产者也可以对已有 `StreamSender` 调用 `send_from_stream`，用异步背压转发，而不要在 Tokio worker 上调用会阻塞的 `send()`。`spawn_ohos_readable_from_stream` 把字节 `Stream` 接到 `OhosReadableSource`。
+
+`examples/async_wrapper` 在真实 OpenHarmony QEMU guest 上验证这些路径：`runtime_leak_checkpoint()` 会先跑 `tokio_stream_guest_gate()`，覆盖 `spawn_stream` + `StreamExt` 回读、容量 1 的 `send_from_stream` 背压、`spawn_ohos_readable_from_stream` 字节流，以及 `spawn_stream_with_handle` 取消。现有 `arkvm_test.abc` 夹具会调用该 checkpoint，因此不需要先换一套 ABC 也能在 guest 上拦住回归。
+
+`tokio_stream` 只引入 `tokio-stream` crate，不会自动选择内置 Tokio backend；仍需 `async` / `tokio_rt`，或自行 `register_async_runtime(...)`。
 
 :::note
 上游 QEMU `v20260731` 使用的 OpenHarmony ArkTS 1.2 编译器不接受 class 中的 `[Symbol.asyncIterator]`、`return()` 和 `throw()` 源码声明，因此生成接口使用可编译的 `asyncIterator()`、`returnIterator()`、`throwIterator()` 名称。`next`、背压、return/throw、错误和析构生命周期语义完整；如果平台后续开放标准方法名，生成层可以在不修改 Rust stream API 的情况下映射到标准协议名。

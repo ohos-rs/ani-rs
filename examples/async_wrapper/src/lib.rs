@@ -1,10 +1,13 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
+use ani::async_runtime::{RuntimeCancelReason, RuntimeTaskHandle};
 use ani::conversions::{
-    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, ManagedResource, PromiseRaw,
-    RefContainer, StreamSender, ThreadsafeFunction,
+    spawn_ohos_readable_from_stream, spawn_stream, spawn_stream_with_handle, AsyncIteratorValue,
+    AsyncStream, AsyncTask, Deferred, ManagedResource, PromiseRaw, RefContainer, StreamSender,
+    ThreadsafeFunction,
 };
 use ani::prelude::*;
+use ani::tokio_stream::{self, StreamExt};
 use ani_derive::{ani, AniClass};
 use std::collections::BTreeMap;
 use std::sync::{
@@ -194,6 +197,259 @@ pub fn fail_async_iterator(operation: String) -> Result<()> {
             .ok_or_else(|| Error::new(Status::Closing, "CounterAsyncIterator is finished"))?
             .send_error(AsyncDomainError { operation })
     })?
+}
+
+// Tokio-stream helpers used by the QEMU guest gate. New `#[ani]` exports would
+// require a matching arkvm_test.abc fixture; `runtime_leak_checkpoint`
+// therefore runs these paths through the existing ABC.
+
+fn delayed_int_stream(
+    values: Vec<i32>,
+) -> impl ani::tokio_stream::Stream<Item = Result<i32>> + Send + 'static {
+    tokio_stream::iter(values).then(|value| async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        Ok(value)
+    })
+}
+
+async fn join2<A, B, RA, RB>(left: A, right: B) -> (RA, RB)
+where
+    A: std::future::Future<Output = RA>,
+    B: std::future::Future<Output = RB>,
+{
+    let mut left = std::pin::pin!(left);
+    let mut right = std::pin::pin!(right);
+    let mut left_out = None;
+    let mut right_out = None;
+    std::future::poll_fn(|cx| {
+        if left_out.is_none() {
+            if let std::task::Poll::Ready(value) = left.as_mut().poll(cx) {
+                left_out = Some(value);
+            }
+        }
+        if right_out.is_none() {
+            if let std::task::Poll::Ready(value) = right.as_mut().poll(cx) {
+                right_out = Some(value);
+            }
+        }
+        if left_out.is_some() && right_out.is_some() {
+            std::task::Poll::Ready((left_out.take().unwrap(), right_out.take().unwrap()))
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await
+}
+
+struct TokioStreamIteratorState {
+    stream: AsyncStream<i32>,
+    _handle: RuntimeTaskHandle,
+}
+
+fn tokio_stream_iterator_resource(
+    env: &Env<'_>,
+    this: &AniObject<'_>,
+) -> Result<ManagedResource<TokioStreamIteratorState>> {
+    ManagedResource::from_raw(env.get_field_by_name_long(this, "__ani_resource")?)
+}
+
+fn bind_tokio_stream_iterator(
+    env: &Env<'_>,
+    this: &AniObject<'_>,
+    stream: AsyncStream<i32>,
+    handle: RuntimeTaskHandle,
+) -> Result<()> {
+    let resource = ManagedResource::new(TokioStreamIteratorState {
+        stream,
+        _handle: handle,
+    })?;
+    env.set_field_by_name_long(this, "__ani_resource", resource.as_raw())?;
+    env.set_field_by_name_boolean(this, "__ani_closed", false)?;
+    Ok(())
+}
+
+pub fn tokio_count_async_iterator_new(
+    env: &Env<'_>,
+    this: &AniObject<'_>,
+    count: i32,
+) -> Result<()> {
+    let count = count.max(0);
+    let (stream, handle) = spawn_stream_with_handle(delayed_int_stream((1..=count).collect()), 2)?;
+    bind_tokio_stream_iterator(env, this, stream, handle)
+}
+
+pub fn tokio_count_async_iterator_next<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.next_promise(env))??;
+    let exhausted = resource.with(|state| state.stream.is_exhausted())?;
+    if exhausted {
+        let _ = resource.close()?;
+        env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    }
+    Ok(promise)
+}
+
+pub fn tokio_count_async_iterator_return<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.return_promise(env))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+pub fn tokio_count_async_iterator_throw<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+    reason: AniRef<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    let error = PreservedArktsError::new(env, &reason)?;
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::reject_with_payload(env, error);
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.throw_promise(env, error))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+pub fn tokio_fail_async_iterator_new(env: &Env<'_>, this: &AniObject<'_>) -> Result<()> {
+    let source = tokio_stream::iter([
+        Ok(7),
+        Err(Error::new(Status::GenericFailure, "tokio-stream-boom").with_code(74001)),
+    ]);
+    let (stream, handle) = spawn_stream_with_handle(source, 2)?;
+    bind_tokio_stream_iterator(env, this, stream, handle)
+}
+
+pub fn tokio_fail_async_iterator_next<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.next_promise(env))??;
+    let exhausted = resource.with(|state| state.stream.is_exhausted())?;
+    if exhausted {
+        let _ = resource.close()?;
+        env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    }
+    Ok(promise)
+}
+
+pub fn tokio_fail_async_iterator_return<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::resolve_value(env, AsyncIteratorValue::<i32>(None));
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.return_promise(env))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+pub fn tokio_fail_async_iterator_throw<'env>(
+    env: &Env<'env>,
+    this: &AniObject<'_>,
+    reason: AniRef<'_>,
+) -> Result<PromiseRaw<'env, AsyncIteratorValue<i32>>> {
+    let error = PreservedArktsError::new(env, &reason)?;
+    if env.get_field_by_name_boolean(this, "__ani_closed")? {
+        return PromiseRaw::reject_with_payload(env, error);
+    }
+    let resource = tokio_stream_iterator_resource(env, this)?;
+    let promise = resource.with(|state| state.stream.throw_promise(env, error))??;
+    let _ = resource.close()?;
+    env.set_field_by_name_boolean(this, "__ani_closed", true)?;
+    Ok(promise)
+}
+
+/// Pump a delayed tokio-stream and collect it back through StreamExt.
+pub fn tokio_stream_collect_sum(env: &Env<'_>, count: i32) -> Result<PromiseRaw<'static, i32>> {
+    let stream = spawn_stream(delayed_int_stream((1..=count.max(0)).collect()), 2)?;
+    ani::tokio::spawn_future_factory(env, move || async move {
+        let mut values = stream.into_tokio_stream();
+        let mut sum = 0;
+        while let Some(item) = values.next().await {
+            sum += item?;
+        }
+        Ok(sum)
+    })
+    .map(PromiseRaw::into_static)
+}
+
+/// Forward a tokio-stream into a capacity-1 sender and collect with recv().
+pub fn tokio_stream_send_from_sum(env: &Env<'_>, count: i32) -> Result<PromiseRaw<'static, i32>> {
+    let (sender, stream) = ani::conversions::stream_channel(1)?;
+    let source = delayed_int_stream((1..=count.max(0)).collect());
+    ani::tokio::spawn_future_factory(env, move || async move {
+        let pump = async move { sender.send_from_stream(source).await };
+        let collect = async move {
+            let mut sum = 0;
+            while let Some(item) = stream.recv().await? {
+                sum += item;
+            }
+            Ok::<_, Error>(sum)
+        };
+        let (pump_result, values) = join2(pump, collect).await;
+        pump_result?;
+        values
+    })
+    .map(PromiseRaw::into_static)
+}
+
+/// Cancel a pending tokio-stream pump and surface the cancellation to ArkTS.
+pub fn tokio_stream_cancel_pending(env: &Env<'_>) -> Result<PromiseRaw<'static, i32>> {
+    let (stream, handle) =
+        spawn_stream_with_handle(ani::tokio_stream::pending::<Result<i32>>(), 1)?;
+    handle.cancel(RuntimeCancelReason::Explicit("guest-cancel".into()));
+    ani::tokio::spawn_future_factory(env, move || async move {
+        match stream.recv().await {
+            Ok(Some(_)) => Err(Error::new(
+                Status::GenericFailure,
+                "cancelled tokio-stream produced an item",
+            )),
+            Ok(None) => Err(Error::new(
+                Status::GenericFailure,
+                "cancelled tokio-stream ended without an error",
+            )),
+            Err(error) => Err(error),
+        }
+    })
+    .map(PromiseRaw::into_static)
+}
+
+/// Pump byte chunks through the OpenHarmony readable adapter.
+pub fn tokio_stream_bytes_total(env: &Env<'_>) -> Result<PromiseRaw<'static, i32>> {
+    let source = tokio_stream::iter([Ok::<Vec<u8>, Error>(vec![1_u8, 2, 3]), Ok(vec![4, 5])]);
+    let readable = spawn_ohos_readable_from_stream(source, 2)?;
+    ani::tokio::spawn_future_factory(env, move || async move {
+        let mut total = 0i32;
+        while let Some(chunk) = readable.recv().await? {
+            total += i32::try_from(chunk.len()).map_err(|_| {
+                Error::new(Status::OutOfRange, "byte stream chunk is larger than i32")
+            })?;
+        }
+        Ok(total)
+    })
+    .map(PromiseRaw::into_static)
 }
 
 #[derive(Debug, Default, PartialEq, Eq, AniClass)]
@@ -688,14 +944,106 @@ pub fn runtime_kernel_shutdown_and_restart() -> Result<bool> {
 
 static QEMU_LEAK_BASELINE: std::sync::Mutex<Option<RuntimeMetrics>> = std::sync::Mutex::new(None);
 
+fn tokio_stream_guest_gate() -> Result<i32> {
+    ani::tokio::block_on_future_result(async {
+        let collected = {
+            let stream = spawn_stream(delayed_int_stream((1..=5).collect()), 2)?;
+            let mut values = stream.into_tokio_stream();
+            let mut sum = 0;
+            while let Some(item) = values.next().await {
+                sum += item?;
+            }
+            sum
+        };
+        if collected != 15 {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!("tokio-stream collect sum={collected}, expected 15"),
+            ));
+        }
+
+        let forwarded = {
+            let (sender, stream) = ani::conversions::stream_channel(1)?;
+            let source = delayed_int_stream((1..=4).collect());
+            let pump = async move { sender.send_from_stream(source).await };
+            let collect = async move {
+                let mut sum = 0;
+                while let Some(item) = stream.recv().await? {
+                    sum += item;
+                }
+                Ok::<_, Error>(sum)
+            };
+            let (pump_result, sum) = join2(pump, collect).await;
+            pump_result?;
+            sum?
+        };
+        if forwarded != 10 {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!("tokio-stream send_from sum={forwarded}, expected 10"),
+            ));
+        }
+
+        let bytes = {
+            let source =
+                tokio_stream::iter([Ok::<Vec<u8>, Error>(vec![1_u8, 2, 3]), Ok(vec![4, 5])]);
+            let readable = spawn_ohos_readable_from_stream(source, 2)?;
+            let mut total = 0i32;
+            while let Some(chunk) = readable.recv().await? {
+                total += i32::try_from(chunk.len()).map_err(|_| {
+                    Error::new(Status::OutOfRange, "byte stream chunk is larger than i32")
+                })?;
+            }
+            total
+        };
+        if bytes != 5 {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!("tokio-stream bytes total={bytes}, expected 5"),
+            ));
+        }
+
+        let (stream, handle) =
+            spawn_stream_with_handle(ani::tokio_stream::pending::<Result<i32>>(), 1)?;
+        handle.cancel(RuntimeCancelReason::Explicit("guest-cancel".into()));
+        match stream.recv().await {
+            Err(_) => {}
+            Ok(other) => {
+                return Err(Error::new(
+                    Status::GenericFailure,
+                    format!("cancelled tokio-stream settled as {other:?}"),
+                ));
+            }
+        }
+
+        Ok(collected + forwarded + bytes)
+    })?
+}
+
 /// Capture a per-scenario runtime ownership baseline inside the real guest.
+///
+/// Also runs the tokio-stream capability gate so existing QEMU ABC fixtures
+/// still exercise spawn_stream, StreamExt collect, send_from_stream, byte
+/// streams, and cancellation on the real OpenHarmony runtime.
 #[ani]
 pub fn runtime_leak_checkpoint() -> Result<()> {
+    let gate = tokio_stream_guest_gate()?;
+    if gate != 30 {
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("tokio-stream guest gate returned {gate}, expected 30"),
+        ));
+    }
     *QEMU_LEAK_BASELINE
         .lock()
         .map_err(|_| Error::new(Status::GenericFailure, "leak baseline lock poisoned"))? =
         Some(runtime_metrics()?);
     Ok(())
+}
+
+/// Explicit guest entry for tokio-stream collect/send/cancel/bytes.
+pub fn tokio_stream_qemu_gate() -> Result<i32> {
+    tokio_stream_guest_gate()
 }
 
 /// Expose the tracked global-reference count to the real-guest stress suite.
@@ -805,6 +1153,27 @@ mod tests {
                 .expect("runtime should execute")
                 .expect("future should succeed");
         assert_eq!(echoed, "sig:value");
+    }
+
+    #[test]
+    fn tokio_stream_guest_gate_covers_collect_send_bytes_and_cancel() {
+        assert_eq!(tokio_stream_guest_gate().expect("gate should succeed"), 30);
+    }
+
+    #[test]
+    fn tokio_stream_collect_and_send_from_sum() {
+        let collected = ani::tokio::block_on_future_result(async {
+            let stream = spawn_stream(delayed_int_stream((1..=5).collect()), 2).unwrap();
+            let mut values = stream.into_tokio_stream();
+            let mut sum = 0;
+            while let Some(item) = values.next().await {
+                sum += item?;
+            }
+            Ok::<_, Error>(sum)
+        })
+        .expect("runtime should execute")
+        .expect("collect should succeed");
+        assert_eq!(collected, 15);
     }
 
     #[test]
