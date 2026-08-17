@@ -1,8 +1,15 @@
 //! Bounded, non-blocking pull streams used by ArkTS-facing async iterators.
+//!
+//! [`StreamSender::send_async`] and [`AsyncStream::recv`] are executor-neutral.
+//! Enable `tokio_stream` to pump a `tokio_stream::Stream` into this channel or
+//! consume it with `StreamExt`.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use crate::env::Env;
 use crate::error::{AniErrorPayload, DynAniError, Error, Result, Status};
@@ -154,6 +161,113 @@ where
     }
 }
 
+enum ReadOutcome<T, E> {
+    Immediate {
+        waiter: StreamWaiter<T, E>,
+        settlement: StreamSettlement<T, E>,
+        released_write: Option<StreamWriteWaiter<T>>,
+    },
+    Queued,
+}
+
+enum WriteOutcome<T, E> {
+    Immediate {
+        waiter: StreamWriteWaiter<T>,
+        settlement: StreamWriteSettlement,
+        read_waiter: Option<(StreamWaiter<T, E>, T)>,
+    },
+    Queued,
+}
+
+impl<T, E> StreamInner<T, E> {
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, StreamState<T, E>>> {
+        self.state
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "async stream lock poisoned"))
+    }
+
+    fn read_or_wait(&self, waiter: StreamWaiter<T, E>) -> Result<ReadOutcome<T, E>> {
+        let mut state = self.lock_state()?;
+        if let Some(item) = state.queue.pop_front() {
+            let mut released = state.write_waiters.pop_front();
+            if let Some(waiter) = released.as_mut() {
+                state.queue.push_back(Ok(waiter
+                    .item
+                    .take()
+                    .expect("queued write item is present")));
+            } else {
+                self.space_available.notify_one();
+            }
+            Ok(ReadOutcome::Immediate {
+                waiter,
+                settlement: StreamSettlement::Item(item),
+                released_write: released,
+            })
+        } else if state.closed {
+            Ok(ReadOutcome::Immediate {
+                waiter,
+                settlement: state
+                    .terminal_error
+                    .as_ref()
+                    .map(|error| StreamSettlement::Error(Arc::clone(error)))
+                    .unwrap_or(StreamSettlement::End),
+                released_write: None,
+            })
+        } else {
+            state.waiters.push_back(waiter);
+            Ok(ReadOutcome::Queued)
+        }
+    }
+
+    fn write_or_wait(&self, mut waiter: StreamWriteWaiter<T>) -> Result<WriteOutcome<T, E>> {
+        let mut state = self.lock_state()?;
+        if state.closed {
+            let settlement = state
+                .terminal_error
+                .as_ref()
+                .map(|error| StreamWriteSettlement::Error(Arc::clone(error)))
+                .unwrap_or(StreamWriteSettlement::Closed);
+            Ok(WriteOutcome::Immediate {
+                waiter,
+                settlement,
+                read_waiter: None,
+            })
+        } else if let Some(read_waiter) = state.waiters.pop_front() {
+            let item = waiter.item.take().expect("write waiter item is present");
+            Ok(WriteOutcome::Immediate {
+                waiter,
+                settlement: StreamWriteSettlement::Accepted,
+                read_waiter: Some((read_waiter, item)),
+            })
+        } else if state.queue.len() < self.capacity {
+            let item = waiter.item.take().expect("write waiter item is present");
+            state.queue.push_back(Ok(item));
+            Ok(WriteOutcome::Immediate {
+                waiter,
+                settlement: StreamWriteSettlement::Accepted,
+                read_waiter: None,
+            })
+        } else {
+            state.write_waiters.push_back(waiter);
+            Ok(WriteOutcome::Queued)
+        }
+    }
+
+    fn requeue_unread(&self, item: std::result::Result<T, E>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if let Some(waiter) = state.waiters.pop_front() {
+            drop(state);
+            let _ = waiter.settle(StreamSettlement::Item(item));
+            return;
+        }
+        if !state.closed {
+            state.queue.push_front(item);
+        }
+    }
+}
+
 /// Sending half of a bounded async-iterator channel.
 pub struct StreamSender<T, E = Error> {
     inner: Arc<StreamInner<T, E>>,
@@ -253,7 +367,7 @@ where
         self.inner.ensure_runtime_registration()?;
         let (deferred, promise) = PromiseRaw::deferred(env)?;
         let vm = env.get_vm()?;
-        let mut write_waiter = Some(StreamWriteWaiter {
+        let write_waiter = StreamWriteWaiter {
             item: Some(item),
             settle: Box::new(move |settlement| {
                 vm.with_attached(|env| match settlement {
@@ -272,58 +386,47 @@ where
                 })
             }),
             _metric: StreamWaiterMetric::new(),
-        });
-
-        let (read_waiter, immediate) = {
-            let mut state =
-                self.inner.state.lock().map_err(|_| {
-                    Error::new(Status::GenericFailure, "async stream lock poisoned")
-                })?;
-            if state.closed {
-                let settlement = state
-                    .terminal_error
-                    .as_ref()
-                    .map(|error| StreamWriteSettlement::Error(Arc::clone(error)))
-                    .unwrap_or(StreamWriteSettlement::Closed);
-                (None, Some(settlement))
-            } else if let Some(read_waiter) = state.waiters.pop_front() {
-                (Some(read_waiter), Some(StreamWriteSettlement::Accepted))
-            } else if state.queue.len() < self.inner.capacity {
-                let item = write_waiter
-                    .as_mut()
-                    .and_then(|waiter| waiter.item.take())
-                    .expect("write waiter item is present");
-                state.queue.push_back(Ok(item));
-                (None, Some(StreamWriteSettlement::Accepted))
-            } else {
-                state
-                    .write_waiters
-                    .push_back(write_waiter.take().expect("write waiter is present"));
-                (None, None)
-            }
         };
 
-        if let Some(read_waiter) = read_waiter {
-            let item = write_waiter
-                .as_mut()
-                .and_then(|waiter| waiter.item.take())
-                .expect("direct write item is present");
-            read_waiter.settle(StreamSettlement::Item(Ok(item)))?;
-        }
-        if let Some(settlement) = immediate {
-            write_waiter
-                .take()
-                .expect("immediate write waiter is present")
-                .settle(settlement)?;
+        match self.inner.write_or_wait(write_waiter)? {
+            WriteOutcome::Immediate {
+                waiter,
+                settlement,
+                read_waiter,
+            } => {
+                if let Some((read_waiter, item)) = read_waiter {
+                    read_waiter.settle(StreamSettlement::Item(Ok(item)))?;
+                }
+                waiter.settle(settlement)?;
+            }
+            WriteOutcome::Queued => {}
         }
         Ok(promise)
     }
 
+    /// Send without blocking a worker when the queue is full.
+    ///
+    /// The future stays pending until a reader consumes an item, the stream
+    /// closes, or RuntimeDomain cancellation wins. Dropping the future does
+    /// not cancel a send that has already been queued.
+    pub fn send_async(&self, item: T) -> SendFuture<T, E> {
+        SendFuture {
+            inner: Arc::clone(&self.inner),
+            item: Some(item),
+            shared: None,
+        }
+    }
+
     /// Send an error that will reject the next Promise.
     pub fn send_error(&self, error: E) -> Result<()> {
+        self.close_with_payload(error);
+        Ok(())
+    }
+
+    /// Terminate the stream with an arbitrary structured payload.
+    pub fn close_with_payload(&self, error: impl AniErrorPayload) {
         let error: Arc<DynAniError> = Arc::new(Box::new(error));
         close_stream_with_error(&self.inner, error);
-        Ok(())
     }
 
     /// Close the stream explicitly. Pending `next()` calls resolve as done.
@@ -584,7 +687,7 @@ where
         self.inner.ensure_runtime_registration()?;
         let (deferred, promise) = PromiseRaw::deferred(env)?;
         let vm = env.get_vm()?;
-        let mut waiter = Some(StreamWaiter {
+        let waiter = StreamWaiter {
             settle: Box::new(move |settlement| {
                 vm.with_attached(|env| match settlement {
                     StreamSettlement::Item(Ok(item)) => {
@@ -602,52 +705,32 @@ where
                 })
             }),
             _metric: StreamWaiterMetric::new(),
-        });
-        let (immediate, released_write) = {
-            let mut state =
-                self.inner.state.lock().map_err(|_| {
-                    Error::new(Status::GenericFailure, "async stream lock poisoned")
-                })?;
-            if let Some(item) = state.queue.pop_front() {
-                let mut released = state.write_waiters.pop_front();
-                if let Some(waiter) = released.as_mut() {
-                    state.queue.push_back(Ok(waiter
-                        .item
-                        .take()
-                        .expect("queued write item is present")));
-                } else {
-                    self.inner.space_available.notify_one();
-                }
-                (Some(StreamSettlement::Item(item)), released)
-            } else if state.closed {
-                (
-                    Some(
-                        state
-                            .terminal_error
-                            .as_ref()
-                            .map(|error| StreamSettlement::Error(Arc::clone(error)))
-                            .unwrap_or(StreamSettlement::End),
-                    ),
-                    None,
-                )
-            } else {
-                state
-                    .waiters
-                    .push_back(waiter.take().expect("stream waiter is present"));
-                (None, None)
-            }
         };
-
-        if let Some(write_waiter) = released_write {
-            write_waiter.settle(StreamWriteSettlement::Accepted)?;
-        }
-        if let Some(settlement) = immediate {
-            waiter
-                .take()
-                .expect("stream waiter was not queued")
-                .settle(settlement)?;
+        match self.inner.read_or_wait(waiter)? {
+            ReadOutcome::Immediate {
+                waiter,
+                settlement,
+                released_write,
+            } => {
+                if let Some(write_waiter) = released_write {
+                    write_waiter.settle(StreamWriteSettlement::Accepted)?;
+                }
+                waiter.settle(settlement)?;
+            }
+            ReadOutcome::Queued => {}
         }
         Ok(promise)
+    }
+
+    /// Wait for the next item without occupying a scheduler worker.
+    ///
+    /// `Ok(None)` means every producer finished. Stream errors, `throw()`, and
+    /// runtime cancellation resolve as `Err`.
+    pub fn recv(&self) -> RecvFuture<T, E> {
+        RecvFuture {
+            inner: Arc::clone(&self.inner),
+            shared: None,
+        }
     }
 
     /// Implement AsyncIterator `return()`: stop the producer-facing stream,
@@ -691,6 +774,256 @@ pub fn live_async_stream_count() -> usize {
 /// Number of unresolved async-iterator `next()` Promise waiters.
 pub fn pending_async_stream_waiter_count() -> usize {
     PENDING_STREAM_WAITERS.load(Ordering::Acquire)
+}
+
+fn error_from_payload(payload: &(impl AniErrorPayload + ?Sized)) -> Error {
+    let mut error = Error::new(Status::GenericFailure, payload.ani_message())
+        .with_status_name(payload.ani_status())
+        .with_code(payload.ani_code());
+    payload.visit_ani_metadata(&mut |key, value| {
+        error.metadata.insert(key.to_string(), value.to_string());
+    });
+    payload.visit_ani_properties(&mut |key, value| {
+        error.insert_property(key.to_string(), value.clone());
+    });
+    if let Some(stack) = payload.ani_stack() {
+        error.set_stack(Some(stack.to_string()));
+    }
+    error
+}
+
+fn decode_read_settlement<T, E: AniErrorPayload>(
+    settlement: StreamSettlement<T, E>,
+) -> Result<Option<T>> {
+    match settlement {
+        StreamSettlement::Item(Ok(item)) => Ok(Some(item)),
+        StreamSettlement::Item(Err(error)) => Err(error_from_payload(&error)),
+        StreamSettlement::Error(error) => Err(error_from_payload(error.as_ref())),
+        StreamSettlement::End => Ok(None),
+        StreamSettlement::Cancelled => Err(error_from_payload(
+            crate::async_runtime::runtime_cancellation_error(
+                crate::async_runtime::RuntimeCancelReason::Shutdown,
+            )
+            .as_ref(),
+        )),
+    }
+}
+
+fn decode_write_settlement(settlement: StreamWriteSettlement) -> Result<()> {
+    match settlement {
+        StreamWriteSettlement::Accepted => Ok(()),
+        StreamWriteSettlement::Error(error) => Err(error_from_payload(error.as_ref())),
+        StreamWriteSettlement::Closed => Err(Error::new(
+            Status::Closing,
+            "async stream receiver is closed",
+        )),
+        StreamWriteSettlement::Cancelled => Err(error_from_payload(
+            crate::async_runtime::runtime_cancellation_error(
+                crate::async_runtime::RuntimeCancelReason::Shutdown,
+            )
+            .as_ref(),
+        )),
+    }
+}
+
+struct AsyncWaiterShared<S> {
+    settlement: Mutex<Option<S>>,
+    waker: Mutex<Option<Waker>>,
+    dropped: AtomicBool,
+}
+
+impl<S> AsyncWaiterShared<S> {
+    fn new(waker: &Waker) -> Arc<Self> {
+        Arc::new(Self {
+            settlement: Mutex::new(None),
+            waker: Mutex::new(Some(waker.clone())),
+            dropped: AtomicBool::new(false),
+        })
+    }
+
+    fn complete(&self, settlement: S) -> Option<S> {
+        if self.dropped.load(Ordering::Acquire) {
+            return Some(settlement);
+        }
+        if let Ok(mut slot) = self.settlement.lock() {
+            *slot = Some(settlement);
+        }
+        if let Ok(mut waker) = self.waker.lock()
+            && let Some(waker) = waker.take()
+        {
+            waker.wake();
+        }
+        None
+    }
+
+    fn take(&self) -> Option<S> {
+        self.settlement.lock().ok().and_then(|mut slot| slot.take())
+    }
+
+    fn store_waker(&self, waker: &Waker) {
+        if let Ok(mut slot) = self.waker.lock()
+            && slot
+                .as_ref()
+                .is_none_or(|current| !current.will_wake(waker))
+        {
+            *slot = Some(waker.clone());
+        }
+    }
+}
+
+/// Future returned by [`StreamSender::send_async`].
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct SendFuture<T, E> {
+    inner: Arc<StreamInner<T, E>>,
+    item: Option<T>,
+    shared: Option<Arc<AsyncWaiterShared<StreamWriteSettlement>>>,
+}
+
+// The owned item is moved, never polled in place.
+impl<T, E> Unpin for SendFuture<T, E> {}
+
+impl<T, E> Future for SendFuture<T, E>
+where
+    T: Send + 'static,
+    E: AniErrorPayload,
+    AsyncIteratorValue<T>: for<'env> PromiseValue<'env>,
+{
+    type Output = Result<()>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if let Some(shared) = &this.shared {
+            if let Some(settlement) = shared.take() {
+                return Poll::Ready(decode_write_settlement(settlement));
+            }
+            shared.store_waker(cx.waker());
+            if let Some(settlement) = shared.take() {
+                return Poll::Ready(decode_write_settlement(settlement));
+            }
+            return Poll::Pending;
+        }
+
+        let shared = AsyncWaiterShared::new(cx.waker());
+        let shared_cb = Arc::clone(&shared);
+        let waiter = StreamWriteWaiter {
+            item: this.item.take(),
+            settle: Box::new(move |settlement| {
+                drop(shared_cb.complete(settlement));
+                Ok(())
+            }),
+            _metric: StreamWaiterMetric::new(),
+        };
+        match this.inner.write_or_wait(waiter)? {
+            WriteOutcome::Immediate {
+                waiter,
+                settlement,
+                read_waiter,
+            } => {
+                if let Some((read_waiter, item)) = read_waiter {
+                    read_waiter.settle(StreamSettlement::Item(Ok(item)))?;
+                }
+                waiter.settle(settlement)?;
+                if let Some(settlement) = shared.take() {
+                    Poll::Ready(decode_write_settlement(settlement))
+                } else {
+                    Poll::Ready(decode_write_settlement(StreamWriteSettlement::Accepted))
+                }
+            }
+            WriteOutcome::Queued => {
+                this.shared = Some(shared);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<T, E> Drop for SendFuture<T, E> {
+    fn drop(&mut self) {
+        if let Some(shared) = &self.shared {
+            shared.dropped.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// Future returned by [`AsyncStream::recv`].
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct RecvFuture<T, E> {
+    inner: Arc<StreamInner<T, E>>,
+    shared: Option<Arc<AsyncWaiterShared<StreamSettlement<T, E>>>>,
+}
+
+impl<T, E> Future for RecvFuture<T, E>
+where
+    T: Send + 'static,
+    E: AniErrorPayload,
+    AsyncIteratorValue<T>: for<'env> PromiseValue<'env>,
+{
+    type Output = Result<Option<T>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if let Some(shared) = &this.shared {
+            if let Some(settlement) = shared.take() {
+                return Poll::Ready(decode_read_settlement(settlement));
+            }
+            shared.store_waker(cx.waker());
+            if let Some(settlement) = shared.take() {
+                return Poll::Ready(decode_read_settlement(settlement));
+            }
+            return Poll::Pending;
+        }
+
+        let shared = AsyncWaiterShared::new(cx.waker());
+        let shared_cb = Arc::clone(&shared);
+        let inner = Arc::clone(&this.inner);
+        let waiter = StreamWaiter {
+            settle: Box::new(move |settlement| {
+                if let Some(settlement) = shared_cb.complete(settlement) {
+                    inner.requeue_unread(match settlement {
+                        StreamSettlement::Item(item) => item,
+                        other => {
+                            drop(other);
+                            return Ok(());
+                        }
+                    });
+                }
+                Ok(())
+            }),
+            _metric: StreamWaiterMetric::new(),
+        };
+        match this.inner.read_or_wait(waiter)? {
+            ReadOutcome::Immediate {
+                waiter,
+                settlement,
+                released_write,
+            } => {
+                if let Some(write_waiter) = released_write {
+                    write_waiter.settle(StreamWriteSettlement::Accepted)?;
+                }
+                waiter.settle(settlement)?;
+                if let Some(settlement) = shared.take() {
+                    Poll::Ready(decode_read_settlement(settlement))
+                } else {
+                    Poll::Ready(Ok(None))
+                }
+            }
+            ReadOutcome::Queued => {
+                this.shared = Some(shared);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<T, E> Drop for RecvFuture<T, E> {
+    fn drop(&mut self) {
+        if let Some(shared) = &self.shared {
+            shared.dropped.store(true, Ordering::Release);
+            if let Some(StreamSettlement::Item(item)) = shared.take() {
+                self.inner.requeue_unread(item);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -842,6 +1175,58 @@ mod tests {
             producer.join().unwrap().unwrap_err().status,
             Status::Closing
         );
+    }
+
+    #[test]
+    fn recv_completes_immediately_when_queued() {
+        let (sender, stream) = stream_channel::<i32>(1).unwrap();
+        sender.send(3).unwrap();
+        let mut recv = std::pin::pin!(stream.recv());
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(matches!(
+            recv.as_mut().poll(&mut context),
+            Poll::Ready(Ok(Some(3)))
+        ));
+    }
+
+    #[test]
+    fn send_async_is_released_by_recv() {
+        let (sender, stream) = stream_channel::<i32>(1).unwrap();
+        sender.send(1).unwrap();
+        let mut send = std::pin::pin!(sender.send_async(2));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(send.as_mut().poll(&mut context).is_pending());
+
+        let mut recv = std::pin::pin!(stream.recv());
+        assert!(matches!(
+            recv.as_mut().poll(&mut context),
+            Poll::Ready(Ok(Some(1)))
+        ));
+        assert!(matches!(
+            send.as_mut().poll(&mut context),
+            Poll::Ready(Ok(()))
+        ));
+
+        let mut recv = std::pin::pin!(stream.recv());
+        assert!(matches!(
+            recv.as_mut().poll(&mut context),
+            Poll::Ready(Ok(Some(2)))
+        ));
+    }
+
+    #[test]
+    fn recv_sees_natural_end_after_last_sender_drops() {
+        let (sender, stream) = stream_channel::<i32>(1).unwrap();
+        drop(sender);
+        let mut recv = std::pin::pin!(stream.recv());
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(matches!(
+            recv.as_mut().poll(&mut context),
+            Poll::Ready(Ok(None))
+        ));
     }
 
     #[test]

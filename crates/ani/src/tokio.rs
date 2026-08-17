@@ -9,7 +9,8 @@
 //!
 //! Enable `ani` feature `async` for the ergonomic napi-rs-style alias, or
 //! enable the lower-level `tokio_rt` feature directly. Additional `tokio_*`
-//! passthrough features mirror napi-rs naming.
+//! passthrough features mirror napi-rs naming. `tokio_stream` adds Stream
+//! pump helpers next to the Promise spawn APIs.
 
 #[cfg(feature = "tokio_rt")]
 mod imp {
@@ -365,6 +366,11 @@ mod imp {
     }
 }
 
+#[cfg(feature = "tokio_stream")]
+pub use crate::conversions::{
+    TokioAsyncStream, spawn_ohos_readable_from_stream, spawn_stream, spawn_stream_factory,
+    spawn_stream_factory_with_handle, spawn_stream_with_handle,
+};
 #[cfg(feature = "tokio_rt")]
 pub use imp::TokioAsyncRuntime;
 #[cfg(feature = "tokio_rt")]

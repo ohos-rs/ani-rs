@@ -35,7 +35,7 @@ The first `#[ani]` generates `ANI_Constructor`; exported items are registered au
 [dependencies]
 ani = {
   git = "https://github.com/ohos-rs/ani-rs",
-  features = ["async", "tokio_time"]
+  features = ["async", "tokio_time", "tokio_stream"]
 }
 ani-derive = { git = "https://github.com/ohos-rs/ani-rs" }
 tokio = { version = "1", default-features = false, features = ["time"] }

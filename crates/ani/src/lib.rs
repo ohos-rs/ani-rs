@@ -47,6 +47,9 @@ pub use ani_sys as sys;
 pub use serde;
 #[cfg(feature = "serde-json")]
 pub use serde_json;
+/// Re-export of the `tokio-stream` crate.
+#[cfg(feature = "tokio_stream")]
+pub use tokio_stream;
 
 // Core modules
 pub mod async_runtime;

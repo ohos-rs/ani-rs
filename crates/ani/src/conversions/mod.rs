@@ -16,6 +16,7 @@
 //! - `promise` - Promise and Deferred types
 //! - `resource` - Managed native resource handles
 //! - `result` - Result type conversions
+//! - `stream` - Bounded async iterators, OpenHarmony byte streams, and optional tokio-stream bridge
 //! - `collections` - Collection type conversions
 //! - `fixed_array` - Fixed array wrapper conversions
 //! - `tuple_value` - Tuple value wrappers
@@ -46,6 +47,8 @@ mod result;
 mod stream;
 mod string;
 mod task;
+#[cfg(feature = "tokio_stream")]
+mod tokio_stream;
 mod traits;
 mod tuple_value;
 mod typed_array;
@@ -73,6 +76,8 @@ pub use result::*;
 pub use stream::*;
 pub use string::*;
 pub use task::*;
+#[cfg(feature = "tokio_stream")]
+pub use tokio_stream::*;
 pub use traits::*;
 pub use tuple_value::*;
 pub use typed_array::*;
