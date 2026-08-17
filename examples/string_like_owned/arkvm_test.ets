@@ -18,19 +18,25 @@ export native function char_identity(value: string): string;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_string_like_owned");
 
@@ -104,50 +110,19 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-string-like-owned");
-__assert_eq_string(
-  "append_os_segment",
-  append_os_segment("root", "tail"),
-  "root/tail",
-);
-__assert_eq_string(
-  "append_boxed_segment",
-  append_boxed_segment("left", "right"),
-  "left/right",
-);
-__assert_eq_string(
-  "append_cow_segment",
-  append_cow_segment("cow", "leaf"),
-  "cow/leaf",
-);
+__assert_eq_string("append_os_segment", append_os_segment("root", "tail"), "root/tail");
+__assert_eq_string("append_boxed_segment", append_boxed_segment("left", "right"), "left/right");
+__assert_eq_string("append_cow_segment", append_cow_segment("cow", "leaf"), "cow/leaf");
 __assert_eq_string(
   "append_borrowed_path_segment",
   append_borrowed_path_segment("base", "tail"),
   "base/tail",
 );
-__assert_true(
-  "borrowed_os_prefix",
-  borrowed_os_prefix("prefix-value", "prefix"),
-);
-__assert_eq_int(
-  "borrowed_c_str_len",
-  borrowed_c_str_len("ffi"),
-  3,
-);
-__assert_eq_string(
-  "borrowed_path_literal",
-  borrowed_path_literal(),
-  "borrowed/path",
-);
-__assert_eq_string(
-  "borrowed_os_str_literal",
-  borrowed_os_str_literal(),
-  "borrowed-os",
-);
-__assert_eq_string(
-  "borrowed_c_str_literal",
-  borrowed_c_str_literal(),
-  "borrowed-c",
-);
+__assert_true("borrowed_os_prefix", borrowed_os_prefix("prefix-value", "prefix"));
+__assert_eq_int("borrowed_c_str_len", borrowed_c_str_len("ffi"), 3);
+__assert_eq_string("borrowed_path_literal", borrowed_path_literal(), "borrowed/path");
+__assert_eq_string("borrowed_os_str_literal", borrowed_os_str_literal(), "borrowed-os");
+__assert_eq_string("borrowed_c_str_literal", borrowed_c_str_literal(), "borrowed-c");
 __assert_eq_string("unicode_scalar_char", char_identity("🦀"), "🦀");
 
 if (__ani_fail_count > 0) {

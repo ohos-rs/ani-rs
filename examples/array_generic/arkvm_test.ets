@@ -25,19 +25,25 @@ export native function summarize_user_array(values: Array<ArrayUser>): string;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_array_generic");
 
@@ -121,11 +127,7 @@ let pushObj: Object = new ArrayPayload(1);
 let setObj: Object = new ArrayPayload(2);
 __assert_bool("array_push_and_pop_bool", array_push_and_pop(pushObj));
 __assert_bool("array_set_and_get_bool", array_set_and_get(setObj));
-__assert_eq_string(
-  "join_string_array",
-  join_string_array(["ani", "ark", "vm"]),
-  "ani|ark|vm",
-);
+__assert_eq_string("join_string_array", join_string_array(["ani", "ark", "vm"]), "ani|ark|vm");
 let producedStrings = make_string_array();
 __assert_eq_int("make_string_array_len", producedStrings.length, 3);
 __assert_eq_string("make_string_array_last", producedStrings[2], "vm");
@@ -137,11 +139,7 @@ __assert_eq_string(
 let producedDeque = make_string_vecdeque();
 __assert_eq_int("make_string_vecdeque_len", producedDeque.length, 3);
 __assert_eq_string("make_string_vecdeque_first", producedDeque[0], "front");
-__assert_eq_int(
-  "sum_i32_linked_list",
-  sum_i32_linked_list([2, 3, 4]),
-  9,
-);
+__assert_eq_int("sum_i32_linked_list", sum_i32_linked_list([2, 3, 4]), 9);
 let producedLinkedList = make_i32_linked_list();
 __assert_eq_int("make_i32_linked_list_len", producedLinkedList.length, 3);
 __assert_eq_int("make_i32_linked_list_tail", producedLinkedList[2], 5);
@@ -151,11 +149,7 @@ userA.name = "alice";
 let userB = new ArrayUser();
 userB.id = 2;
 userB.name = "bob";
-__assert_eq_string(
-  "summarize_user_array",
-  summarize_user_array([userA, userB]),
-  "1#alice|2#bob",
-);
+__assert_eq_string("summarize_user_array", summarize_user_array([userA, userB]), "1#alice|2#bob");
 let producedUsers = make_user_array();
 __assert_eq_int("make_user_array_len", producedUsers.length, 2);
 let firstUser = producedUsers[0] as ArrayUser;

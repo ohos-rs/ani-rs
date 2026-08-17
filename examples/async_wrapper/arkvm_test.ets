@@ -82,10 +82,15 @@ export namespace example {
   }
 }
 
-export native function async_call_scoped_callback(callback: (arg0: string) => string, value: string): Promise<string>;
+export native function async_call_scoped_callback(
+  callback: (arg0: string) => string,
+  value: string,
+): Promise<string>;
 export native function async_check_status(task_id: int): boolean;
 export native function async_compute_start(input: int): int;
-export native function async_echo_function_ref(callback: (arg0: string) => string): Promise<(arg0: string) => string>;
+export native function async_echo_function_ref(
+  callback: (arg0: string) => string,
+): Promise<(arg0: string) => string>;
 export native function async_fetch(url: string): string;
 export native function async_get_result(task_id: int): int;
 export native function async_object_strict_equals(lhs: Object, rhs: Object): Promise<boolean>;
@@ -116,7 +121,10 @@ export native function runtime_assert_no_leaks(): boolean;
 export native function runtime_global_reference_count(): long;
 export native function runtime_kernel_shutdown_and_restart(): boolean;
 export native function runtime_leak_checkpoint(): void;
-export native function runtime_wait_for_global_reference_count(expected: long, timeout_ms: int): boolean;
+export native function runtime_wait_for_global_reference_count(
+  expected: long,
+  timeout_ms: int,
+): boolean;
 export native function signature_override_echo(value: string): Promise<string>;
 export native function tokio_await_arkts_promise(promise: Promise<string>): Promise<string>;
 export native function tokio_delayed_square(input: int, delay_ms: int): Promise<int>;
@@ -125,7 +133,10 @@ export native function tokio_fail(message: string): Promise<string>;
 export native function tokio_fail_async(message: string): Promise<string>;
 export native function tokio_fetch_text(url: string): Promise<string>;
 export native function tokio_fetch_text_async(url: string): Promise<string>;
-export native function tokio_manual_function_ref_container_call(callback: (arg0: string) => string, value: string): Promise<string>;
+export native function tokio_manual_function_ref_container_call(
+  callback: (arg0: string) => string,
+  value: string,
+): Promise<string>;
 export native function tokio_manual_global_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_manual_ref_container_ready(value: Object): Promise<boolean>;
 export native function tokio_manual_typed_ref_container_ready(value: Object): Promise<boolean>;
@@ -135,19 +146,25 @@ export native function tokio_void_async(delay_ms: int): Promise<void>;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_async_wrapper");
 
@@ -277,9 +294,13 @@ function main(): void {
     }
   });
   __assert_true("promise_env_rejected", envRejected);
-  let resolverPromiseText: string = waitForCompletion(() => promise_resolver_resolve_value("world"));
+  let resolverPromiseText: string = waitForCompletion(() =>
+    promise_resolver_resolve_value("world"),
+  );
   __assert_eq_string("promise_resolver_resolve_value", resolverPromiseText, "resolver:world");
-  let deferredBridgeText: string = waitForCompletion(() => promise_resolver_into_deferred("bridge"));
+  let deferredBridgeText: string = waitForCompletion(() =>
+    promise_resolver_into_deferred("bridge"),
+  );
   __assert_eq_string("promise_resolver_into_deferred", deferredBridgeText, "bridge:bridge");
   let resolverRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
     try {
@@ -307,34 +328,58 @@ function main(): void {
       return false;
     } catch (value) {
       __assert_true("promise_raw_rejection_identity", value == originalRejection);
-      __assert_eq_string("promise_raw_rejection_name", (value as Error).name, "ApplicationPromiseError");
+      __assert_eq_string(
+        "promise_raw_rejection_name",
+        (value as Error).name,
+        "ApplicationPromiseError",
+      );
       __assert_eq_int("promise_raw_rejection_code", (value as Error).code, 73123);
       return true;
     }
   });
   __assert_true("promise_continuation_reject", continuationRejected);
   let refPayload: Object = new Object();
-  let sameObject: boolean = waitForCompletion(() => async_object_strict_equals(refPayload, refPayload));
+  let sameObject: boolean = waitForCompletion(() =>
+    async_object_strict_equals(refPayload, refPayload),
+  );
   __assert_true("async_object_strict_equals_same", sameObject);
-  let otherObject: boolean = waitForCompletion(() => async_object_strict_equals(refPayload, new Object()));
+  let otherObject: boolean = waitForCompletion(() =>
+    async_object_strict_equals(refPayload, new Object()),
+  );
   __assert_true("async_object_strict_equals_diff", !otherObject);
   let refRoundtrip: boolean = waitForCompletion(() => async_ref_roundtrip(refPayload));
   __assert_true("async_ref_roundtrip", refRoundtrip);
   let asyncStringCallback = (input: string): string => {
     return "cb:" + input;
   };
-  let echoedAsyncFunctionRef = waitForCompletion(() => async_echo_function_ref(asyncStringCallback));
+  let echoedAsyncFunctionRef = waitForCompletion(() =>
+    async_echo_function_ref(asyncStringCallback),
+  );
   __assert_eq_string("async_echo_function_ref", echoedAsyncFunctionRef("vm"), "cb:vm");
-  let scopedCallbackText: string = waitForCompletion(() => async_call_scoped_callback(asyncStringCallback, "ark"));
+  let scopedCallbackText: string = waitForCompletion(() =>
+    async_call_scoped_callback(asyncStringCallback, "ark"),
+  );
   __assert_eq_string("async_call_scoped_callback", scopedCallbackText, "cb:ark");
-  let manualContainerReady: boolean = waitForCompletion(() => tokio_manual_ref_container_ready(refPayload));
+  let manualContainerReady: boolean = waitForCompletion(() =>
+    tokio_manual_ref_container_ready(refPayload),
+  );
   __assert_true("tokio_manual_ref_container_ready", manualContainerReady);
-  let manualGlobalContainerReady: boolean = waitForCompletion(() => tokio_manual_global_ref_container_ready(refPayload));
+  let manualGlobalContainerReady: boolean = waitForCompletion(() =>
+    tokio_manual_global_ref_container_ready(refPayload),
+  );
   __assert_true("tokio_manual_global_ref_container_ready", manualGlobalContainerReady);
-  let manualTypedRefContainerReady: boolean = waitForCompletion(() => tokio_manual_typed_ref_container_ready(refPayload));
+  let manualTypedRefContainerReady: boolean = waitForCompletion(() =>
+    tokio_manual_typed_ref_container_ready(refPayload),
+  );
   __assert_true("tokio_manual_typed_ref_container_ready", manualTypedRefContainerReady);
-  let manualFunctionContainerText: string = waitForCompletion(() => tokio_manual_function_ref_container_call(asyncStringCallback, "box"));
-  __assert_eq_string("tokio_manual_function_ref_container_call", manualFunctionContainerText, "cb:box");
+  let manualFunctionContainerText: string = waitForCompletion(() =>
+    tokio_manual_function_ref_container_call(asyncStringCallback, "box"),
+  );
+  __assert_eq_string(
+    "tokio_manual_function_ref_container_call",
+    manualFunctionContainerText,
+    "cb:box",
+  );
   let signatureText: string = waitForCompletion(() => signature_override_echo("value"));
   __assert_eq_string("signature_override_echo", signatureText, "sig:value");
   let backgroundSquare: int = waitForCompletion(() => background_square(9));
@@ -370,17 +415,32 @@ function main(): void {
     } catch (value) {
       let error = value as Error;
       __assert_eq_string("custom_async_error_status", error.name, "AsyncDomainFailure");
-      __assert_eq_string("custom_async_error_message", error.message, "domain-specific asynchronous failure");
+      __assert_eq_string(
+        "custom_async_error_message",
+        error.message,
+        "domain-specific asynchronous failure",
+      );
       let context = error.cause as Record<string, Object>;
       let metadata = context["metadata"] as Record<string, Object>;
       let operation = metadata["operation"] as string;
-      __assert_true("custom_async_error_metadata", operation != undefined && operation == "qemu-custom-error");
+      __assert_true(
+        "custom_async_error_metadata",
+        operation != undefined && operation == "qemu-custom-error",
+      );
       __assert_true("custom_async_error_bool", !(metadata["retryable"] as Boolean).valueOf());
-      __assert_eq_string("custom_async_error_number", (metadata["attempt"] as Long).toString(), "2");
+      __assert_eq_string(
+        "custom_async_error_number",
+        (metadata["attempt"] as Long).toString(),
+        "2",
+      );
       let details = metadata["details"] as Record<string, Object>;
       __assert_true("custom_async_error_nested", (details["active"] as Boolean).valueOf());
       __assert_eq_int("custom_async_error_array", (details["labels"] as Object[]).length, 2);
-      __assert_eq_int("custom_async_error_binary", (metadata["binary"] as ArrayBuffer).byteLength, 3);
+      __assert_eq_int(
+        "custom_async_error_binary",
+        (metadata["binary"] as ArrayBuffer).byteLength,
+        3,
+      );
       __assert_eq_int("custom_async_error_code", error.code, 71001);
       return true;
     }
@@ -453,7 +513,9 @@ function main(): void {
     }
   });
   __assert_true("async_iterator_custom_error_rejected", streamErrorOk);
-  let failingReturned: IteratorResult<int> = waitForCompletion(() => failingIterator.returnIterator());
+  let failingReturned: IteratorResult<int> = waitForCompletion(() =>
+    failingIterator.returnIterator(),
+  );
   __assert_true("async_iterator_error_return_done", failingReturned.done);
 
   let shutdownIterator = new CounterAsyncIterator();
@@ -499,16 +561,15 @@ function main(): void {
     }
   });
   __assert_true("runtime_shutdown_cancels_tsfn", shutdownTsfnRejected);
-  let shutdownIteratorReturn: IteratorResult<int> = waitForCompletion(() => shutdownIterator.returnIterator());
+  let shutdownIteratorReturn: IteratorResult<int> = waitForCompletion(() =>
+    shutdownIterator.returnIterator(),
+  );
   __assert_true("runtime_shutdown_iterator_cleanup", shutdownIteratorReturn.done);
   let restartedSquare: int = waitForCompletion(() => background_square(12));
   __assert_eq_int("runtime_kernel_restarted_task", restartedSquare, 144);
   __assert_true(
     "runtime_global_reference_leak_gate",
-    runtime_wait_for_global_reference_count(
-      runtimeGlobalReferenceBaseline,
-      3000,
-    ),
+    runtime_wait_for_global_reference_count(runtimeGlobalReferenceBaseline, 3000),
   );
 
   if (__ani_fail_count > 0) {

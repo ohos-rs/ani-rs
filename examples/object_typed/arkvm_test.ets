@@ -8,26 +8,36 @@ export type AniField = Object;
 
 export native function call_typed_methods(obj: Object, method: AniMethod): float;
 export native function field_by_name_roundtrip_long(obj: Object, value: long): long;
-export native function field_roundtrip_boolean(obj: Object, field: AniField, value: boolean): boolean;
+export native function field_roundtrip_boolean(
+  obj: Object,
+  field: AniField,
+  value: boolean,
+): boolean;
 export native function property_roundtrip_float(obj: Object, value: float): float;
 
 // Public Promise continuation bridge used by PromiseFuture.
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_object_typed");
 
@@ -103,12 +113,12 @@ function __assert_throws(name: string, fn: () => void): void {
 console.log("[arkvm] smoke start: ani-example-object-typed");
 class ObjTyped {
   counter: long = 0;
-  ratio: float = 0.0f;
+  ratio: float = 0.0;
 }
 class ObjTypedToken {}
 let objTyped = new ObjTyped();
 __assert_eq_long("field_by_name_roundtrip_long", field_by_name_roundtrip_long(objTyped, 99), 99);
-__assert_eq_double("property_roundtrip_float", property_roundtrip_float(objTyped, 1.25f), 1.25);
+__assert_eq_double("property_roundtrip_float", property_roundtrip_float(objTyped, 1.25), 1.25);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

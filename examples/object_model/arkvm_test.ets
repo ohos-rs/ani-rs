@@ -21,7 +21,9 @@ export class UserProfile {
   }
 }
 
-export native function __ani_native_describe_optional_user_profile(user: UserProfile | null): string;
+export native function __ani_native_describe_optional_user_profile(
+  user: UserProfile | null,
+): string;
 export function describe_optional_user_profile(user: UserProfile | null | undefined): string {
   return __ani_native_describe_optional_user_profile(user == undefined ? null : user);
 }
@@ -51,19 +53,25 @@ export native function user_profile_result(flag: boolean): UserProfile;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_object_model");
 
@@ -146,11 +154,7 @@ let inputUser = new UserProfile();
 inputUser.id = 8;
 inputUser.name = "native";
 inputUser.active = false;
-__assert_eq_string(
-  "describe_user_profile",
-  describe_user_profile(inputUser),
-  "8:native:inactive",
-);
+__assert_eq_string("describe_user_profile", describe_user_profile(inputUser), "8:native:inactive");
 
 let renamedUser = rename_user_profile(inputUser, "renamed");
 __assert_eq_string("rename_user_profile_name", renamedUser.name, "renamed");
@@ -203,7 +207,11 @@ let primary = directory.get("primary");
 __assert_true("make_user_profile_directory_primary_present", primary != undefined);
 let primaryUser = primary as UserProfile;
 __assert_eq_int("make_user_profile_directory_primary_id", primaryUser.id, 21);
-__assert_eq_string("make_user_profile_directory_primary_name", primaryUser.name, "directory-primary");
+__assert_eq_string(
+  "make_user_profile_directory_primary_name",
+  primaryUser.name,
+  "directory-primary",
+);
 let inputDirectory = new Map<string, UserProfile>(0);
 let inputPrimary = new UserProfile();
 inputPrimary.id = 31;
@@ -226,7 +234,11 @@ let recordPrimary = record["primary"];
 __assert_true("make_user_profile_record_primary_present", recordPrimary != undefined);
 let recordPrimaryUser = recordPrimary as UserProfile;
 __assert_eq_int("make_user_profile_record_primary_id", recordPrimaryUser.id, 41);
-__assert_eq_string("make_user_profile_record_primary_name", recordPrimaryUser.name, "record-primary");
+__assert_eq_string(
+  "make_user_profile_record_primary_name",
+  recordPrimaryUser.name,
+  "record-primary",
+);
 let inputRecord = new Record<string, UserProfile>();
 let inputRecordPrimary = new UserProfile();
 inputRecordPrimary.id = 51;

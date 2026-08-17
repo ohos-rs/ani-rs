@@ -13,19 +13,43 @@ export function make_optional_string(use_value: boolean): string | null | undefi
   let __ani_result = __ani_native_make_optional_string(use_value);
   return __ani_result == null ? undefined : __ani_result;
 }
-export native function __ani_native_with_multiple_optional(a: int, b: int | null, c: int | null, d: int | null): int;
-export function with_multiple_optional(a: int, b: int | null | undefined, c: int | null | undefined, d: int | null | undefined): int {
-  return __ani_native_with_multiple_optional(a, b == undefined ? null : b, c == undefined ? null : c, d == undefined ? null : d);
+export native function __ani_native_with_multiple_optional(
+  a: int,
+  b: int | null,
+  c: int | null,
+  d: int | null,
+): int;
+export function with_multiple_optional(
+  a: int,
+  b: int | null | undefined,
+  c: int | null | undefined,
+  d: int | null | undefined,
+): int {
+  return __ani_native_with_multiple_optional(
+    a,
+    b == undefined ? null : b,
+    c == undefined ? null : c,
+    d == undefined ? null : d,
+  );
 }
 export native function __ani_native_with_optional_boolean(value: int, flag: boolean | null): int;
 export function with_optional_boolean(value: int, flag: boolean | null | undefined): int {
   return __ani_native_with_optional_boolean(value, flag == undefined ? null : flag);
 }
-export native function __ani_native_with_optional_double(required: double, optional: double | null): double;
-export function with_optional_double(required: double, optional: double | null | undefined): double {
+export native function __ani_native_with_optional_double(
+  required: double,
+  optional: double | null,
+): double;
+export function with_optional_double(
+  required: double,
+  optional: double | null | undefined,
+): double {
   return __ani_native_with_optional_double(required, optional == undefined ? null : optional);
 }
-export native function __ani_native_with_optional_float(required: float, optional: float | null): float;
+export native function __ani_native_with_optional_float(
+  required: float,
+  optional: float | null,
+): float;
 export function with_optional_float(required: float, optional: float | null | undefined): float {
   return __ani_native_with_optional_float(required, optional == undefined ? null : optional);
 }
@@ -37,8 +61,14 @@ export native function __ani_native_with_optional_long(required: long, optional:
 export function with_optional_long(required: long, optional: long | null | undefined): long {
   return __ani_native_with_optional_long(required, optional == undefined ? null : optional);
 }
-export native function __ani_native_with_optional_string(required: string, optional: string | null): string;
-export function with_optional_string(required: string, optional: string | null | undefined): string {
+export native function __ani_native_with_optional_string(
+  required: string,
+  optional: string | null,
+): string;
+export function with_optional_string(
+  required: string,
+  optional: string | null | undefined,
+): string {
   return __ani_native_with_optional_string(required, optional == undefined ? null : optional);
 }
 export native function count_provided_args(): int;
@@ -48,19 +78,25 @@ export native function with_default_simple(value: int, multiplier: int): int;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_optional");
 
@@ -148,7 +184,11 @@ let madeInt = make_optional_int(true);
 __assert_eq_int("make_optional_int_some_roundtrip", with_optional_int(3, madeInt), 10);
 __assert_true("make_optional_int_none", make_optional_int(false) == undefined);
 let madeString = make_optional_string(true);
-__assert_eq_string("make_optional_string_some_roundtrip", with_optional_string("x", madeString), "x ok");
+__assert_eq_string(
+  "make_optional_string_some_roundtrip",
+  with_optional_string("x", madeString),
+  "x ok",
+);
 __assert_true("make_optional_string_none", make_optional_string(false) == undefined);
 __assert_eq_long("with_optional_long_null", with_optional_long(9, null), 9);
 __assert_eq_double("with_optional_float_null", with_optional_float(2.5, null), 2.5);

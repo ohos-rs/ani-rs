@@ -11,26 +11,35 @@ export native function find_current_module_members(): boolean;
 export native function find_current_namespace_members(namespace_name: string): boolean;
 export native function roundtrip_current_module_counter(value: int): int;
 export native function roundtrip_current_module_label(value: string): string;
-export native function roundtrip_current_namespace_note(namespace_name: string, value: string): string;
+export native function roundtrip_current_namespace_note(
+  namespace_name: string,
+  value: string,
+): string;
 export native function roundtrip_current_namespace_state(namespace_name: string, value: int): int;
 
 // Public Promise continuation bridge used by PromiseFuture.
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_module_member");
 
@@ -124,14 +133,34 @@ namespace sample {
 }
 __assert_bool("find_current_module_members", find_current_module_members());
 __assert_eq_int("call_current_module_sum", call_current_module_sum(3, 4), 7);
-__assert_eq_string("call_current_module_join", call_current_module_join("left", "right"), "left:right");
+__assert_eq_string(
+  "call_current_module_join",
+  call_current_module_join("left", "right"),
+  "left:right",
+);
 __assert_eq_int("roundtrip_current_module_counter", roundtrip_current_module_counter(11), 11);
-__assert_eq_string("roundtrip_current_module_label", roundtrip_current_module_label("updated"), "updated");
+__assert_eq_string(
+  "roundtrip_current_module_label",
+  roundtrip_current_module_label("updated"),
+  "updated",
+);
 __assert_bool("find_current_namespace_members", find_current_namespace_members("sample"));
 __assert_eq_int("call_current_namespace_mul", call_current_namespace_mul("sample", 6, 7), 42);
-__assert_eq_string("call_current_namespace_tag", call_current_namespace_tag("sample", "arkts"), "[arkts]");
-__assert_eq_int("roundtrip_current_namespace_state", roundtrip_current_namespace_state("sample", 23), 23);
-__assert_eq_string("roundtrip_current_namespace_note", roundtrip_current_namespace_note("sample", "note1"), "note1");
+__assert_eq_string(
+  "call_current_namespace_tag",
+  call_current_namespace_tag("sample", "arkts"),
+  "[arkts]",
+);
+__assert_eq_int(
+  "roundtrip_current_namespace_state",
+  roundtrip_current_namespace_state("sample", 23),
+  23,
+);
+__assert_eq_string(
+  "roundtrip_current_namespace_note",
+  roundtrip_current_namespace_note("sample", "note1"),
+  "note1",
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

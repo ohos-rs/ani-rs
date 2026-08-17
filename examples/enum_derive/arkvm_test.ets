@@ -6,17 +6,25 @@
 export enum Status {
   Idle = 0,
   Running = 2,
-  Stopped = 3
+  Stopped = 3,
 }
-export function __ani_materialize_DirectionalMessageOutput(value: Object): DirectionalMessageOutput {
+export function __ani_materialize_DirectionalMessageOutput(
+  value: Object,
+): DirectionalMessageOutput {
   let __ani_record = value as Record<string, Object>;
   let __ani_tag = __ani_record["kind"] as string;
   if (__ani_tag == "renamedField") {
-    let __ani_value: DirectionalMessageOutputRenamedField = { kind: "renamedField", payloadText: __ani_record["payloadText"] as string };
+    let __ani_value: DirectionalMessageOutputRenamedField = {
+      kind: "renamedField",
+      payloadText: __ani_record["payloadText"] as string,
+    };
     return __ani_value;
   }
   if (__ani_tag == "generated") {
-    let __ani_value: DirectionalMessageOutputGenerated = { kind: "generated", value: (__ani_record["value"] as Numeric).toInt() };
+    let __ani_value: DirectionalMessageOutputGenerated = {
+      kind: "generated",
+      value: (__ani_record["value"] as Numeric).toInt(),
+    };
     return __ani_value;
   }
   throw new TypeError("unknown structured enum discriminator: " + __ani_tag);
@@ -42,7 +50,11 @@ export function __ani_materialize_MessageOutput(value: Object): MessageOutput {
     return __ani_value;
   }
   if (__ani_tag == "Point") {
-    let __ani_value: MessageOutputPoint = { type: "Point", x: (__ani_record["x"] as Numeric).toInt(), y: (__ani_record["y"] as Numeric).toInt() };
+    let __ani_value: MessageOutputPoint = {
+      type: "Point",
+      x: (__ani_record["x"] as Numeric).toInt(),
+      y: (__ani_record["y"] as Numeric).toInt(),
+    };
     return __ani_value;
   }
   if (__ani_tag == "Empty") {
@@ -129,8 +141,12 @@ export native function is_terminal(status: Status): boolean;
 export native function next_status(status: Status): Status;
 export native function status_name(status: Status): string;
 export type DirectionalMessage = DirectionalMessageInput | DirectionalMessageOutput;
-export type DirectionalMessageInput = DirectionalMessageInputLegacyText | DirectionalMessageInputRenamedField;
-export type DirectionalMessageOutput = DirectionalMessageOutputRenamedField | DirectionalMessageOutputGenerated;
+export type DirectionalMessageInput =
+  | DirectionalMessageInputLegacyText
+  | DirectionalMessageInputRenamedField;
+export type DirectionalMessageOutput =
+  | DirectionalMessageOutputRenamedField
+  | DirectionalMessageOutputGenerated;
 export type Envelope<T> = EnvelopeInput<T> | EnvelopeOutput<T>;
 export type EnvelopeInput<T> = EnvelopeInputValue<T> | EnvelopeInputEmpty<T>;
 export type EnvelopeOutput<T> = EnvelopeOutputValue<T> | EnvelopeOutputEmpty<T>;
@@ -142,19 +158,25 @@ export type MessageOutput = MessageOutputText | MessageOutputPoint | MessageOutp
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_enum_derive");
 
@@ -245,11 +267,7 @@ let renamedInput: DirectionalMessageInputRenamedField = {
   kind: "renamedField",
   payloadText: "renamed",
 };
-__assert_eq_string(
-  "structured_enum_rename_and_case",
-  directional_input(renamedInput),
-  "renamed",
-);
+__assert_eq_string("structured_enum_rename_and_case", directional_input(renamedInput), "renamed");
 let generatedOutput = directional_output(9) as DirectionalMessageOutputGenerated;
 __assert_true(
   "structured_enum_directional_output",
@@ -257,7 +275,10 @@ __assert_true(
 );
 let genericInput: EnvelopeInputValue<int> = { type: "Value", value: 17 };
 let genericOutput = generic_envelope_identity(genericInput) as EnvelopeOutputValue<int>;
-__assert_true("structured_enum_generic", genericOutput.type == "Value" && genericOutput.value == 17);
+__assert_true(
+  "structured_enum_generic",
+  genericOutput.type == "Value" && genericOutput.value == 17,
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

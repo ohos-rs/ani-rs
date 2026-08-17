@@ -6,25 +6,35 @@
 export type AniRef = Object;
 
 export native function call_any_with_fn_args(func: AniRef): boolean;
-export native function call_function_with_value_array_by_name(function_name: string, a: int, b: int): int;
+export native function call_function_with_value_array_by_name(
+  function_name: string,
+  a: int,
+  b: int,
+): int;
 
 // Public Promise continuation bridge used by PromiseFuture.
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_call_variadic_v");
 
@@ -105,7 +115,11 @@ function pairValue(a: Object, b: Object): Object {
   return a;
 }
 __assert_bool("call_any_with_fn_args_type", call_any_with_fn_args(pairValue));
-__assert_eq_int("call_function_with_value_array", call_function_with_value_array_by_name("sumValue", 3, 4), 7);
+__assert_eq_int(
+  "call_function_with_value_array",
+  call_function_with_value_array_by_name("sumValue", 3, 4),
+  7,
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

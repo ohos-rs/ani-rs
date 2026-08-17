@@ -7,8 +7,7 @@ export class DeriveBox<T> {
   value: T = null as T;
 }
 
-export class DeriveMarker {
-}
+export class DeriveMarker {}
 
 export class DerivePair<T, U> {
   field0: T = null as T;
@@ -25,8 +24,7 @@ export class ObjectBox<T> {
   value: T = null as T;
 }
 
-export class ObjectMarker {
-}
+export class ObjectMarker {}
 
 export class ObjectPair<T, U> {
   field0: T = null as T;
@@ -50,19 +48,25 @@ export native function score_total(scores: ValueArray<int>): int;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_derive_shapes");
 
@@ -143,33 +147,18 @@ __assert_eq_string("read_derive_box", read_derive_box(deriveBox), "box");
 let derivePair = make_derive_pair("ani", "ark");
 __assert_eq_string("derive_pair_field0", derivePair.field0, "ani");
 __assert_eq_string("derive_pair_field1", derivePair.field1, "ark");
-__assert_eq_string(
-  "describe_derive_pair",
-  describe_derive_pair(derivePair),
-  "ani:ark",
-);
+__assert_eq_string("describe_derive_pair", describe_derive_pair(derivePair), "ani:ark");
 __assert_true("marker_identity", marker_identity(new DeriveMarker()));
 
 let objectBox = make_object_box("box");
 __assert_eq_string("object_box_value", objectBox.value, "box");
-__assert_eq_string(
-  "describe_object_box",
-  describe_object_box(objectBox),
-  "box:box",
-);
+__assert_eq_string("describe_object_box", describe_object_box(objectBox), "box:box");
 
 let objectPair = make_object_pair("left", "ark");
 __assert_eq_string("object_pair_field0", objectPair.field0, "left");
 __assert_eq_string("object_pair_field1", objectPair.field1, "ark");
-__assert_eq_string(
-  "describe_object_pair",
-  describe_object_pair(objectPair),
-  "left:ark",
-);
-__assert_true(
-  "object_marker_identity",
-  object_marker_identity(new ObjectMarker()),
-);
+__assert_eq_string("describe_object_pair", describe_object_pair(objectPair), "left:ark");
+__assert_true("object_marker_identity", object_marker_identity(new ObjectMarker()));
 __assert_eq_long("transparent_newtype", next_user_id(41), 42);
 __assert_eq_int("array_newtype", score_total([2, 3, 4]), 9);
 
