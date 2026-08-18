@@ -5,6 +5,16 @@
 use crate::sys;
 use std::marker::PhantomData;
 
+/// Types wrapping a raw ANI reference handle.
+///
+/// Implemented by every local handle type (`AniObject`, `AniString`,
+/// `AniClass`, ...). Enables generic reference management such as
+/// [`crate::env::AutoLocal`].
+pub trait AsAniRef {
+    /// Returns the underlying raw ANI reference.
+    fn as_ani_ref(&self) -> sys::ani_ref;
+}
+
 /// Basic reference type macro
 macro_rules! define_ref_type {
     (
@@ -48,6 +58,14 @@ macro_rules! define_ref_type {
             #[inline]
             pub fn is_null(&self) -> bool {
                 self.raw.is_null()
+            }
+        }
+
+        impl<'local> $crate::types::AsAniRef for $name<'local> {
+            #[inline]
+            #[allow(clippy::unnecessary_cast)]
+            fn as_ani_ref(&self) -> $crate::sys::ani_ref {
+                self.raw as $crate::sys::ani_ref
             }
         }
     };

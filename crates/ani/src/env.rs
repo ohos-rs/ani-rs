@@ -385,6 +385,80 @@ impl Drop for LocalScopeGuard<'_> {
     }
 }
 
+/// RAII guard that deletes a single local reference when dropped.
+///
+/// Complements [`LocalScopeGuard`] (the jni-rs `AutoLocal` analog): a scope
+/// frees every reference created inside it, while `AutoLocal` frees exactly
+/// one. Use it in loops that create many temporaries in the caller's scope,
+/// where each iteration's reference should be released before the next.
+///
+/// Deletion errors during drop are ignored; a failed delete only leaks the
+/// single reference until the surrounding scope ends. Call
+/// [`AutoLocal::forget`] to take back ownership without deleting.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// for name in huge_name_list {
+///     let s = env.auto_local(env.create_string(&name)?);
+///     consume(&*s)?;
+/// } // each string reference is deleted at the end of its iteration
+/// ```
+pub struct AutoLocal<'borrow, 'local, T>
+where
+    T: AsAniRef,
+{
+    env: &'borrow Env<'local>,
+    handle: Option<T>,
+}
+
+impl<'borrow, 'local, T> AutoLocal<'borrow, 'local, T>
+where
+    T: AsAniRef,
+{
+    /// Wraps a local reference so it is deleted when the guard drops.
+    pub fn new(env: &'borrow Env<'local>, handle: T) -> Self {
+        Self {
+            env,
+            handle: Some(handle),
+        }
+    }
+
+    /// Takes the handle back without deleting the reference.
+    pub fn forget(mut self) -> T {
+        self.handle.take().expect("AutoLocal handle already taken")
+    }
+}
+
+impl<T> std::ops::Deref for AutoLocal<'_, '_, T>
+where
+    T: AsAniRef,
+{
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.handle.as_ref().expect("AutoLocal handle already taken")
+    }
+}
+
+impl<T> Drop for AutoLocal<'_, '_, T>
+where
+    T: AsAniRef,
+{
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let raw = handle.as_ani_ref();
+        if raw.is_null() {
+            return;
+        }
+        // Errors are ignored: drop must not panic, and a failed delete only
+        // leaks this single reference until the surrounding scope ends.
+        let local = unsafe { AniRef::from_raw(raw) };
+        let _ = self.env.delete_local_ref(&local);
+    }
+}
 
 impl<'local> Env<'local> {
     /// Create Env from raw pointer
@@ -3984,6 +4058,15 @@ impl<'local> Env<'local> {
         ani_call!(self, Reference_Delete, local_ref.as_raw())
     }
 
+    /// Wraps a local reference in an [`AutoLocal`] guard that deletes it
+    /// when dropped.
+    pub fn auto_local<T>(&self, handle: T) -> AutoLocal<'_, 'local, T>
+    where
+        T: AsAniRef,
+    {
+        AutoLocal::new(self, handle)
+    }
+
     /// Ensure enough local reference slots are available.
     pub fn ensure_enough_references(&self, nr_refs: usize) -> Result<()> {
         ani_call!(self, EnsureEnoughReferences, nr_refs)
@@ -5601,5 +5684,50 @@ impl<'local> Env<'local> {
             resolver.as_raw(),
             error.as_raw()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DELETE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAST_DELETED: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn fake_reference_delete(
+        _env: *mut sys::ani_env,
+        lref: sys::ani_ref,
+    ) -> sys::ani_status {
+        DELETE_CALLS.fetch_add(1, Ordering::SeqCst);
+        LAST_DELETED.store(lref as usize, Ordering::SeqCst);
+        sys::ani_status_ANI_OK
+    }
+
+    #[test]
+    fn auto_local_deletes_exactly_once_and_forget_disarms() {
+        let mut api: sys::__ani_interaction_api = unsafe { std::mem::zeroed() };
+        api.Reference_Delete = Some(fake_reference_delete);
+        let mut env_ptr: sys::ani_env = &api;
+        let env = unsafe { Env::from_raw_unchecked(&mut env_ptr as *mut sys::ani_env) };
+
+        DELETE_CALLS.store(0, Ordering::SeqCst);
+        let fake_ref = 0x1234usize as sys::ani_ref;
+
+        {
+            let guard = env.auto_local(unsafe { AniObject::from_raw(fake_ref) });
+            assert!(!guard.is_null());
+            assert_eq!(guard.as_raw() as usize, 0x1234);
+        }
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_DELETED.load(Ordering::SeqCst), 0x1234);
+
+        let guard = env.auto_local(unsafe { AniObject::from_raw(fake_ref) });
+        let handle = guard.forget();
+        assert_eq!(handle.as_raw() as usize, 0x1234);
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
+
+        drop(env.auto_local(unsafe { AniObject::from_raw(std::ptr::null_mut()) }));
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
     }
 }

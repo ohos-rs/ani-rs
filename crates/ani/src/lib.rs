@@ -94,7 +94,7 @@ pub mod prelude {
         spawn_future_result, spawn_local_future, spawn_local_future_result,
         spawn_local_future_with_handle, start_async_runtime, try_register_async_runtime,
     };
-    pub use crate::env::{Env, LocalScopeGuard};
+    pub use crate::env::{AutoLocal, Env, LocalScopeGuard};
     pub use crate::error::{
         AniErrorPayload, AniErrorValue, BusinessError, DynAniError, Error, PreservedArktsError,
         Result, Status, check_status,
