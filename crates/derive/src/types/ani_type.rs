@@ -114,6 +114,8 @@ pub struct PromiseType {
     pub inner: Option<Box<AniType>>,
     /// Whether conversion must start a native [`AsyncTask`] instead of unwrapping `PromiseRaw`.
     pub native_task: bool,
+    /// Incoming awaitable [`Promise<T>`]. Cannot be returned to ArkTS.
+    pub awaitable: bool,
 }
 
 /// Record type (`Record<string, V>`)
@@ -656,6 +658,16 @@ impl AniType {
                 inner: extract_first_generic_type(&segment.arguments)
                     .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
                 native_task: false,
+                awaitable: false,
+            });
+        }
+
+        if ident == "Promise" {
+            return AniType::Promise(PromiseType {
+                inner: extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
+                native_task: false,
+                awaitable: true,
             });
         }
 
@@ -666,6 +678,7 @@ impl AniType {
                     .get(1)
                     .map(|ty| Box::new(AniType::from_syn_type_with_type_params(ty, type_params))),
                 native_task: true,
+                awaitable: false,
             });
         }
 
@@ -1479,6 +1492,7 @@ pub(crate) fn is_custom_object_name(ident: &str) -> bool {
             | "FnArgs"
             | "BigInt"
             | "PromiseRaw"
+            | "Promise"
             | "Deferred"
             | "NativePointer"
             | "ManagedResource"
@@ -1922,7 +1936,9 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         match ani_type {
             AniType::Promise(PromiseType {
-                inner: Some(inner), ..
+                inner: Some(inner),
+                awaitable: false,
+                ..
             }) => {
                 assert!(matches!(
                     inner.as_ref(),
@@ -1930,6 +1946,21 @@ mod tests {
                 ));
             }
             other => panic!("Expected PromiseRaw type, got {other:?}"),
+        }
+
+        let ty: Type = syn::parse_quote!(Promise<String>);
+        match AniType::from_syn_type(&ty) {
+            AniType::Promise(PromiseType {
+                inner: Some(inner),
+                awaitable: true,
+                native_task: false,
+            }) => {
+                assert!(matches!(
+                    inner.as_ref(),
+                    AniType::String(StringType::String)
+                ));
+            }
+            other => panic!("Expected awaitable Promise type, got {other:?}"),
         }
 
         let ty: Type = syn::parse_quote!(Deferred<String>);

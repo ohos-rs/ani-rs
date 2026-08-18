@@ -234,6 +234,9 @@ pub fn expand_function(attrs: BindgenAttrs, func: ItemFn, prepare: TokenStream) 
     if let Err(err) = validate_unsupported_bind_attrs(&attrs, &func) {
         return err.to_compile_error();
     }
+    if let Err(err) = validate_promise_usage(&func) {
+        return err.to_compile_error();
+    }
 
     if let Err(err) = validate_constructor_usage(&attrs, &func) {
         return err.to_compile_error();
@@ -359,6 +362,31 @@ pub(crate) fn validate_unsupported_bind_attrs(
     Ok(())
 }
 
+/// Awaitable `Promise<T>` is an input Future. Returning it to ArkTS is
+/// unsupported; use `PromiseRaw<T>` or `#[ani(async)] -> Result<T>`.
+pub(crate) fn validate_promise_usage(func: &ItemFn) -> syn::Result<()> {
+    let ReturnType::Type(_, ty) = &func.sig.output else {
+        return Ok(());
+    };
+    if awaitable_promise_type(ty) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "`Promise<T>` is awaitable and cannot be returned to ArkTS; use `PromiseRaw<T>` or `#[ani(async)] fn ... -> Result<T>`",
+        ));
+    }
+    Ok(())
+}
+
+fn awaitable_promise_type(ty: &Type) -> bool {
+    match AniType::from_syn_type(ty) {
+        AniType::Promise(promise) => promise.awaitable,
+        AniType::Wrapper(WrapperType::Result(inner) | WrapperType::Ref(inner)) => {
+            matches!(inner.as_ref(), AniType::Promise(promise) if promise.awaitable)
+        }
+        _ => false,
+    }
+}
+
 fn validate_async_bind_attrs(_attrs: &BindgenAttrs, func: &ItemFn) -> syn::Result<()> {
     if func.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
@@ -371,7 +399,7 @@ fn validate_async_bind_attrs(_attrs: &BindgenAttrs, func: &ItemFn) -> syn::Resul
     if matches!(AniType::from_syn_type(&ok_ty), AniType::Promise(_)) {
         return Err(syn::Error::new_spanned(
             ok_ty,
-            "#[ani(async)] expects `Result<T>` where `T` is the eventual value, not `PromiseRaw<T>`",
+            "#[ani(async)] expects `Result<T>` where `T` is the eventual value, not `Promise<T>` or `PromiseRaw<T>`",
         ));
     }
 
@@ -1685,6 +1713,23 @@ mod tests {
         };
         let func: ItemFn = parse_quote! { fn get_value() -> i32 { 1 } };
         assert!(validate_unsupported_bind_attrs(&attrs, &func).is_ok());
+    }
+
+    #[test]
+    fn awaitable_promise_cannot_be_returned() {
+        let func: ItemFn = parse_quote! {
+            fn join(promise: Promise<String>) -> Promise<String> {
+                promise
+            }
+        };
+        assert!(validate_promise_usage(&func).is_err());
+
+        let func: ItemFn = parse_quote! {
+            fn join(promise: Promise<String>) -> Result<PromiseRaw<String>> {
+                unimplemented!()
+            }
+        };
+        assert!(validate_promise_usage(&func).is_ok());
     }
 
     #[test]

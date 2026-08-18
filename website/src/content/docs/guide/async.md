@@ -5,22 +5,32 @@ description: 使用 #[ani(async)]、RuntimeDomain 和可替换执行器导出 Pr
 
 ## 等待 ArkTS Promise
 
-`PromiseRaw<T>::into_future` 把 ArkTS `Promise<T>` 提升为可跨线程轮询的 Rust `PromiseFuture<T>`：
+入参用 `Promise<T>`，它实现 `Future`，可以在 `#[ani(async)]` 里直接 `.await`。这和 napi-rs 的入参 `Promise<T>` 一样。创建或返回给 ArkTS 时仍用 `PromiseRaw<T>`。
+
+```rust
+#[ani(async)]
+pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, ArktsRejection> {
+    promise.await
+}
+```
+
+同步函数也可以接收 `Promise<T>`，再交给选中的 `AsyncRuntime`：
 
 ```rust
 #[ani]
 pub fn await_arkts(
     env: &Env<'_>,
-    promise: PromiseRaw<'_, String>,
+    promise: Promise<String>,
 ) -> Result<PromiseRaw<'static, String>> {
-    let future = promise.into_future(env)?;
-    ani::tokio::spawn_future(env, future).map(PromiseRaw::into_static)
+    ani::spawn_future_result(env, promise).map(PromiseRaw::into_static)
 }
 ```
 
-Future 持有全局 ANI 引用。生成的 ETS continuation bridge 在原 Promise 上注册 `then`/reject 回调，settle 时直接唤醒 Rust waiter；等待过程不读取 Promise 的私有字段，也不占用 worker 或 timer。`cancel()` 和 Drop 都会注销等待并释放引用；ANI 没有 Promise 取消原语，因此取消不会强制终止 ArkTS 自身的操作。
+`Promise<T>` 在 `FromAni` 时挂上生成的 ETS continuation bridge，把 ArkTS `then`/reject 转成 Rust waker。等待过程不读取 Promise 的私有字段，也不占用 scheduler worker。`cancel()` 和 Drop 只注销 Rust 侧等待；ANI 没有 Promise 取消原语，不会终止 ArkTS 自己的操作。
 
-默认错误类型是 `ArktsRejection`，会保留原 rejection、`stack`、带环 `cause` 图和 typed metadata。需要领域错误时，使用 `into_future_with_decoder` 传入对象安全的 `RejectionDecoder<E>`；decoder 同时接收 ArkTS rejection 与运行时取消，错误类型不被固定成 ani-rs `Error`。
+默认错误类型是 `ArktsRejection`。需要领域错误时，用 `Promise::from_raw_promise_with_decoder` 或 `PromiseRaw::into_future_with_decoder`。
+
+底层 waiter 仍是 `PromiseFuture<T>`；`PromiseRaw::into_future` 继续可用。
 
 异步 I/O 或需要等待的 Rust API，优先写成 `#[ani(async)] async fn`。生成的 ArkTS 返回类型是 `Promise<T>`。
 
@@ -35,8 +45,15 @@ tokio = { version = "1", default-features = false, features = ["time"] }
 
 `async-runtime` 只提供执行器无关 SPI；`async` 额外选择内置 Tokio backend。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync` 等 feature。
 
+组合构建（`async-runtime` + `tokio_rt`）的路由与 napi-rs 一致：
+
+- 生成的 `#[ani(async)]` future、`spawn_future` 和 `block_on_future_result` 跟随**选中的** `AsyncRuntime`。
+- `spawn` / `block_on` / `spawn_blocking` / `within_runtime_if_available` 在开启 `tokio_rt` 时始终走 Tokio helper runtime。
+- 选中自定义 backend 不会构造 Tokio；第一次调用 Tokio helper 才会惰性创建。
+- 只用 `async-runtime`、不链接 Tokio 时，缺失 backend 的错误不会冻结注册窗口。
+
 :::caution
-仅启用 `async-runtime` 时，应用必须在第一次异步调用前注册 `AsyncRuntime`；否则 Promise 以结构化错误 reject。自定义 runtime 不需要链接 Tokio。
+仅启用 `async-runtime` 时，必须在 `#[ani(init)]` 或库构造函数里调用 `register_async_runtime(...)`。`ANI_Constructor` 会关闭注册窗口并启动选中的 backend。自定义 runtime 不需要链接 Tokio。
 :::
 
 ## 导出 async fn
@@ -187,32 +204,92 @@ pub fn square_in_background(input: i32) -> AsyncTask<Square> {
 
 `#[ani(async)]`、Promise、`AsyncTask`、`ThreadsafeFunction` 和 async stream 全部进入同一个 RuntimeDomain。生成宏提交的是 `RuntimeTask`，不再调用 Tokio API。carrier 本身可跨线程；backend 必须在选定线程调用 `into_local_future()`，并在同一线程 poll/drop 可能为 `!Send` 的 ANI Future。
 
-应用可以实现并注册完整 backend：
+应用可以实现并注册完整 backend，包括 FFRT 等非 Tokio 执行器。不要另开 crate：在 addon 里 `unsafe impl AsyncRuntime`，再 `register_async_runtime`。Cargo 只开 `async-runtime`，不要开 `async` / `tokio_rt`，就不会链 Tokio。
+
+`register_async_runtime` 是 infallible 的 first-writer-wins API：重复或过晚的注册会记录错误，后续异步调用再把 Promise reject 掉。在 `#[ani(init)]` 里注册。
+
+`RuntimeTask` 是 `Send` carrier。backend 必须在自己选中的线程上调用 `into_local_future()`，并在同一线程 poll/drop 那个可能 `!Send` 的 Future。FFRT 的 `ffrt_submit`、自建线程池、当前线程队列都走同一套钩子。
 
 ```rust
-unsafe impl AsyncRuntime for AppRuntime {
-    fn spawn(&self, task: RuntimeTask)
-        -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>>
-    { /* 提交 carrier */ }
+use std::sync::mpsc;
 
-    fn spawn_blocking(&self, task: RuntimeBlockingTask)
-        -> std::result::Result<(), AsyncRuntimeRejection<RuntimeBlockingTask>>
-    { /* 提交后调用 task.run() */ }
-
-    fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> { /* ... */ }
-    fn start(&self) -> Result<()> { Ok(()) }
-    fn shutdown(&self) -> Result<()> { /* cancel、drain、join */ Ok(()) }
+struct FfrtRuntime {
+    // 用 FFRT 队列、线程池或任意执行器保存发送端
+    jobs: mpsc::Sender<RuntimeTask>,
 }
 
-register_async_runtime(AppRuntime::new())?;
+unsafe impl AsyncRuntime for FfrtRuntime {
+    fn spawn(
+        &self,
+        task: RuntimeTask,
+    ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+        // FFRT: ffrt_submit(move || drive(task.into_local_future()))
+        self.jobs.send(task).map_err(|error| {
+            AsyncRuntimeRejection::new(
+                error.0,
+                Error::new(Status::GenericFailure, "runtime queue closed"),
+            )
+        })
+    }
+
+    fn spawn_blocking(
+        &self,
+        work: Box<dyn FnOnce() + Send + 'static>,
+    ) -> std::result::Result<(), AsyncRuntimeRejection<Box<dyn FnOnce() + Send + 'static>>> {
+        // FFRT 阻塞队列 / 独立线程。不要用无界 fallback。
+        std::thread::spawn(work);
+        Ok(())
+    }
+
+    fn block_on(&self, mut future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+        // 在当前线程 poll 到完成。构造器/getter 的 #[ani(async)] 走这条路。
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(&waker);
+        while future.as_mut().poll(&mut cx).is_pending() {
+            std::thread::park();
+        }
+        Ok(())
+    }
+
+    fn start(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        // 停收任务、丢弃队列里的 RuntimeTask、join worker
+        Ok(())
+    }
+}
+
+#[ani(init)]
+fn init() {
+    register_async_runtime(FfrtRuntime::connect());
+}
 ```
+
+`start` 失败或 panic 时，框架会立刻调用 `shutdown` 回滚部分启动。`Starting` 期间的 dispatch 不会等待：backend 必须拒绝未就绪的提交，或接受后延迟执行。
 
 `shutdown` 是 unsafe contract：返回前所有 backend thread、task、closure 和 waker 必须停止执行 addon 代码。析构默认有 30 秒 watchdog，可用 `ANI_RUNTIME_SHUTDOWN_TIMEOUT_MS` 调整；非协作任务超时会 fail-fast，不会在 SO 卸载后继续运行。
 
 ```rust
 let before = runtime_kernel().metrics();
+shutdown_async_runtime();
 shutdown_runtime_domain()?;
 let after = runtime_kernel().metrics(); // 下一次提交会启动新 generation
+```
+
+需要自定义 Tokio 线程池时，不要实现 `AsyncRuntime`，而是调用 `create_custom_tokio_runtime`：
+
+```rust
+#[ani(init)]
+fn init() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(32 * 1024 * 1024)
+        .build()
+        .unwrap();
+    create_custom_tokio_runtime(rt);
+}
 ```
 
 ## ArkTS 主动取消

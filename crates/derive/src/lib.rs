@@ -146,6 +146,12 @@ fn generate_constructor_code() -> proc_macro2::TokenStream {
                         return status;
                     }
 
+                    // Close the registration window after `#[ani(init)]` and
+                    // `#[ani(init, before_bindings)]` have had a chance to
+                    // call `register_async_runtime`. A runtime-backed call
+                    // during those hooks still starts the backend first.
+                    ::ani::async_runtime::start_async_runtime();
+
                     *result = ::ani::sys::ANI_VERSION_1;
                     ::ani::sys::ani_status_ANI_OK
                 }

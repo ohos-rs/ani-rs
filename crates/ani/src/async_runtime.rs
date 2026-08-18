@@ -1,13 +1,39 @@
 //! Executor-independent asynchronous runtime domain.
 //!
-//! Generated bindings submit an opaque, `Send` [`RuntimeTask`] carrier.  The
+//! The `async-runtime` feature (always compiled into `ani`, and selected by
+//! `tokio_rt` / `async`) exposes an SPI without imposing a module-load
+//! requirement. Implement [`AsyncRuntime`] to back ani-rs with your own
+//! scheduler and register exactly one instance from `#[ani(init)]` or a
+//! library constructor. A build with no registration can still load and
+//! expose synchronous APIs; runtime-backed operations reject with a
+//! missing-backend error.
+//!
+//! Generated bindings submit an opaque, `Send` [`RuntimeTask`] carrier. The
 //! selected backend opens that carrier on one of its execution threads and
-//! polls the resulting thread-affine future there.  This extra factory step is
+//! polls the resulting thread-affine future there. This extra factory step is
 //! required by ANI: an [`crate::env::Env`] and local ANI references are not
 //! `Send`, even when the Rust future using them is otherwise asynchronous.
 //!
-//! Applications may register a completely custom backend.  Tokio is merely
-//! the default backend selected when the `tokio_rt` feature is enabled.
+//! If no custom backend has been registered, the registration window closes
+//! when `ANI_Constructor` begins activation, or earlier when a runtime-backed
+//! operation commits a backend choice. In a combined `async-runtime` +
+//! `tokio_rt` build that choice defaults generated `#[ani(async)]` futures to
+//! the built-in Tokio backend. The established free `spawn`, `spawn_blocking`,
+//! `block_on`, and `within_runtime_if_available` names remain Tokio
+//! compatibility APIs whenever `tokio_rt` is enabled. Selecting and starting a
+//! custom backend does not construct Tokio; the first Tokio compatibility
+//! helper call constructs it lazily. In a pure `async-runtime` build there is
+//! no Tokio at all, and a missing-backend error before any environment is
+//! activated leaves the selection undecided and does not prevent later
+//! registration.
+//!
+//! # Safety
+//!
+//! ArkTS may unload an addon's native image immediately after
+//! `ANI_Destructor` returns. Implementations must ensure that, after
+//! [`AsyncRuntime::shutdown`] returns, no backend-owned thread, task,
+//! closure, destructor, cancellation callback, or future ANI callback can
+//! execute code or access data from that image.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -15,7 +41,7 @@ use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -27,6 +53,12 @@ use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 type LocalFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 type LocalFutureFactory = Box<dyn FnOnce() -> LocalFuture + Send + 'static>;
 type RejectCallback = Box<dyn FnOnce(DynAniError) + Send + 'static>;
+type BlockingWork = Box<dyn FnOnce() + Send + 'static>;
+
+const DUPLICATE_RUNTIME_ERROR: &str =
+    "register_async_runtime was called more than once for the same addon image";
+const LATE_RUNTIME_REGISTRATION_ERROR: &str = "register_async_runtime must be called before the first ANI environment begins activation or an earlier runtime-backed operation commits a backend choice";
+const MISSING_RUNTIME_BACKEND_ERROR: &str = "no AsyncRuntime backend is registered; call `register_async_runtime` from `#[ani(init)]` before invoking runtime-backed operations";
 
 static LIVE_TASKS: AtomicUsize = AtomicUsize::new(0);
 static PENDING_SETTLEMENTS: AtomicUsize = AtomicUsize::new(0);
@@ -551,293 +583,517 @@ impl Drop for RuntimeLocalTask {
 }
 
 /// Marker returned by [`AsyncRuntime::enter`].
+///
+/// The type-erased guard is deliberately not `Send`, so the entered runtime
+/// context cannot migrate to another thread. The unit type `()` implements it
+/// as the no-op guard used by the default [`AsyncRuntime::enter`].
 pub trait AsyncRuntimeGuard {}
 
 impl AsyncRuntimeGuard for () {}
 
-/// Ownership-preserving rejection from an async runtime hook.
+/// Carrier for work an [`AsyncRuntime`] backend declined to accept.
+///
+/// The backend must hand the work back **untouched** together with a
+/// diagnostic payload; ani-rs then drops the recovered work through its
+/// cancellation path instead of leaving a Promise pending forever.
 #[derive(Debug)]
 pub struct AsyncRuntimeRejection<T> {
-    /// Work returned untouched so ani-rs can reject/cancel it exactly once.
-    pub work: T,
-    /// Extensible error payload explaining why the backend declined the work.
-    pub error: DynAniError,
+    work: T,
+    error: DynAniError,
 }
 
 impl<T> AsyncRuntimeRejection<T> {
-    /// Creates a rejection that returns ownership of `work`.
+    /// Create a rejection from the declined work and a diagnostic error.
     pub fn new(work: T, error: impl AniErrorPayload) -> Self {
         Self {
             work,
             error: Box::new(error),
         }
     }
+
+    /// The diagnostic error describing why the work was declined.
+    pub fn error(&self) -> &dyn AniErrorPayload {
+        self.error.as_ref()
+    }
+
+    /// Recover the declined work and the diagnostic error.
+    pub fn into_parts(self) -> (T, DynAniError) {
+        (self.work, self.error)
+    }
+}
+
+/// Dispose of a value recovered from a backend hook without letting a
+/// panicking `Drop` escape containment.
+fn drop_contained<T>(value: T) {
+    if let Err(second_payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+        std::mem::forget(second_payload);
+    }
+}
+
+/// Wraps a backend-provided [`AsyncRuntimeGuard`] so its `Drop` is disposed
+/// through [`drop_contained`].
+struct ContainedGuard<'a>(Option<Box<dyn AsyncRuntimeGuard + 'a>>);
+
+impl Drop for ContainedGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(guard) = self.0.take() {
+            drop_contained(guard);
+        }
+    }
 }
 
 /// Fully replaceable async execution backend.
 ///
+/// The implementation is stored once per linked addon image and shared across
+/// its threads, hence the `Send + Sync + 'static` bound. The backend's
+/// [`Drop`] is not guaranteed to run; [`shutdown`](AsyncRuntime::shutdown) is
+/// the sole resource-release and quiescence hook. Keep a newly constructed
+/// backend dormant, create active resources in [`start`](AsyncRuntime::start),
+/// and release them in `shutdown`.
+///
 /// # Safety
 ///
-/// `shutdown` is a native-image safety boundary.  Before it returns, every
+/// `shutdown` is a native-image safety boundary. Before it returns, every
 /// backend thread, task, closure, waker, and blocking job that could execute
-/// ani-rs/addon code must have quiesced.  A backend which cannot satisfy that
-/// contract must abort the process instead of returning.
+/// ani-rs/addon code must have quiesced. A backend which cannot satisfy that
+/// contract must abort the process instead of returning. This requirement
+/// applies to both `Ok` and `Err` returns.
 pub unsafe trait AsyncRuntime: Send + Sync + 'static {
-    /// Accepts an asynchronous task carrier.
+    /// Submit a task to run to completion in the background.
+    ///
+    /// Return `Ok(())` only after taking ownership of the task. Return
+    /// `Err(AsyncRuntimeRejection::new(task, error))` when the runtime is
+    /// stopped, saturated, or otherwise unable to accept it. Dropping an
+    /// accepted task invokes its cancellation callback. Never forget an
+    /// accepted task: retain it until completion or drop it on cancellation.
+    ///
+    /// Submissions can arrive before the first [`start`](AsyncRuntime::start)
+    /// of an environment cycle completes, or after a `start` that failed. A
+    /// dormant or not-ready backend must decline such work or accept it and
+    /// defer execution.
     fn spawn(
         &self,
         task: RuntimeTask,
     ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>>;
 
-    /// Drives one borrowed, current-thread future synchronously.
+    /// Block the current thread, fully driving the pinned future to completion
+    /// before returning.
+    ///
+    /// The borrowed future must not be retained, moved to another thread, or
+    /// accessed after this method returns.
     fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()>;
 
-    /// Accepts CPU/blocking work. Backends that do not support a blocking lane
-    /// return the carrier untouched.
-    fn spawn_blocking(
-        &self,
-        task: RuntimeBlockingTask,
-    ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeBlockingTask>> {
-        Err(AsyncRuntimeRejection::new(
-            task,
-            Error::new(
-                Status::NotFound,
-                "selected AsyncRuntime does not implement spawn_blocking",
-            ),
-        ))
-    }
-
-    /// Optionally enters backend context on the current thread.
-    fn enter(&self) -> Result<Box<dyn AsyncRuntimeGuard>> {
+    /// Enter the runtime context and return a guard that establishes it for
+    /// the calling thread.
+    ///
+    /// In pure `async-runtime` builds [`within_runtime_if_available`]
+    /// delegates here; combined `tokio_rt` builds retain its established Tokio
+    /// routing. The default implementation returns a no-op guard.
+    fn enter(&self) -> Result<Box<dyn AsyncRuntimeGuard + '_>> {
         Ok(Box::new(()))
     }
 
-    /// Idempotently starts a fresh backend generation.
+    /// Start (or restart) the runtime.
+    ///
+    /// Called when the first live ANI environment starts, or earlier when a
+    /// module-init hook triggers the first runtime-backed dispatch of the
+    /// cycle. Implement it idempotently. If this returns an error, or panics
+    /// on an unwind-enabled build, ani-rs calls
+    /// [`shutdown`](AsyncRuntime::shutdown) to roll back the partial start.
     fn start(&self) -> Result<()> {
         Ok(())
     }
 
-    /// Quiesces the complete backend.  See the safety contract above.
-    fn shutdown(&self) -> Result<()> {
-        Ok(())
+    /// Shut the runtime down.
+    ///
+    /// Stop accepting work before returning and drop queued [`RuntimeTask`]
+    /// values and queued [`spawn_blocking`](AsyncRuntime::spawn_blocking)
+    /// closures so their promises are cancelled. The hook must be idempotent
+    /// and tolerate being called before `start`, after a partial failed
+    /// `start`, and repeatedly without an intervening `start`.
+    fn shutdown(&self) -> Result<()>;
+
+    /// Optional hook: run `work` on the backend's blocking-capable lane.
+    ///
+    /// Return `Ok(())` once the work is accepted. Return
+    /// `Err(AsyncRuntimeRejection::new(work, error))` to decline; ani-rs
+    /// surfaces that diagnostic and does not create an unbounded fallback
+    /// thread. The default implementation declines.
+    fn spawn_blocking(
+        &self,
+        work: BlockingWork,
+    ) -> std::result::Result<(), AsyncRuntimeRejection<BlockingWork>> {
+        Err(AsyncRuntimeRejection::new(
+            work,
+            Error::new(
+                Status::GenericFailure,
+                "The AsyncRuntime backend does not support blocking work",
+            ),
+        ))
     }
 }
 
+/// Lifecycle phase of the selected backend for the current zero-to-live
+/// environment cycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecyclePhase {
+    /// No start-with-rollback sequence ran for this cycle, the last one was
+    /// rolled back, or a teardown completed.
     Idle,
+    /// A dispatch or activation claimed the start; its start-with-rollback
+    /// sequence has not completed yet. Further dispatches proceed without
+    /// waiting.
     Starting,
+    /// The start-with-rollback sequence completed successfully for this cycle.
     Started,
-    Stopping,
 }
 
-struct RuntimeRegistryState {
-    selected: Option<Arc<dyn AsyncRuntime>>,
+struct RegistryState {
     selection_frozen: bool,
     phase: LifecyclePhase,
 }
 
-struct RuntimeRegistry {
-    state: Mutex<RuntimeRegistryState>,
+/// Process-global (per addon image) registry holding the custom
+/// [`AsyncRuntime`] selection.
+struct AsyncRuntimeRegistry {
+    backend: OnceLock<Box<dyn AsyncRuntime>>,
+    state: Mutex<RegistryState>,
     lifecycle: Mutex<()>,
-    changed: Condvar,
+    deferred_registration_error: Mutex<Option<&'static str>>,
 }
 
-impl RuntimeRegistry {
+impl AsyncRuntimeRegistry {
+    #[cfg(test)]
     fn new() -> Self {
         Self {
-            state: Mutex::new(RuntimeRegistryState {
-                selected: None,
+            backend: OnceLock::new(),
+            state: Mutex::new(RegistryState {
                 selection_frozen: false,
                 phase: LifecyclePhase::Idle,
             }),
             lifecycle: Mutex::new(()),
-            changed: Condvar::new(),
+            deferred_registration_error: Mutex::new(None),
         }
     }
 
-    fn select_default(state: &mut RuntimeRegistryState) -> Result<()> {
-        if state.selected.is_none() {
+    fn lock_state(&self) -> MutexGuard<'_, RegistryState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_lifecycle(&self) -> MutexGuard<'_, ()> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn try_register(
+        &self,
+        runtime: Box<dyn AsyncRuntime>,
+    ) -> std::result::Result<(), (&'static str, Box<dyn AsyncRuntime>)> {
+        let _state = self.lock_state();
+        if self.backend.get().is_some() {
+            return Err((DUPLICATE_RUNTIME_ERROR, runtime));
+        }
+        if _state.selection_frozen {
+            return Err((LATE_RUNTIME_REGISTRATION_ERROR, runtime));
+        }
+        match self.backend.set(runtime) {
+            Ok(()) => Ok(()),
+            Err(rejected) => Err((DUPLICATE_RUNTIME_ERROR, rejected)),
+        }
+    }
+
+    fn record_registration_error(&self, reason: &'static str) {
+        let mut slot = self
+            .deferred_registration_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(reason);
+        }
+    }
+
+    fn deferred_registration_error(&self) -> Option<&'static str> {
+        *self
+            .deferred_registration_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Commit the backend selection for a runtime-backed operation and return
+    /// the custom backend if one is selected. `fallback_commits` is `true`
+    /// when a built-in Tokio fallback exists: taking the fallback also
+    /// commits a choice and closes the registration window. In a pure
+    /// `async-runtime` build a missing backend leaves the selection
+    /// undecided.
+    fn commit_selection(&self, fallback_commits: bool) -> Option<&dyn AsyncRuntime> {
+        let mut state = self.lock_state();
+        let backend = self.backend.get().map(|backend| backend.as_ref());
+        if backend.is_some() || fallback_commits {
+            state.selection_frozen = true;
+        }
+        backend
+    }
+
+    fn dispatch_backend(&self) -> Option<&dyn AsyncRuntime> {
+        if let Some(backend) = self.commit_selection(cfg!(feature = "tokio_rt")) {
+            return Some(backend);
+        }
+        #[cfg(feature = "tokio_rt")]
+        {
+            Some(crate::tokio::tokio_fallback_runtime())
+        }
+        #[cfg(not(feature = "tokio_rt"))]
+        None
+    }
+
+    fn ensure_started(&self, backend: &dyn AsyncRuntime) {
+        {
+            let mut state = self.lock_state();
+            match state.phase {
+                LifecyclePhase::Starting | LifecyclePhase::Started => return,
+                LifecyclePhase::Idle => state.phase = LifecyclePhase::Starting,
+            }
+        }
+        self.run_claimed_start(backend);
+    }
+
+    fn within_runtime<F: FnOnce() -> T, T>(&self, f: F) -> T {
+        if let Some(backend) = self.commit_selection(false) {
+            self.ensure_started(backend);
+            let _guard = match catch_unwind(AssertUnwindSafe(|| backend.enter())) {
+                Ok(Ok(guard)) => Some(ContainedGuard(Some(guard))),
+                Ok(Err(error)) => {
+                    drop_contained(error);
+                    None
+                }
+                Err(payload) => {
+                    drop_contained(payload);
+                    None
+                }
+            };
+            return f();
+        }
+        f()
+    }
+
+    fn run_claimed_start(&self, backend: &dyn AsyncRuntime) {
+        let _lifecycle = self.lock_lifecycle();
+        if self.lock_state().phase != LifecyclePhase::Starting {
+            return;
+        }
+        let phase = if start_backend_with_rollback(backend) {
             #[cfg(feature = "tokio_rt")]
-            {
-                state.selected = Some(Arc::new(crate::tokio::TokioAsyncRuntime::new()));
-            }
-            #[cfg(not(feature = "tokio_rt"))]
-            {
-                return Err(Error::new(
-                    Status::NotFound,
-                    "no AsyncRuntime is registered; register one or enable `tokio_rt`",
-                ));
-            }
-        }
-        state.selection_frozen = true;
-        Ok(())
+            crate::tokio::refill_drained_tokio_runtime();
+            RUNTIME_GENERATION.fetch_add(1, Ordering::AcqRel);
+            LifecyclePhase::Started
+        } else {
+            LifecyclePhase::Idle
+        };
+        self.lock_state().phase = phase;
     }
 
-    fn activate(&self) -> Result<Arc<dyn AsyncRuntime>> {
-        let _lifecycle = self.lifecycle.lock().map_err(|_| {
-            Error::new(
-                Status::GenericFailure,
-                "async runtime lifecycle lock poisoned",
-            )
-        })?;
-        let runtime = {
-            let mut state = self.state.lock().map_err(|_| {
-                Error::new(
-                    Status::GenericFailure,
-                    "async runtime registry lock poisoned",
-                )
-            })?;
-            Self::select_default(&mut state)?;
-            if state.phase == LifecyclePhase::Started {
-                return Ok(Arc::clone(state.selected.as_ref().expect("selected above")));
+    /// First-env-activation hook. Returns `true` when a custom backend owns
+    /// the runtime lifecycle.
+    fn activate(&self) -> bool {
+        let backend = {
+            let mut state = self.lock_state();
+            state.selection_frozen = true;
+            let Some(backend) = self.backend.get() else {
+                return false;
+            };
+            match state.phase {
+                LifecyclePhase::Starting | LifecyclePhase::Started => return true,
+                LifecyclePhase::Idle => state.phase = LifecyclePhase::Starting,
             }
-            if state.phase != LifecyclePhase::Idle {
-                return Err(Error::new(
-                    Status::Closing,
-                    "async runtime is changing state",
-                ));
-            }
-            state.phase = LifecyclePhase::Starting;
-            Arc::clone(state.selected.as_ref().expect("selected above"))
+            backend
         };
-        let started = catch_unwind(AssertUnwindSafe(|| runtime.start())).map_err(|panic| {
-            Error::new(
-                Status::GenericFailure,
-                format!("AsyncRuntime::start panicked: {}", panic_message(panic)),
-            )
-        })?;
-        let mut state = self.state.lock().map_err(|_| {
-            Error::new(
-                Status::GenericFailure,
-                "async runtime registry lock poisoned",
-            )
-        })?;
-        match started {
-            Ok(()) => {
-                state.phase = LifecyclePhase::Started;
-                RUNTIME_GENERATION.fetch_add(1, Ordering::AcqRel);
-                self.changed.notify_all();
-                Ok(runtime)
-            }
-            Err(error) => {
-                state.phase = LifecyclePhase::Idle;
-                self.changed.notify_all();
-                Err(error)
-            }
-        }
+        self.run_claimed_start(backend.as_ref());
+        true
     }
 
-    fn shutdown(&self) -> Result<()> {
-        let _lifecycle = self.lifecycle.lock().map_err(|_| {
-            Error::new(
-                Status::GenericFailure,
-                "async runtime lifecycle lock poisoned",
-            )
-        })?;
-        let runtime = {
-            let mut state = self.state.lock().map_err(|_| {
-                Error::new(
-                    Status::GenericFailure,
-                    "async runtime registry lock poisoned",
-                )
-            })?;
-            if state.phase == LifecyclePhase::Idle {
-                return Ok(());
-            }
-            if state.phase != LifecyclePhase::Started {
-                return Err(Error::new(
-                    Status::Closing,
-                    "async runtime is changing state",
-                ));
-            }
-            state.phase = LifecyclePhase::Stopping;
-            Arc::clone(
-                state
-                    .selected
-                    .as_ref()
-                    .expect("started runtime is selected"),
-            )
+    /// Last-env-teardown hook. Returns `true` when a custom backend owned the
+    /// lifecycle.
+    fn deactivate(&self) -> bool {
+        let Some(backend) = self.backend.get() else {
+            return false;
         };
-        let result = match catch_unwind(AssertUnwindSafe(|| runtime.shutdown())) {
-            Ok(result) => result,
-            Err(panic) => {
-                eprintln!(
-                    "AsyncRuntime::shutdown panicked after selection: {}; aborting because native-image quiescence cannot be proven",
-                    panic_message(panic)
-                );
+        let _lifecycle = self.lock_lifecycle();
+        match catch_unwind(AssertUnwindSafe(|| backend.shutdown())) {
+            Ok(shutdown_result) => drop_contained(shutdown_result),
+            Err(payload) => {
+                std::mem::forget(payload);
                 std::process::abort();
             }
-        };
-        let mut state = self.state.lock().map_err(|_| {
-            Error::new(
-                Status::GenericFailure,
-                "async runtime registry lock poisoned",
-            )
-        })?;
-        // Even an error-returning backend is required by the unsafe trait
-        // contract to be quiescent, so restart remains well-defined.
-        state.phase = LifecyclePhase::Idle;
-        self.changed.notify_all();
-        result
+        }
+        self.lock_state().phase = LifecyclePhase::Idle;
+        true
     }
 
-    fn phase(&self) -> LifecyclePhase {
-        self.state
-            .lock()
-            .map(|state| state.phase)
-            .unwrap_or(LifecyclePhase::Stopping)
-    }
-}
-
-fn registry() -> &'static RuntimeRegistry {
-    static REGISTRY: OnceLock<RuntimeRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(RuntimeRegistry::new)
-}
-
-/// Registers a complete application-provided runtime before first use.
-pub fn try_register_async_runtime<R>(runtime: R) -> std::result::Result<(), R>
-where
-    R: AsyncRuntime,
-{
-    let Ok(mut state) = registry().state.lock() else {
-        return Err(runtime);
-    };
-    if state.selection_frozen || state.selected.is_some() || state.phase != LifecyclePhase::Idle {
-        return Err(runtime);
-    }
-    state.selected = Some(Arc::new(runtime));
-    Ok(())
-}
-
-/// Registers a complete custom runtime or records an actionable error.
-pub fn register_async_runtime<R>(runtime: R) -> Result<()>
-where
-    R: AsyncRuntime,
-{
-    match try_register_async_runtime(runtime) {
-        Ok(()) => Ok(()),
-        Err(runtime) => {
-            match catch_unwind(AssertUnwindSafe(|| runtime.shutdown())) {
-                Ok(_) => {}
-                Err(_) => {
-                    eprintln!(
-                        "unselected AsyncRuntime panicked while being retired; aborting because quiescence cannot be proven"
-                    );
+    fn shutdown_fallback(&self) {
+        #[cfg(feature = "tokio_rt")]
+        {
+            let _lifecycle = self.lock_lifecycle();
+            match catch_unwind(AssertUnwindSafe(|| {
+                crate::tokio::tokio_fallback_runtime().shutdown()
+            })) {
+                Ok(shutdown_result) => drop_contained(shutdown_result),
+                Err(payload) => {
+                    std::mem::forget(payload);
                     std::process::abort();
                 }
             }
-            Err(Error::new(
-                Status::AlreadyBound,
-                "AsyncRuntime must be registered exactly once before first use",
-            ))
+            self.lock_state().phase = LifecyclePhase::Idle;
         }
+    }
+
+    fn phase(&self) -> LifecyclePhase {
+        self.lock_state().phase
+    }
+}
+
+fn start_backend_with_rollback(backend: &dyn AsyncRuntime) -> bool {
+    match catch_unwind(AssertUnwindSafe(|| backend.start())) {
+        Ok(Ok(())) => return true,
+        Ok(Err(start_error)) => drop_contained(start_error),
+        Err(payload) => drop_contained(payload),
+    }
+    match catch_unwind(AssertUnwindSafe(|| backend.shutdown())) {
+        Ok(shutdown_result) => drop_contained(shutdown_result),
+        Err(payload) => {
+            std::mem::forget(payload);
+            std::process::abort();
+        }
+    }
+    false
+}
+
+fn registry() -> &'static AsyncRuntimeRegistry {
+    static REGISTRY: AsyncRuntimeRegistry = AsyncRuntimeRegistry {
+        backend: OnceLock::new(),
+        state: Mutex::new(RegistryState {
+            selection_frozen: false,
+            phase: LifecyclePhase::Idle,
+        }),
+        lifecycle: Mutex::new(()),
+        deferred_registration_error: Mutex::new(None),
+    };
+    &REGISTRY
+}
+
+fn retire_rejected_async_runtime(runtime: Box<dyn AsyncRuntime>) {
+    match catch_unwind(AssertUnwindSafe(|| runtime.shutdown())) {
+        Ok(shutdown_result) => drop_contained(shutdown_result),
+        Err(payload) => {
+            std::mem::forget(payload);
+            std::mem::forget(runtime);
+            std::process::abort();
+        }
+    }
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(runtime))) {
+        std::mem::forget(payload);
+        std::process::abort();
+    }
+}
+
+/// Register the custom [`AsyncRuntime`] backend for this linked addon image.
+///
+/// Call this once from `#[ani(init)]` or a library constructor. Registration
+/// only publishes a dormant backend; ani-rs calls [`AsyncRuntime::start`]
+/// before the backend's first dispatch — normally during `ANI_Constructor`,
+/// or earlier when a module-init hook invokes a runtime-backed API.
+///
+/// Registration is first-writer-wins. This infallible wrapper never panics:
+/// a duplicate or late registration records the error, and every later
+/// runtime-backed operation surfaces it by rejecting its Promise. The
+/// fallible [`try_register_async_runtime`] form returns the error directly.
+pub fn register_async_runtime<R: AsyncRuntime>(runtime: R) {
+    if let Err((reason, rejected)) = registry().try_register(Box::new(runtime)) {
+        retire_rejected_async_runtime(rejected);
+        registry().record_registration_error(reason);
+    }
+}
+
+/// Try to register a custom async runtime without deferring errors.
+///
+/// Library constructors should normally use [`register_async_runtime`].
+/// Registration after ani-rs begins activating an environment, or after an
+/// earlier runtime-backed operation commits a backend choice, returns an
+/// error and safely retires the rejected backend.
+pub fn try_register_async_runtime<R: AsyncRuntime>(runtime: R) -> Result<()> {
+    match registry().try_register(Box::new(runtime)) {
+        Ok(()) => Ok(()),
+        Err((reason, rejected)) => {
+            retire_rejected_async_runtime(rejected);
+            Err(Error::new(Status::GenericFailure, reason))
+        }
+    }
+}
+
+/// Start the async runtime.
+///
+/// When a custom [`AsyncRuntime`] backend has been registered, this closes
+/// the registration window and calls the backend's [`AsyncRuntime::start`]
+/// hook. If that hook returns an error or panics,
+/// [`AsyncRuntime::shutdown`] is called to roll back the partial start.
+/// Selecting a custom backend never constructs the built-in Tokio runtime.
+///
+/// Otherwise (the `tokio_rt` path) the built-in Tokio backend and the Tokio
+/// compatibility-helper runtime are started so they survive environment
+/// recreation after an earlier shutdown.
+pub fn start_async_runtime() {
+    if registry().activate() {
+        #[cfg(feature = "tokio_rt")]
+        crate::tokio::refill_drained_tokio_runtime();
+        #[cfg(feature = "tokio_rt")]
+        return;
+    }
+    #[cfg(feature = "tokio_rt")]
+    {
+        registry().ensure_started(crate::tokio::tokio_fallback_runtime());
+        crate::tokio::ensure_tokio_helper_runtime();
     }
 }
 
 /// Starts the selected backend without submitting work.
+///
+/// Prefer [`start_async_runtime`], which matches the napi-rs name and is
+/// infallible. This alias remains for existing callers.
 pub fn activate_async_runtime() -> Result<()> {
-    registry().activate().map(|_| ())
+    start_async_runtime();
+    Ok(())
+}
+
+/// Shutdown the async runtime.
+///
+/// When a custom backend has been registered, this calls its
+/// [`AsyncRuntime::shutdown`] hook. In combined `async-runtime` + `tokio_rt`
+/// builds a built-in Tokio runtime that a compatibility helper constructed
+/// lazily is also drained. The next [`start_async_runtime`] or the next
+/// runtime-backed dispatch refills the drained pair.
+pub fn shutdown_async_runtime() {
+    if registry().deactivate() {
+        #[cfg(feature = "tokio_rt")]
+        crate::tokio::drain_tokio_helper_runtime();
+        #[cfg(feature = "tokio_rt")]
+        return;
+    }
+    registry().shutdown_fallback();
+    #[cfg(feature = "tokio_rt")]
+    crate::tokio::drain_tokio_helper_runtime();
+}
+
+/// Enter the registered backend's context around `f`.
+///
+/// Combined `tokio_rt` builds re-export a Tokio-backed helper of the same
+/// name from [`crate::tokio`]. This function is the pure `async-runtime`
+/// path.
+pub fn within_runtime_if_available<F: FnOnce() -> T, T>(f: F) -> T {
+    registry().within_runtime(f)
+}
+
+fn reject_task_with(task: RuntimeTask, error: impl AniErrorPayload) {
+    task.reject_with(Box::new(error));
 }
 
 /// Submits one carrier to the selected runtime.
@@ -845,26 +1101,39 @@ pub fn spawn_runtime_task(task: RuntimeTask) -> Result<RuntimeTaskHandle> {
     let handle = task.handle();
     let registration = crate::scheduler::shared().register_cancellable(&task.control)?;
     task.control.install_registration(registration);
-    let runtime = match registry().activate() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            task.reject_with(Box::new(error));
-            return Ok(handle);
-        }
+
+    if let Some(reason) = registry().deferred_registration_error() {
+        reject_task_with(task, Error::new(Status::GenericFailure, reason));
+        return Ok(handle);
+    }
+
+    #[cfg(not(feature = "tokio_rt"))]
+    if registry().commit_selection(false).is_none() {
+        reject_task_with(
+            task,
+            Error::new(Status::GenericFailure, MISSING_RUNTIME_BACKEND_ERROR),
+        );
+        return Ok(handle);
+    }
+
+    let Some(backend) = registry().dispatch_backend() else {
+        reject_task_with(
+            task,
+            Error::new(Status::GenericFailure, MISSING_RUNTIME_BACKEND_ERROR),
+        );
+        return Ok(handle);
     };
-    match catch_unwind(AssertUnwindSafe(|| runtime.spawn(task))) {
+    registry().ensure_started(backend);
+    match catch_unwind(AssertUnwindSafe(|| backend.spawn(task))) {
         Ok(Ok(())) => Ok(handle),
         Ok(Err(rejection)) => {
-            rejection.work.reject_with(rejection.error);
+            let (task, error) = rejection.into_parts();
+            task.reject_with(error);
             Ok(handle)
         }
-        Err(panic) => {
-            // The task argument is dropped during unwinding, which performs the
-            // exactly-once rejection.  Report the backend contract violation.
-            Err(Error::new(
-                Status::GenericFailure,
-                format!("AsyncRuntime::spawn panicked: {}", panic_message(panic)),
-            ))
+        Err(payload) => {
+            drop_contained(payload);
+            Ok(handle)
         }
     }
 }
@@ -874,26 +1143,51 @@ pub fn spawn_runtime_blocking_task(task: RuntimeBlockingTask) -> Result<RuntimeT
     let handle = task.handle();
     let registration = crate::scheduler::shared().register_cancellable(&task.control)?;
     task.control.install_registration(registration);
-    let runtime = match registry().activate() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            task.reject_with(Box::new(error));
-            return Ok(handle);
-        }
+
+    if let Some(reason) = registry().deferred_registration_error() {
+        task.reject_with(Box::new(Error::new(Status::GenericFailure, reason)));
+        return Ok(handle);
+    }
+
+    #[cfg(not(feature = "tokio_rt"))]
+    if registry().commit_selection(false).is_none() {
+        task.reject_with(Box::new(Error::new(
+            Status::GenericFailure,
+            MISSING_RUNTIME_BACKEND_ERROR,
+        )));
+        return Ok(handle);
+    }
+
+    let Some(backend) = registry().dispatch_backend() else {
+        task.reject_with(Box::new(Error::new(
+            Status::GenericFailure,
+            MISSING_RUNTIME_BACKEND_ERROR,
+        )));
+        return Ok(handle);
     };
-    match catch_unwind(AssertUnwindSafe(|| runtime.spawn_blocking(task))) {
+    registry().ensure_started(backend);
+
+    let holder = Arc::new(Mutex::new(Some(task)));
+    let scheduled = Arc::clone(&holder);
+    let work: BlockingWork = Box::new(move || {
+        if let Some(task) = scheduled.lock().ok().and_then(|mut task| task.take()) {
+            task.run();
+        }
+    });
+    match catch_unwind(AssertUnwindSafe(|| backend.spawn_blocking(work))) {
         Ok(Ok(())) => Ok(handle),
         Ok(Err(rejection)) => {
-            rejection.work.reject_with(rejection.error);
+            let (work, error) = rejection.into_parts();
+            drop(work);
+            if let Some(task) = holder.lock().ok().and_then(|mut task| task.take()) {
+                task.reject_with(error);
+            }
             Ok(handle)
         }
-        Err(panic) => Err(Error::new(
-            Status::GenericFailure,
-            format!(
-                "AsyncRuntime::spawn_blocking panicked: {}",
-                panic_message(panic)
-            ),
-        )),
+        Err(payload) => {
+            drop_contained(payload);
+            Ok(handle)
+        }
     }
 }
 
@@ -1012,12 +1306,28 @@ pub fn block_on_future_result<F, T, E>(future: F) -> Result<std::result::Result<
 where
     F: Future<Output = std::result::Result<T, E>>,
 {
+    if let Some(reason) = registry().deferred_registration_error() {
+        return Err(Error::new(Status::GenericFailure, reason));
+    }
+
+    #[cfg(not(feature = "tokio_rt"))]
+    if registry().commit_selection(false).is_none() {
+        return Err(Error::new(
+            Status::GenericFailure,
+            MISSING_RUNTIME_BACKEND_ERROR,
+        ));
+    }
+
+    let backend = registry()
+        .dispatch_backend()
+        .ok_or_else(|| Error::new(Status::GenericFailure, MISSING_RUNTIME_BACKEND_ERROR))?;
+    registry().ensure_started(backend);
+
     let mut outcome = None;
     let mut driver = Box::pin(async {
         outcome = Some(future.await);
     });
-    let runtime = registry().activate()?;
-    match catch_unwind(AssertUnwindSafe(|| runtime.block_on(driver.as_mut()))) {
+    match catch_unwind(AssertUnwindSafe(|| backend.block_on(driver.as_mut()))) {
         Ok(result) => result?,
         Err(panic) => {
             drop(driver);
@@ -1065,7 +1375,7 @@ pub fn async_runtime_metrics() -> AsyncRuntimeMetrics {
         completed: COMPLETED_TASKS.load(Ordering::Acquire),
         cancelled: CANCELLED_TASKS.load(Ordering::Acquire),
         started: phase == LifecyclePhase::Started,
-        changing_state: matches!(phase, LifecyclePhase::Starting | LifecyclePhase::Stopping),
+        changing_state: phase == LifecyclePhase::Starting,
     }
 }
 
@@ -1137,8 +1447,8 @@ impl Drop for ShutdownWatchdog {
 pub fn shutdown_runtime_domain() -> Result<()> {
     let _watchdog = ShutdownWatchdog::start(configured_shutdown_deadline());
     let scheduler_result = crate::scheduler::shared().shutdown();
-    let async_result = registry().shutdown();
-    scheduler_result.and(async_result)
+    shutdown_async_runtime();
+    scheduler_result
 }
 
 #[cfg(test)]
@@ -1249,5 +1559,693 @@ mod tests {
             }
             assert_eq!(calls.load(loom::sync::atomic::Ordering::Acquire), 1);
         });
+    }
+
+    const BACKEND_STOPPED_ERROR: &str = "mock backend is stopped";
+    const HANG_PROTECTION: Duration = Duration::from_secs(30);
+
+    #[derive(Default)]
+    struct BackendProbe {
+        start_calls: AtomicUsize,
+        shutdown_calls: AtomicUsize,
+        spawn_calls: AtomicUsize,
+        spawns_before_start: AtomicUsize,
+        running: AtomicBool,
+    }
+
+    struct MockRuntime {
+        probe: Arc<BackendProbe>,
+        fail_start: bool,
+    }
+
+    impl MockRuntime {
+        fn new(probe: &Arc<BackendProbe>) -> Self {
+            Self {
+                probe: Arc::clone(probe),
+                fail_start: false,
+            }
+        }
+
+        fn failing_start(probe: &Arc<BackendProbe>) -> Self {
+            Self {
+                probe: Arc::clone(probe),
+                fail_start: true,
+            }
+        }
+    }
+
+    fn poll_task_now(task: RuntimeTask) {
+        let mut local = Box::pin(task.into_local_future());
+        let waker = noop_waker();
+        let mut context = Context::from_waker(&waker);
+        let _ = local.as_mut().poll(&mut context);
+    }
+
+    unsafe impl AsyncRuntime for MockRuntime {
+        fn spawn(
+            &self,
+            task: RuntimeTask,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+            if self.probe.start_calls.load(Ordering::SeqCst) == 0 {
+                self.probe
+                    .spawns_before_start
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            self.probe.spawn_calls.fetch_add(1, Ordering::SeqCst);
+            if !self.probe.running.load(Ordering::SeqCst) {
+                return Err(AsyncRuntimeRejection::new(
+                    task,
+                    Error::new(Status::GenericFailure, BACKEND_STOPPED_ERROR),
+                ));
+            }
+            poll_task_now(task);
+            Ok(())
+        }
+
+        fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+            let waker = noop_waker();
+            let mut context = Context::from_waker(&waker);
+            let _ = future.poll(&mut context);
+            Ok(())
+        }
+
+        fn start(&self) -> Result<()> {
+            self.probe.start_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_start {
+                return Err(Error::new(Status::GenericFailure, "start failed"));
+            }
+            self.probe.running.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn shutdown(&self) -> Result<()> {
+            self.probe.running.store(false, Ordering::SeqCst);
+            self.probe.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn dummy_task() -> RuntimeTask {
+        RuntimeTask::new(|| async {}, |_| {}).0
+    }
+
+    #[test]
+    fn duplicate_registration_defers_error_and_retires_backend() {
+        let registry = AsyncRuntimeRegistry::new();
+        let first_probe = Arc::new(BackendProbe::default());
+        let second_probe = Arc::new(BackendProbe::default());
+
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::new(&first_probe)))
+                .is_ok()
+        );
+
+        let (reason, rejected) = registry
+            .try_register(Box::new(MockRuntime::new(&second_probe)))
+            .expect_err("second registration must be rejected");
+        assert_eq!(reason, DUPLICATE_RUNTIME_ERROR);
+
+        retire_rejected_async_runtime(rejected);
+        assert_eq!(second_probe.shutdown_calls.load(Ordering::SeqCst), 1);
+        assert!(registry.commit_selection(false).is_some());
+        assert_eq!(first_probe.shutdown_calls.load(Ordering::SeqCst), 0);
+
+        registry.record_registration_error(reason);
+        assert_eq!(
+            registry.deferred_registration_error(),
+            Some(DUPLICATE_RUNTIME_ERROR)
+        );
+    }
+
+    #[test]
+    fn late_registration_after_env_activation_rejected() {
+        let registry = AsyncRuntimeRegistry::new();
+        assert!(!registry.activate());
+
+        let probe = Arc::new(BackendProbe::default());
+        let (reason, rejected) = registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .expect_err("registration after env activation must be rejected");
+        retire_rejected_async_runtime(rejected);
+        assert_eq!(reason, LATE_RUNTIME_REGISTRATION_ERROR);
+    }
+
+    #[test]
+    fn tokio_fallback_selection_commits_and_closes_registration() {
+        let registry = AsyncRuntimeRegistry::new();
+        assert!(registry.commit_selection(true).is_none());
+
+        let probe = Arc::new(BackendProbe::default());
+        let (reason, rejected) = registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .expect_err("registration after a committed fallback choice must be rejected");
+        retire_rejected_async_runtime(rejected);
+        assert_eq!(reason, LATE_RUNTIME_REGISTRATION_ERROR);
+    }
+
+    #[test]
+    fn missing_backend_does_not_freeze_selection() {
+        let registry = AsyncRuntimeRegistry::new();
+        assert!(registry.commit_selection(false).is_none());
+
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::new(&probe)))
+                .is_ok()
+        );
+        assert!(registry.commit_selection(false).is_some());
+    }
+
+    #[test]
+    fn spawn_blocking_default_declines_with_work_returned() {
+        struct SpawnOnlyRuntime;
+        unsafe impl AsyncRuntime for SpawnOnlyRuntime {
+            fn spawn(
+                &self,
+                task: RuntimeTask,
+            ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+                poll_task_now(task);
+                Ok(())
+            }
+            fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+                let waker = noop_waker();
+                let mut context = Context::from_waker(&waker);
+                let _ = future.poll(&mut context);
+                Ok(())
+            }
+            fn shutdown(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_in_work = Arc::clone(&ran);
+        let rejection = SpawnOnlyRuntime
+            .spawn_blocking(Box::new(move || {
+                ran_in_work.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect_err("the default spawn_blocking implementation must decline");
+        assert_eq!(rejection.error().ani_status(), "GenericFailure");
+
+        let (work, _error) = rejection.into_parts();
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        work();
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn pre_activation_dispatch_starts_backend_before_first_spawn() {
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::new(&probe)))
+                .is_ok()
+        );
+
+        let backend = registry
+            .commit_selection(cfg!(feature = "tokio_rt"))
+            .expect("custom backend must be selected");
+        registry.ensure_started(backend);
+        assert!(backend.spawn(dummy_task()).is_ok());
+
+        assert_eq!(probe.spawn_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.spawns_before_start.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+
+        assert!(registry.activate());
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+
+        assert!(registry.deactivate());
+        assert!(registry.activate());
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn deactivate_waits_out_inflight_start() {
+        use std::sync::mpsc;
+
+        struct GatedStartRuntime {
+            events: Arc<Mutex<Vec<&'static str>>>,
+            start_entered: mpsc::Sender<()>,
+            release_start: Mutex<mpsc::Receiver<()>>,
+        }
+
+        unsafe impl AsyncRuntime for GatedStartRuntime {
+            fn spawn(
+                &self,
+                task: RuntimeTask,
+            ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+                poll_task_now(task);
+                Ok(())
+            }
+
+            fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+                let waker = noop_waker();
+                let mut context = Context::from_waker(&waker);
+                let _ = future.poll(&mut context);
+                Ok(())
+            }
+
+            fn start(&self) -> Result<()> {
+                self.events.lock().unwrap().push("start:enter");
+                self.start_entered
+                    .send(())
+                    .expect("test driver dropped the start-entered channel");
+                self.release_start
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(HANG_PROTECTION)
+                    .expect("test driver never released the gated start");
+                self.events.lock().unwrap().push("start:exit");
+                Ok(())
+            }
+
+            fn shutdown(&self) -> Result<()> {
+                self.events.lock().unwrap().push("shutdown");
+                Ok(())
+            }
+        }
+
+        let events: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let (start_entered_tx, start_entered_rx) = mpsc::channel();
+        let (release_start_tx, release_start_rx) = mpsc::channel();
+        let (deactivate_called_tx, deactivate_called_rx) = mpsc::channel();
+
+        let registry = AsyncRuntimeRegistry::new();
+        assert!(
+            registry
+                .try_register(Box::new(GatedStartRuntime {
+                    events: Arc::clone(&events),
+                    start_entered: start_entered_tx,
+                    release_start: Mutex::new(release_start_rx),
+                }))
+                .is_ok()
+        );
+
+        std::thread::scope(|scope| {
+            let starter = scope.spawn(|| assert!(registry.activate()));
+            start_entered_rx
+                .recv_timeout(HANG_PROTECTION)
+                .expect("start was never entered");
+
+            let stopper = scope.spawn(|| {
+                deactivate_called_tx
+                    .send(())
+                    .expect("test driver dropped the deactivate-called channel");
+                assert!(registry.deactivate());
+                events.lock().unwrap().push("deactivate:returned");
+            });
+            deactivate_called_rx
+                .recv_timeout(HANG_PROTECTION)
+                .expect("deactivate was never called");
+            release_start_tx
+                .send(())
+                .expect("the gated start is no longer waiting for its release");
+
+            starter.join().expect("starter thread panicked");
+            stopper.join().expect("stopper thread panicked");
+        });
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "start:enter",
+                "start:exit",
+                "shutdown",
+                "deactivate:returned"
+            ]
+        );
+    }
+
+    #[test]
+    fn completed_teardown_revokes_pending_start_claim() {
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::new(&probe)))
+                .is_ok()
+        );
+
+        registry.lock_state().phase = LifecyclePhase::Starting;
+        assert!(registry.deactivate());
+        assert_eq!(probe.shutdown_calls.load(Ordering::SeqCst), 1);
+
+        let backend = registry
+            .commit_selection(cfg!(feature = "tokio_rt"))
+            .expect("custom backend must stay selected");
+        registry.run_claimed_start(backend);
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 0);
+
+        let rejection = backend
+            .spawn(dummy_task())
+            .expect_err("a stopped conforming backend must reject the spawn");
+        let (task, error) = rejection.into_parts();
+        task.reject_with(error);
+
+        registry.ensure_started(backend);
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn start_error_triggers_shutdown_rollback() {
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::failing_start(&probe)))
+                .is_ok()
+        );
+
+        assert!(registry.activate());
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.shutdown_calls.load(Ordering::SeqCst), 1);
+
+        assert!(registry.deactivate());
+        assert_eq!(probe.shutdown_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn panicking_payload_drop_from_start_is_contained() {
+        struct PanickingDropPayload {
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for PanickingDropPayload {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+                panic!("panic payload drop");
+            }
+        }
+
+        struct PanicOnFirstStartRuntime {
+            probe: Arc<BackendProbe>,
+            payload_drops: Arc<AtomicUsize>,
+        }
+
+        unsafe impl AsyncRuntime for PanicOnFirstStartRuntime {
+            fn spawn(
+                &self,
+                task: RuntimeTask,
+            ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+                poll_task_now(task);
+                Ok(())
+            }
+
+            fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+                let waker = noop_waker();
+                let mut context = Context::from_waker(&waker);
+                let _ = future.poll(&mut context);
+                Ok(())
+            }
+
+            fn start(&self) -> Result<()> {
+                if self.probe.start_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::panic::panic_any(PanickingDropPayload {
+                        drops: Arc::clone(&self.payload_drops),
+                    });
+                }
+                self.probe.running.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn shutdown(&self) -> Result<()> {
+                self.probe.running.store(false, Ordering::SeqCst);
+                self.probe.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        let payload_drops = Arc::new(AtomicUsize::new(0));
+        assert!(
+            registry
+                .try_register(Box::new(PanicOnFirstStartRuntime {
+                    probe: Arc::clone(&probe),
+                    payload_drops: Arc::clone(&payload_drops),
+                }))
+                .is_ok()
+        );
+
+        let activated = catch_unwind(AssertUnwindSafe(|| registry.activate()))
+            .expect("a panicking payload Drop must not unwind out of the activate path");
+        assert!(activated);
+        assert_eq!(payload_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.shutdown_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(registry.lock_state().phase, LifecyclePhase::Idle);
+
+        assert!(registry.activate());
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 2);
+        assert!(probe.running.load(Ordering::SeqCst));
+    }
+
+    #[cfg(not(feature = "tokio_rt"))]
+    #[test]
+    fn within_runtime_starts_dormant_backend_before_enter() {
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(MockRuntime::new(&probe)))
+                .is_ok()
+        );
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 0);
+
+        let ran = registry.within_runtime(|| true);
+
+        assert!(ran, "the wrapped closure must run");
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(not(feature = "tokio_rt"))]
+    #[test]
+    fn within_runtime_contains_panicking_enter_hook() {
+        struct PanicOnEnterRuntime {
+            probe: Arc<BackendProbe>,
+        }
+
+        unsafe impl AsyncRuntime for PanicOnEnterRuntime {
+            fn spawn(
+                &self,
+                task: RuntimeTask,
+            ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+                poll_task_now(task);
+                Ok(())
+            }
+
+            fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+                let waker = noop_waker();
+                let mut context = Context::from_waker(&waker);
+                let _ = future.poll(&mut context);
+                Ok(())
+            }
+
+            fn start(&self) -> Result<()> {
+                self.probe.start_calls.fetch_add(1, Ordering::SeqCst);
+                self.probe.running.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn enter(&self) -> Result<Box<dyn AsyncRuntimeGuard + '_>> {
+                panic!("enter hook panic");
+            }
+
+            fn shutdown(&self) -> Result<()> {
+                self.probe.running.store(false, Ordering::SeqCst);
+                self.probe.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let registry = AsyncRuntimeRegistry::new();
+        let probe = Arc::new(BackendProbe::default());
+        assert!(
+            registry
+                .try_register(Box::new(PanicOnEnterRuntime {
+                    probe: Arc::clone(&probe)
+                }))
+                .is_ok()
+        );
+
+        let ran = registry.within_runtime(|| true);
+        assert!(ran);
+        assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A Tokio-free backend: one worker thread owns `!Send` local futures.
+    /// This is the shape an FFRT / thread-pool implementer should follow.
+    struct WorkerQueueRuntime {
+        jobs: Mutex<Option<std::sync::mpsc::Sender<RuntimeTask>>>,
+        join: Mutex<Option<std::thread::JoinHandle<()>>>,
+        running: AtomicBool,
+    }
+
+    impl WorkerQueueRuntime {
+        fn new() -> Self {
+            let (tx, rx) = std::sync::mpsc::channel::<RuntimeTask>();
+            let join = std::thread::Builder::new()
+                .name("ani-test-worker".into())
+                .spawn(move || {
+                    while let Ok(task) = rx.recv() {
+                        drive_local_task(task);
+                    }
+                })
+                .expect("spawn worker");
+            Self {
+                jobs: Mutex::new(Some(tx)),
+                join: Mutex::new(Some(join)),
+                running: AtomicBool::new(false),
+            }
+        }
+    }
+
+    fn drive_local_task(task: RuntimeTask) {
+        let mut local = std::pin::pin!(task.into_local_future());
+        let parked = Arc::new(std::thread::current());
+        struct ThreadWake(Arc<std::thread::Thread>);
+        impl std::task::Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Waker::from(Arc::new(ThreadWake(parked)));
+        let mut context = Context::from_waker(&waker);
+        while local.as_mut().poll(&mut context).is_pending() {
+            std::thread::park();
+        }
+    }
+
+    unsafe impl AsyncRuntime for WorkerQueueRuntime {
+        fn spawn(
+            &self,
+            task: RuntimeTask,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+            if !self.running.load(Ordering::SeqCst) {
+                return Err(AsyncRuntimeRejection::new(
+                    task,
+                    Error::new(Status::GenericFailure, BACKEND_STOPPED_ERROR),
+                ));
+            }
+            let jobs = self.jobs.lock().unwrap();
+            match jobs.as_ref() {
+                Some(tx) => tx.send(task).map_err(|std::sync::mpsc::SendError(task)| {
+                    AsyncRuntimeRejection::new(
+                        task,
+                        Error::new(Status::GenericFailure, "worker queue closed"),
+                    )
+                }),
+                None => Err(AsyncRuntimeRejection::new(
+                    task,
+                    Error::new(Status::GenericFailure, "worker queue closed"),
+                )),
+            }
+        }
+
+        fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+            let parked = Arc::new(std::thread::current());
+            struct ThreadWake(Arc<std::thread::Thread>);
+            impl std::task::Wake for ThreadWake {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = Waker::from(Arc::new(ThreadWake(parked)));
+            let mut context = Context::from_waker(&waker);
+            let mut future = future;
+            while future.as_mut().poll(&mut context).is_pending() {
+                std::thread::park();
+            }
+            Ok(())
+        }
+
+        fn spawn_blocking(
+            &self,
+            work: BlockingWork,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<BlockingWork>> {
+            if !self.running.load(Ordering::SeqCst) {
+                return Err(AsyncRuntimeRejection::new(
+                    work,
+                    Error::new(Status::GenericFailure, BACKEND_STOPPED_ERROR),
+                ));
+            }
+            std::thread::spawn(work);
+            Ok(())
+        }
+
+        fn start(&self) -> Result<()> {
+            self.running.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn shutdown(&self) -> Result<()> {
+            self.running.store(false, Ordering::SeqCst);
+            self.jobs.lock().unwrap().take();
+            if let Some(join) = self.join.lock().unwrap().take() {
+                let _ = join.join();
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn custom_non_tokio_runtime_runs_spawn_and_block_on() {
+        let runtime = WorkerQueueRuntime::new();
+        runtime.start().unwrap();
+
+        let done = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&done);
+        let (task, handle) = RuntimeTask::new(
+            move || async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| {},
+        );
+        runtime.spawn(task).expect("worker accepts the task");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "custom runtime did not finish the task"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(done.load(Ordering::SeqCst), 1);
+
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let blocked_in_future = Arc::clone(&blocked);
+        let mut driver = std::pin::pin!(async move {
+            blocked_in_future.fetch_add(1, Ordering::SeqCst);
+        });
+        runtime.block_on(driver.as_mut()).unwrap();
+        assert_eq!(blocked.load(Ordering::SeqCst), 1);
+
+        let blocking_done = Arc::new(AtomicUsize::new(0));
+        let blocking_in_work = Arc::clone(&blocking_done);
+        assert!(
+            runtime
+                .spawn_blocking(Box::new(move || {
+                    blocking_in_work.fetch_add(1, Ordering::SeqCst);
+                }))
+                .is_ok()
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while blocking_done.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+
+        runtime.shutdown().unwrap();
+        let (task, handle) = RuntimeTask::new(|| async {}, |_| {});
+        let rejection = runtime
+            .spawn(task)
+            .expect_err("stopped custom runtime must decline");
+        let (task, error) = rejection.into_parts();
+        task.reject_with(error);
+        assert!(handle.is_cancelled());
     }
 }

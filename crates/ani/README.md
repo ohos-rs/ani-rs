@@ -49,7 +49,14 @@ use ani_derive::ani;
 pub async fn load_value(key: String) -> Result<String> {
     Ok(format!("value:{key}"))
 }
+
+#[ani(async)]
+pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, ArktsRejection> {
+    promise.await
+}
 ```
+
+`Promise<T>` is an awaitable argument. Return values to ArkTS with `PromiseRaw<T>` or `#[ani(async)] -> Result<T>`. Custom executors (FFRT, thread pools) implement `AsyncRuntime` and call `register_async_runtime` from `#[ani(init)]`; enable only `async-runtime` to stay Tokio-free.
 
 ## Crates
 
