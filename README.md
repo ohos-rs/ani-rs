@@ -197,6 +197,7 @@ Repository docs ship as an Astro + Starlight package in the pnpm workspace at [`
 - [Async and Promise](website/src/content/docs/guide/async.md)
 - [Error handling](website/src/content/docs/guide/errors.md)
 - [References and lifetimes](website/src/content/docs/guide/references.md)
+- [Interop limits](website/src/content/docs/guide/interop-limits.md)
 - [Testing and debugging](website/src/content/docs/guide/testing.md)
 - [`#[ani]` attributes](website/src/content/docs/reference/macros.md)
 

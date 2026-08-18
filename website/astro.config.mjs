@@ -97,6 +97,7 @@ export default defineConfig({
             { slug: 'guide/async' },
             { slug: 'guide/errors' },
             { slug: 'guide/references' },
+            { slug: 'guide/interop-limits' },
           ],
         },
         {
