@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "ani"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.3"
 dependencies = [
  "ani-sys",
  "anyhow",
@@ -279,6 +279,14 @@ dependencies = [
 
 [[package]]
 name = "ani-example-interface"
+version = "0.1.0"
+dependencies = [
+ "ani",
+ "ani-derive",
+]
+
+[[package]]
+name = "ani-example-iterator"
 version = "0.1.0"
 dependencies = [
  "ani",
