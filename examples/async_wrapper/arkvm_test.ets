@@ -100,7 +100,7 @@ export native function background_cancellable(delay_ms: int): Promise<int>;
 export native function background_square(input: int): Promise<int>;
 export native function batch_compute(count: int): long;
 export native function cancel_arkts_promise_wait(promise: Promise<string>): boolean;
-export native function create_deferred_resolve(value: string): Promise<string>;
+export native function promise_new_typed_resolve(value: string): Promise<string>;
 export native function custom_async_error(operation: string): Promise<string>;
 export native function env_roundtrip(value: string): Promise<string>;
 export native function fail_async_iterator(operation: string): void;
@@ -281,8 +281,8 @@ function main(): void {
   __assert_true("tokio_void_async", tokioVoidAsync);
   let envText: string = waitForCompletion(() => env_roundtrip("hello"));
   __assert_eq_string("env_roundtrip", envText, "env:hello");
-  let typedPromiseText: string = waitForCompletion(() => create_deferred_resolve("hello"));
-  __assert_eq_string("create_deferred_resolve", typedPromiseText, "typed:hello");
+  let typedPromiseText: string = waitForCompletion(() => promise_new_typed_resolve("hello"));
+  __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
   let envResolvedText: string = waitForCompletion(() => promise_env_resolved("hello"));
   __assert_eq_string("promise_env_resolved", envResolvedText, "env:hello");
   let envRejected: boolean = waitForCompletion(async (): Promise<boolean> => {

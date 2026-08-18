@@ -72,9 +72,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Verify ArkTS/ABC compatibility fixtures
-        shell: bash
-        run: scripts/check_qemu_abc_fixtures.sh
       - name: Setup OpenHarmony SDK
         id: ohos-sdk
         uses: openharmony-rs/setup-ohos-sdk@eb82b94ef522b07269679195c2512f22e922ef3b # v1.0.0

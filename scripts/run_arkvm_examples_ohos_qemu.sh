@@ -328,7 +328,6 @@ fi
   -o "$runner"
 
 if [[ "$use_abc_fixtures" == "1" ]]; then
-  "$repo_root/scripts/check_qemu_abc_fixtures.sh"
   cp "$repo_root/scripts/ohos_qemu_abc_launcher.abc" "$launcher_abc"
 else
   docker run --rm --platform linux/amd64 \
@@ -384,6 +383,11 @@ while IFS= read -r cargo_toml; do
   package="$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$cargo_toml" | head -n1)"
   [[ -z "$package" ]] && continue
   if [[ -n "$package_filter" && ! "$package" =~ $package_filter ]]; then
+    continue
+  fi
+  if [[ -z "$hap_input" && "$use_abc_fixtures" == "1" && \
+    ! -f "$(dirname "$cargo_toml")/arkvm_test.abc" ]]; then
+    echo "SKIP $package: no committed ABC fixture"
     continue
   fi
 

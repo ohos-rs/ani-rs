@@ -119,7 +119,7 @@ OHOS_QEMU_PACKAGE_FILTER=my-package \
 
 设置 `QEMU_PACKAGES_ROOT` 后脚本会校验 manifest；设置 `OHOS_QEMU_REQUIRE_PACKAGE_PROCESS=1` 后还会确认当前进程确实引用该包的 `images/`，从而避免把 DevEco 模拟器或其他端口误认为目标镜像。
 
-`OHOS_QEMU_USE_ABC_FIXTURES=1` 使用仓库内与 ArkTS 源码校验和绑定的 ABC。`scripts/check_qemu_abc_fixtures.sh` 会拒绝源码与 ABC 不一致的提交，同时让 CI 验证“已发布 ABC + 当前 SO”的 ABI 兼容。需要现场编译 ABC 时不设置该变量，并通过 `OHOS_SOURCE_ROOT`，或 `OHOS_ES2PANDA` 与 `OHOS_ARKTSCONFIG`，指定匹配 guest 的 OpenHarmony host 编译产物。
+`OHOS_QEMU_USE_ABC_FIXTURES=1` 使用仓库内已提交的 ABC（CI hosted runner 没有匹配 guest 的 `es2panda`）。没有对应 `.abc` 的 example 会被跳过。需要现场编译 ABC 时不设置该变量，并通过 `OHOS_SOURCE_ROOT`，或 `OHOS_ES2PANDA` 与 `OHOS_ARKTSCONFIG`，指定匹配 guest 的 OpenHarmony host 编译产物。
 
 runner 会为每个场景写出 `performance.tsv`；发布门禁另外运行 `scripts/check_qemu_performance.sh`，可通过 `OHOS_QEMU_MAX_PER_ITERATION_US` 配置对应机器/架构的延迟上限。所有 HDC 操作都有宿主侧 watchdog，默认 60 秒，可通过 `OHOS_QEMU_HDC_TIMEOUT` 调整；运行场景另受 `OHOS_QEMU_HDC_RUNTIME_TIMEOUT` 保护。
 

@@ -357,7 +357,7 @@ pub fn promise_maybe_succeed(env: &Env<'_>, should_succeed: bool, value: i32) ->
     Ok(promise.into_object().as_raw() as i64)
 }
 
-#[ani]
+#[ani(name = "promise_new_typed_resolve")]
 pub fn create_deferred_resolve(
     env: &Env<'_>,
     value: String,
@@ -799,10 +799,9 @@ mod tests {
 
     #[test]
     fn async_signature_override_logic_works() {
-        let echoed =
-            ani::tokio::block_on_future(signature_override_echo("value".to_string()))
-                .expect("runtime should execute")
-                .expect("future should succeed");
+        let echoed = ani::tokio::block_on_future(signature_override_echo("value".to_string()))
+            .expect("runtime should execute")
+            .expect("future should succeed");
         assert_eq!(echoed, "sig:value");
     }
 
