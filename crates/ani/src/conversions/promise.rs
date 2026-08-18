@@ -918,6 +918,92 @@ impl<T: PromiseFutureValue, E: Send + 'static> std::future::Future for PromiseFu
     }
 }
 
+/// Awaitable ArkTS `Promise<T>`, matching napi-rs' incoming `Promise<T>`.
+///
+/// Use this as a `#[ani]` / `#[ani(async)]` argument and `.await` it on the
+/// selected [`crate::async_runtime::AsyncRuntime`]. The type is created by
+/// attaching the generated ETS continuation bridge; it cannot be passed back
+/// to ArkTS. Create or return a Promise with [`PromiseRaw`].
+///
+/// ```rust,ignore
+/// #[ani(async)]
+/// pub async fn join_name(promise: Promise<String>) -> Result<String> {
+///     Ok(promise.await?)
+/// }
+/// ```
+pub struct Promise<T, E: Send + 'static = ArktsRejection> {
+    inner: PromiseFuture<T, E>,
+}
+
+impl<T> TypeInfo for Promise<T> {
+    fn type_signature() -> &'static str {
+        PromiseRaw::<T>::type_signature()
+    }
+
+    fn ani_c_type() -> &'static str {
+        PromiseRaw::<T>::ani_c_type()
+    }
+}
+
+impl<T: PromiseFutureValue> Promise<T> {
+    /// Attach a continuation to an existing ArkTS Promise.
+    pub fn from_raw_promise<'env>(env: &Env<'env>, promise: PromiseRaw<'env, T>) -> Result<Self> {
+        Ok(Self {
+            inner: promise.into_future(env)?,
+        })
+    }
+}
+
+impl<T: PromiseFutureValue, E: Send + 'static> Promise<T, E> {
+    /// Attach a continuation using an application-defined rejection decoder.
+    pub fn from_raw_promise_with_decoder<'env>(
+        env: &Env<'env>,
+        promise: PromiseRaw<'env, T>,
+        decoder: Arc<dyn RejectionDecoder<E>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: promise.into_future_with_decoder(env, decoder)?,
+        })
+    }
+
+    /// Releases this waiter without aborting the ArkTS operation.
+    pub fn cancel(&mut self) -> Result<bool> {
+        self.inner.cancel()
+    }
+
+    /// Returns whether the Rust-side wait has been cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
+    }
+
+    /// Unwrap the underlying [`PromiseFuture`].
+    pub fn into_future(self) -> PromiseFuture<T, E> {
+        self.inner
+    }
+}
+
+impl<T: PromiseFutureValue, E: Send + 'static> std::future::Future for Promise<T, E> {
+    type Output = std::result::Result<T, E>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll(context)
+    }
+}
+
+impl<T: PromiseFutureValue, E: Send + 'static> std::ops::Deref for Promise<T, E> {
+    type Target = PromiseFuture<T, E>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T: PromiseFutureValue, E: Send + 'static> std::ops::DerefMut for Promise<T, E> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 impl<T, E: Send + 'static> Drop for PromiseFuture<T, E> {
     fn drop(&mut self) {
         self.state
@@ -1475,6 +1561,18 @@ impl<'env, T> FromAni<'env> for PromiseRaw<'env, T> {
     }
 }
 
+impl<'env, T> FromAni<'env> for Promise<T>
+where
+    T: PromiseFutureValue,
+{
+    type Input = sys::ani_object;
+
+    unsafe fn from_ani(env: &Env<'env>, value: Self::Input) -> Result<Self> {
+        let raw = unsafe { PromiseRaw::<T>::from_ani(env, value) }?;
+        Self::from_raw_promise(env, raw)
+    }
+}
+
 impl<'env, T> ConversionToAni<'env> for Deferred<T> {
     type Output = sys::ani_resolver;
 
@@ -1638,5 +1736,13 @@ mod tests {
         }
 
         let _ = compile;
+    }
+
+    #[test]
+    fn awaitable_promise_is_a_send_future() {
+        fn assert_send_future<T: Send + std::future::Future>() {}
+        assert_send_future::<Promise<String>>();
+        assert_send_future::<Promise<i32>>();
+        assert_send_future::<Promise<()>>();
     }
 }

@@ -24,7 +24,8 @@ use crate::types::{
 use super::function::{
     AsyncExportMode, BindingOwner, BindingResolveInput, CallableKind, SignatureBindingStyle,
     async_export_mode, resolve_binding_plan_with_class_plan, resolve_class_member_plan,
-    signature_for_export, validate_constructor_usage, validate_unsupported_bind_attrs,
+    signature_for_export, validate_constructor_usage, validate_promise_usage,
+    validate_unsupported_bind_attrs,
 };
 
 /// Expand `#[ani]` for impl blocks
@@ -152,6 +153,7 @@ fn process_method(
 
     let method_fn = to_item_fn(method);
     validate_unsupported_bind_attrs(&merged_attrs, &method_fn)?;
+    validate_promise_usage(&method_fn)?;
     validate_constructor_usage(&merged_attrs, &method_fn)?;
 
     let method_name = &method.sig.ident;

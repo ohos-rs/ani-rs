@@ -1,7 +1,7 @@
 //! Async Wrapper Example - Wrapping synchronous interfaces for Promise operations.
 
 use ani::conversions::{
-    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, ManagedResource, PromiseRaw,
+    AsyncIteratorValue, AsyncStream, AsyncTask, Deferred, ManagedResource, Promise, PromiseRaw,
     RefContainer, StreamSender, ThreadsafeFunction,
 };
 use ani::prelude::*;
@@ -508,10 +508,9 @@ pub fn tokio_fetch_text(env: &Env<'_>, url: String) -> Result<PromiseRaw<'static
 #[ani]
 pub fn tokio_await_arkts_promise(
     env: &Env<'_>,
-    promise: PromiseRaw<'_, String>,
+    promise: Promise<String>,
 ) -> Result<PromiseRaw<'static, String>> {
-    let future = promise.into_future(env)?;
-    ani::tokio::spawn_future_result(env, future).map(PromiseRaw::into_static)
+    ani::spawn_future_result(env, promise).map(PromiseRaw::into_static)
 }
 
 #[ani]
