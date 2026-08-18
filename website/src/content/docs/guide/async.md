@@ -35,8 +35,15 @@ tokio = { version = "1", default-features = false, features = ["time"] }
 
 `async-runtime` 只提供执行器无关 SPI；`async` 额外选择内置 Tokio backend。根据实际使用选择 `tokio_time`、`tokio_fs`、`tokio_net`、`tokio_sync` 等 feature。
 
+组合构建（`async-runtime` + `tokio_rt`）的路由与 napi-rs 一致：
+
+- 生成的 `#[ani(async)]` future、`spawn_future` 和 `block_on_future_result` 跟随**选中的** `AsyncRuntime`。
+- `spawn` / `block_on` / `spawn_blocking` / `within_runtime_if_available` 在开启 `tokio_rt` 时始终走 Tokio helper runtime。
+- 选中自定义 backend 不会构造 Tokio；第一次调用 Tokio helper 才会惰性创建。
+- 只用 `async-runtime`、不链接 Tokio 时，缺失 backend 的错误不会冻结注册窗口。
+
 :::caution
-仅启用 `async-runtime` 时，应用必须在第一次异步调用前注册 `AsyncRuntime`；否则 Promise 以结构化错误 reject。自定义 runtime 不需要链接 Tokio。
+仅启用 `async-runtime` 时，必须在 `#[ani(init)]` 或库构造函数里调用 `register_async_runtime(...)`。`ANI_Constructor` 会关闭注册窗口并启动选中的 backend。自定义 runtime 不需要链接 Tokio。
 :::
 
 ## 导出 async fn
@@ -187,32 +194,52 @@ pub fn square_in_background(input: i32) -> AsyncTask<Square> {
 
 `#[ani(async)]`、Promise、`AsyncTask`、`ThreadsafeFunction` 和 async stream 全部进入同一个 RuntimeDomain。生成宏提交的是 `RuntimeTask`，不再调用 Tokio API。carrier 本身可跨线程；backend 必须在选定线程调用 `into_local_future()`，并在同一线程 poll/drop 可能为 `!Send` 的 ANI Future。
 
-应用可以实现并注册完整 backend：
+应用可以实现并注册完整 backend。`register_async_runtime` 是 infallible 的 first-writer-wins API：重复或过晚的注册会记录错误，后续异步调用再把 Promise reject 掉。构造函数里应使用它，而不是 `try_register_async_runtime`。
 
 ```rust
 unsafe impl AsyncRuntime for AppRuntime {
     fn spawn(&self, task: RuntimeTask)
         -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>>
-    { /* 提交 carrier */ }
+    { /* 提交 carrier；未就绪时把 task 原样退回 */ }
 
-    fn spawn_blocking(&self, task: RuntimeBlockingTask)
-        -> std::result::Result<(), AsyncRuntimeRejection<RuntimeBlockingTask>>
-    { /* 提交后调用 task.run() */ }
+    fn spawn_blocking(&self, work: Box<dyn FnOnce() + Send + 'static>)
+        -> std::result::Result<(), AsyncRuntimeRejection<Box<dyn FnOnce() + Send + 'static>>>
+    { /* 在阻塞线程跑 work，或原样退回 */ }
 
     fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> { /* ... */ }
-    fn start(&self) -> Result<()> { Ok(()) }
+    fn start(&self) -> Result<()> { /* 在这里创建线程/队列 */ Ok(()) }
     fn shutdown(&self) -> Result<()> { /* cancel、drain、join */ Ok(()) }
 }
 
-register_async_runtime(AppRuntime::new())?;
+#[ani(init)]
+fn init() {
+    register_async_runtime(AppRuntime::new());
+}
 ```
+
+`start` 失败或 panic 时，框架会立刻调用 `shutdown` 回滚部分启动。`Starting` 期间的 dispatch 不会等待：backend 必须拒绝未就绪的提交，或接受后延迟执行。
 
 `shutdown` 是 unsafe contract：返回前所有 backend thread、task、closure 和 waker 必须停止执行 addon 代码。析构默认有 30 秒 watchdog，可用 `ANI_RUNTIME_SHUTDOWN_TIMEOUT_MS` 调整；非协作任务超时会 fail-fast，不会在 SO 卸载后继续运行。
 
 ```rust
 let before = runtime_kernel().metrics();
+shutdown_async_runtime();
 shutdown_runtime_domain()?;
 let after = runtime_kernel().metrics(); // 下一次提交会启动新 generation
+```
+
+需要自定义 Tokio 线程池时，不要实现 `AsyncRuntime`，而是调用 `create_custom_tokio_runtime`：
+
+```rust
+#[ani(init)]
+fn init() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(32 * 1024 * 1024)
+        .build()
+        .unwrap();
+    create_custom_tokio_runtime(rt);
+}
 ```
 
 ## ArkTS 主动取消
