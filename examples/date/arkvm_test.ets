@@ -13,16 +13,24 @@ export native function date_to_millis(value: Date): double;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
 
 
@@ -99,16 +107,16 @@ function __assert_throws(name: string, fn: () => void): void {
 }
 
 console.log("[arkvm] smoke start: ani-example-date");
-let epochMillis: double = 1700000000123.0;
+let epochMillis: long = 1700000000123;
 let sample = new Date(epochMillis);
-__assert_eq_double("date_to_millis", date_to_millis(sample), epochMillis);
-__assert_eq_double("date_identity", date_identity(sample).getTime(), epochMillis);
-__assert_eq_double("date_from_millis", date_from_millis(epochMillis).getTime(), epochMillis);
-__assert_eq_double("date_add_days", date_add_days(sample, 2).getTime(), epochMillis + 172800000.0);
-__assert_eq_double("date_add_days_negative", date_add_days(sample, -1).getTime(), epochMillis - 86400000.0);
-__assert_true("date_is_before", date_is_before(sample, new Date(epochMillis + 1.0)));
+__assert_eq_double("date_to_millis", date_to_millis(sample), 1700000000123.0);
+__assert_eq_long("date_identity", date_identity(sample).getTime(), epochMillis);
+__assert_eq_long("date_from_millis", date_from_millis(1700000000123.0).getTime(), epochMillis);
+__assert_eq_long("date_add_days", date_add_days(sample, 2).getTime(), epochMillis + 172800000);
+__assert_eq_long("date_add_days_negative", date_add_days(sample, -1).getTime(), epochMillis - 86400000);
+__assert_true("date_is_before", date_is_before(sample, new Date(epochMillis + 1)));
 __assert_true("date_is_not_before", !date_is_before(sample, sample));
-__assert_eq_double("date_pre_epoch", date_to_millis(new Date(-86400000.0)), -86400000.0);
+__assert_eq_double("date_pre_epoch", date_to_millis(new Date(-86400000)), -86400000.0);
 __assert_throws("date_from_millis_nan", (): void => {
   date_from_millis(Double.NaN);
 });

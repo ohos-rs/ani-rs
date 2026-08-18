@@ -196,8 +196,8 @@ function main(): void {
   __assert_true("tokio_void_async", tokioVoidAsync);
   let envText: string = waitForCompletion(() => __ANI_GENERATED__.env_roundtrip("hello"));
   __assert_eq_string("env_roundtrip", envText, "env:hello");
-  let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.create_deferred_resolve("hello"));
-  __assert_eq_string("create_deferred_resolve", typedPromiseText, "typed:hello");
+  let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_new_typed_resolve("hello"));
+  __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
   let envResolvedText: string = waitForCompletion(() => __ANI_GENERATED__.promise_env_resolved("hello"));
   __assert_eq_string("promise_env_resolved", envResolvedText, "env:hello");
   let envRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
@@ -472,16 +472,16 @@ ETS
       ;;
     ani-example-date)
       cat <<'ETS'
-let epochMillis: double = 1700000000123.0;
+let epochMillis: long = 1700000000123;
 let sample = new Date(epochMillis);
-__assert_eq_double("date_to_millis", __ANI_GENERATED__.date_to_millis(sample), epochMillis);
-__assert_eq_double("date_identity", __ANI_GENERATED__.date_identity(sample).getTime(), epochMillis);
-__assert_eq_double("date_from_millis", __ANI_GENERATED__.date_from_millis(epochMillis).getTime(), epochMillis);
-__assert_eq_double("date_add_days", __ANI_GENERATED__.date_add_days(sample, 2).getTime(), epochMillis + 172800000.0);
-__assert_eq_double("date_add_days_negative", __ANI_GENERATED__.date_add_days(sample, -1).getTime(), epochMillis - 86400000.0);
-__assert_true("date_is_before", __ANI_GENERATED__.date_is_before(sample, new Date(epochMillis + 1.0)));
+__assert_eq_double("date_to_millis", __ANI_GENERATED__.date_to_millis(sample), 1700000000123.0);
+__assert_eq_long("date_identity", __ANI_GENERATED__.date_identity(sample).getTime(), epochMillis);
+__assert_eq_long("date_from_millis", __ANI_GENERATED__.date_from_millis(1700000000123.0).getTime(), epochMillis);
+__assert_eq_long("date_add_days", __ANI_GENERATED__.date_add_days(sample, 2).getTime(), epochMillis + 172800000);
+__assert_eq_long("date_add_days_negative", __ANI_GENERATED__.date_add_days(sample, -1).getTime(), epochMillis - 86400000);
+__assert_true("date_is_before", __ANI_GENERATED__.date_is_before(sample, new Date(epochMillis + 1)));
 __assert_true("date_is_not_before", !__ANI_GENERATED__.date_is_before(sample, sample));
-__assert_eq_double("date_pre_epoch", __ANI_GENERATED__.date_to_millis(new Date(-86400000.0)), -86400000.0);
+__assert_eq_double("date_pre_epoch", __ANI_GENERATED__.date_to_millis(new Date(-86400000)), -86400000.0);
 __assert_throws("date_from_millis_nan", (): void => {
   __ANI_GENERATED__.date_from_millis(Double.NaN);
 });
@@ -883,7 +883,7 @@ for (const item of new CountdownIterator(3)) {
   countdownTotal += item;
 }
 __assert_eq_int("countdown_for_of_total", countdownTotal, 6);
-__assert_eq_int("iter_count_countdown_roundtrip", __ANI_GENERATED__.iter_count(new CountdownIterator(4)), 4);
+__assert_eq_int("iter_count_countdown_roundtrip", __ANI_GENERATED__.iter_count(new CountdownIterator(4) as Iterable<Object>), 4);
 ETS
       ;;
     ani-example-interface)

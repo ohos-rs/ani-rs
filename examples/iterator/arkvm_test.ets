@@ -26,16 +26,24 @@ export native function iter_take_strings(values: Iterable<string>, limit: int): 
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
 
 
@@ -135,7 +143,7 @@ for (const item of new CountdownIterator(3)) {
   countdownTotal += item;
 }
 __assert_eq_int("countdown_for_of_total", countdownTotal, 6);
-__assert_eq_int("iter_count_countdown_roundtrip", iter_count(new CountdownIterator(4)), 4);
+__assert_eq_int("iter_count_countdown_roundtrip", iter_count(new CountdownIterator(4) as Iterable<Object>), 4);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);
