@@ -9,30 +9,43 @@ export native function static_field_by_name_roundtrip(cls: Class): int;
 export native function static_field_by_name_roundtrip_named(class_name: string): int;
 export native function static_method_clear_by_name_named(class_name: string): int;
 export native function static_method_flag_by_name_named(class_name: string): boolean;
-export native function static_method_label_by_name_named(class_name: string, prefix: string, suffix: string): string;
+export native function static_method_label_by_name_named(
+  class_name: string,
+  prefix: string,
+  suffix: string,
+): string;
 export native function static_method_reset_by_name_named(class_name: string, value: int): int;
 export native function static_method_sum_by_name_named(class_name: string, a: int, b: int): int;
 export native function static_method_tag_by_name_named(class_name: string): string;
 export native function static_ref_by_name_roundtrip(cls: Class, value: AniRef): boolean;
-export native function static_ref_by_name_roundtrip_named(class_name: string, value: AniRef): boolean;
+export native function static_ref_by_name_roundtrip_named(
+  class_name: string,
+  value: AniRef,
+): boolean;
 
 // Public Promise continuation bridge used by PromiseFuture.
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_class_static_by_name");
 

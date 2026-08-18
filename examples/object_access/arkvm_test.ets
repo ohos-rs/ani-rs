@@ -13,19 +13,25 @@ export native function property_ref_roundtrip(obj: Object, value: string): boole
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_object_access");
 
@@ -136,7 +142,11 @@ __assert_eq_int("field_by_handle_int_roundtrip", field_by_handle_int_roundtrip(t
 __assert_eq_int("field_by_handle_int_state", target.counter, 11);
 __assert_true("field_ref_roundtrip", field_ref_roundtrip(target, "renamed"));
 __assert_eq_string("field_ref_state", target.label, "renamed");
-__assert_eq_double("property_by_name_double_roundtrip", property_by_name_double_roundtrip(target, 2.75), 2.75);
+__assert_eq_double(
+  "property_by_name_double_roundtrip",
+  property_by_name_double_roundtrip(target, 2.75),
+  2.75,
+);
 __assert_eq_double("property_by_name_double_state", target.ratio, 2.75);
 __assert_true("property_ref_roundtrip", property_ref_roundtrip(target, "beta"));
 __assert_eq_string("property_ref_state", target.alias, "beta");

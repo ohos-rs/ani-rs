@@ -8,7 +8,12 @@ export native function call_get_number(obj_ptr: long): double;
 export native function call_get_string(obj_ptr: long): string;
 export native function call_greet(greeter_ptr: long, name: string): string;
 export native function call_static_square(n: int): int;
-export native function call_with_multiple_args(obj_ptr: long, int_val: int, double_val: double, str_val: string): string;
+export native function call_with_multiple_args(
+  obj_ptr: long,
+  int_val: int,
+  double_val: double,
+  str_val: string,
+): string;
 export native function get_property_int(target: Object): int;
 export native function get_singleton(): long;
 export native function invoke_object_method_int(target: Object, method_name: string): int;
@@ -17,19 +22,25 @@ export native function invoke_object_method_int(target: Object, method_name: str
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_call_method");
 

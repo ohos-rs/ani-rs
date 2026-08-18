@@ -21,19 +21,25 @@ export native function serialize(ptr: long): string;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_interface");
 
@@ -117,7 +123,7 @@ destroy_comparable(c2);
 let s = create_serializable("hello");
 __assert_true("create_serializable_handle", s > 0);
 __assert_true("serialize_contains_data", serialize(s).length > 0);
-deserialize(s, "{\"data\":\"world\"}");
+deserialize(s, '{"data":"world"}');
 __assert_eq_string("get_data", get_data(s), "world");
 destroy_serializable(s);
 

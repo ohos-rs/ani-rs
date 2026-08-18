@@ -17,19 +17,25 @@ export native function u64_identity(value: bigint): bigint;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_bigint");
 
@@ -104,12 +110,24 @@ function __assert_throws(name: string, fn: () => void): void {
 
 console.log("[arkvm] smoke start: ani-example-bigint");
 let huge: bigint = new BigInt("1234567890123456789012345678901234567890");
-__assert_eq_string("big_int_to_decimal", big_int_to_decimal(huge), "1234567890123456789012345678901234567890");
+__assert_eq_string(
+  "big_int_to_decimal",
+  big_int_to_decimal(huge),
+  "1234567890123456789012345678901234567890",
+);
 __assert_eq_string("big_int_identity", big_int_identity(huge).toString(), huge.toString());
-__assert_eq_string("big_int_from_decimal", big_int_from_decimal("-999999999999999999999999").toString(), "-999999999999999999999999");
+__assert_eq_string(
+  "big_int_from_decimal",
+  big_int_from_decimal("-999999999999999999999999").toString(),
+  "-999999999999999999999999",
+);
 __assert_eq_int("big_int_decimal_digits", big_int_decimal_digits(huge), 40);
 __assert_true("big_int_is_negative", big_int_is_negative(new BigInt("-1")));
-__assert_eq_long("big_int_to_i64_lossless", big_int_to_i64_lossless(new BigInt("9223372036854775807")), 9223372036854775807);
+__assert_eq_long(
+  "big_int_to_i64_lossless",
+  big_int_to_i64_lossless(new BigInt("9223372036854775807")),
+  9223372036854775807,
+);
 __assert_throws("big_int_to_i64_overflow", (): void => {
   big_int_to_i64_lossless(huge);
 });

@@ -37,7 +37,10 @@ export class Widget {
   native choose_snapshot(detailed: boolean): WidgetSnapshot | string;
   native consume(): string;
   native describe(): string;
-  native __ani_native_maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null;
+  native __ani_native_maybe_checked_snapshot(
+    include: boolean,
+    min_count: int,
+  ): WidgetSnapshot | null;
   maybe_checked_snapshot(include: boolean, min_count: int): WidgetSnapshot | null | undefined {
     let __ani_result = this.__ani_native_maybe_checked_snapshot(include, min_count);
     return __ani_result == null ? undefined : __ani_result;
@@ -85,19 +88,25 @@ export native function resolve_widget_special_methods(class_name: string): boole
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_impl_block");
 
@@ -189,7 +198,10 @@ __assert_throws("Widget.checked_snapshot_error", (): void => {
 });
 let maybeCheckedSnapshot = widget.maybe_checked_snapshot(true, 2) as WidgetSnapshot;
 __assert_eq_int("Widget.maybe_checked_snapshot_total", maybeCheckedSnapshot.total, 2);
-__assert_true("Widget.maybe_checked_snapshot_none", widget.maybe_checked_snapshot(false, 2) == undefined);
+__assert_true(
+  "Widget.maybe_checked_snapshot_none",
+  widget.maybe_checked_snapshot(false, 2) == undefined,
+);
 __assert_throws("Widget.maybe_checked_snapshot_error", (): void => {
   widget.maybe_checked_snapshot(true, 3);
 });
@@ -200,8 +212,16 @@ __assert_eq_string("Widget.choose_snapshot_text", chooseText.toString(), "Widget
 let mergeInput = new WidgetSnapshot();
 mergeInput.label = "child";
 mergeInput.total = 5;
-__assert_eq_string("Widget.merge_snapshot_input_object", widget.merge_snapshot_input(mergeInput), "impl:child+7");
-__assert_eq_string("Widget.merge_snapshot_input_string", widget.merge_snapshot_input("plain"), "impl:plain");
+__assert_eq_string(
+  "Widget.merge_snapshot_input_object",
+  widget.merge_snapshot_input(mergeInput),
+  "impl:child+7",
+);
+__assert_eq_string(
+  "Widget.merge_snapshot_input_string",
+  widget.merge_snapshot_input("plain"),
+  "impl:plain",
+);
 let previousName = widget.rename("renamed");
 __assert_eq_string("Widget.rename_previous", previousName as String, "impl");
 __assert_eq_string("Widget.name_after_rename", widget.name, "renamed");
@@ -248,7 +268,7 @@ Widget.revision = 7;
 __assert_eq_int("Widget.revision_after_set", Widget.revision, 7);
 __assert_true(
   "Widget.resolve_special_methods",
-  resolve_widget_special_methods("arkvm_test.Widget")
+  resolve_widget_special_methods("arkvm_test.Widget"),
 );
 
 if (__ani_fail_count > 0) {

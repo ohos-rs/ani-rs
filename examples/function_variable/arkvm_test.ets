@@ -14,19 +14,25 @@ export native function module_variable_roundtrip_ref(variable_name: string, valu
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_function_variable");
 
@@ -105,11 +111,17 @@ export let payload: Object = new Object();
 export function addInts(a: int, b: int): int {
   return a + b;
 }
-export function doNothing(): void {
-}
-__assert_eq_int("call_module_function_int_example", call_module_function_int_example("addInts"), 16);
+export function doNothing(): void {}
+__assert_eq_int(
+  "call_module_function_int_example",
+  call_module_function_int_example("addInts"),
+  16,
+);
 __assert_eq_int("module_variable_roundtrip_int", module_variable_roundtrip_int("counter", 11), 11);
-__assert_bool("module_variable_roundtrip_ref", module_variable_roundtrip_ref("payload", new Object()));
+__assert_bool(
+  "module_variable_roundtrip_ref",
+  module_variable_roundtrip_ref("payload", new Object()),
+);
 
 if (__ani_fail_count > 0) {
   throw new Error("arkvm assertions failed: " + __ani_fail_count);

@@ -14,19 +14,25 @@ export native function return_either(use_string: boolean): string | int;
 export native function __ani_rs_promise_resolve(token: long, value: Object): void;
 export native function __ani_rs_promise_reject(token: long, reason: Object): void;
 export function __ani_rs_observe_promise<T>(promise: Promise<T>, token: long): void {
-promise.then(
-(value: T): void => { __ani_rs_promise_resolve(token, value as Object); },
-(reason: Object): void => { __ani_rs_promise_reject(token, reason); }
-);
+  promise.then(
+    (value: T): void => {
+      __ani_rs_promise_resolve(token, value as Object);
+    },
+    (reason: Object): void => {
+      __ani_rs_promise_reject(token, reason);
+    },
+  );
 }
 export native function __ani_rs_cancel_runtime_task(token: long, reason: Object): void;
 export class AniCancelHandle {
-private token: long;
-constructor(token: long) { this.token = token; }
-cancel(reason: Object): void { __ani_rs_cancel_runtime_task(this.token, reason); }
+  private token: long;
+  constructor(token: long) {
+    this.token = token;
+  }
+  cancel(reason: Object): void {
+    __ani_rs_cancel_runtime_task(this.token, reason);
+  }
 }
-
-
 
 loadLibrary("ani_example_union");
 
@@ -105,21 +111,9 @@ __assert_eq_string(
   handle_string_or_int_either(new String("ani")),
   "String: ani",
 );
-__assert_eq_string(
-  "handle_string_or_int_either_int",
-  handle_string_or_int_either(7),
-  "Int: 7",
-);
-__assert_eq_string(
-  "handle_three_types_bool",
-  handle_three_types(true),
-  "Boolean: true",
-);
-__assert_eq_string(
-  "handle_four_types_double",
-  handle_four_types(3.5),
-  "Double: 3.5",
-);
+__assert_eq_string("handle_string_or_int_either_int", handle_string_or_int_either(7), "Int: 7");
+__assert_eq_string("handle_three_types_bool", handle_three_types(true), "Boolean: true");
+__assert_eq_string("handle_four_types_double", handle_four_types(3.5), "Double: 3.5");
 let eitherString = return_either(true) as String;
 __assert_eq_string("return_either_string", eitherString.toString(), "Hello from Either!");
 let eitherInt = return_either(false) as Int;
