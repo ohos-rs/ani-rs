@@ -2076,4 +2076,176 @@ mod tests {
         assert!(ran);
         assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
     }
+
+    /// A Tokio-free backend: one worker thread owns `!Send` local futures.
+    /// This is the shape an FFRT / thread-pool implementer should follow.
+    struct WorkerQueueRuntime {
+        jobs: Mutex<Option<std::sync::mpsc::Sender<RuntimeTask>>>,
+        join: Mutex<Option<std::thread::JoinHandle<()>>>,
+        running: AtomicBool,
+    }
+
+    impl WorkerQueueRuntime {
+        fn new() -> Self {
+            let (tx, rx) = std::sync::mpsc::channel::<RuntimeTask>();
+            let join = std::thread::Builder::new()
+                .name("ani-test-worker".into())
+                .spawn(move || {
+                    while let Ok(task) = rx.recv() {
+                        drive_local_task(task);
+                    }
+                })
+                .expect("spawn worker");
+            Self {
+                jobs: Mutex::new(Some(tx)),
+                join: Mutex::new(Some(join)),
+                running: AtomicBool::new(false),
+            }
+        }
+    }
+
+    fn drive_local_task(task: RuntimeTask) {
+        let mut local = std::pin::pin!(task.into_local_future());
+        let parked = Arc::new(std::thread::current());
+        struct ThreadWake(Arc<std::thread::Thread>);
+        impl std::task::Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Waker::from(Arc::new(ThreadWake(parked)));
+        let mut context = Context::from_waker(&waker);
+        while local.as_mut().poll(&mut context).is_pending() {
+            std::thread::park();
+        }
+    }
+
+    unsafe impl AsyncRuntime for WorkerQueueRuntime {
+        fn spawn(
+            &self,
+            task: RuntimeTask,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<RuntimeTask>> {
+            if !self.running.load(Ordering::SeqCst) {
+                return Err(AsyncRuntimeRejection::new(
+                    task,
+                    Error::new(Status::GenericFailure, BACKEND_STOPPED_ERROR),
+                ));
+            }
+            let jobs = self.jobs.lock().unwrap();
+            match jobs.as_ref() {
+                Some(tx) => tx.send(task).map_err(|std::sync::mpsc::SendError(task)| {
+                    AsyncRuntimeRejection::new(
+                        task,
+                        Error::new(Status::GenericFailure, "worker queue closed"),
+                    )
+                }),
+                None => Err(AsyncRuntimeRejection::new(
+                    task,
+                    Error::new(Status::GenericFailure, "worker queue closed"),
+                )),
+            }
+        }
+
+        fn block_on(&self, future: Pin<&mut dyn Future<Output = ()>>) -> Result<()> {
+            let parked = Arc::new(std::thread::current());
+            struct ThreadWake(Arc<std::thread::Thread>);
+            impl std::task::Wake for ThreadWake {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = Waker::from(Arc::new(ThreadWake(parked)));
+            let mut context = Context::from_waker(&waker);
+            let mut future = future;
+            while future.as_mut().poll(&mut context).is_pending() {
+                std::thread::park();
+            }
+            Ok(())
+        }
+
+        fn spawn_blocking(
+            &self,
+            work: BlockingWork,
+        ) -> std::result::Result<(), AsyncRuntimeRejection<BlockingWork>> {
+            if !self.running.load(Ordering::SeqCst) {
+                return Err(AsyncRuntimeRejection::new(
+                    work,
+                    Error::new(Status::GenericFailure, BACKEND_STOPPED_ERROR),
+                ));
+            }
+            std::thread::spawn(work);
+            Ok(())
+        }
+
+        fn start(&self) -> Result<()> {
+            self.running.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn shutdown(&self) -> Result<()> {
+            self.running.store(false, Ordering::SeqCst);
+            self.jobs.lock().unwrap().take();
+            if let Some(join) = self.join.lock().unwrap().take() {
+                let _ = join.join();
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn custom_non_tokio_runtime_runs_spawn_and_block_on() {
+        let runtime = WorkerQueueRuntime::new();
+        runtime.start().unwrap();
+
+        let done = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&done);
+        let (task, handle) = RuntimeTask::new(
+            move || async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| {},
+        );
+        runtime.spawn(task).expect("worker accepts the task");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "custom runtime did not finish the task"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(done.load(Ordering::SeqCst), 1);
+
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let blocked_in_future = Arc::clone(&blocked);
+        let mut driver = std::pin::pin!(async move {
+            blocked_in_future.fetch_add(1, Ordering::SeqCst);
+        });
+        runtime.block_on(driver.as_mut()).unwrap();
+        assert_eq!(blocked.load(Ordering::SeqCst), 1);
+
+        let blocking_done = Arc::new(AtomicUsize::new(0));
+        let blocking_in_work = Arc::clone(&blocking_done);
+        assert!(
+            runtime
+                .spawn_blocking(Box::new(move || {
+                    blocking_in_work.fetch_add(1, Ordering::SeqCst);
+                }))
+                .is_ok()
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while blocking_done.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+
+        runtime.shutdown().unwrap();
+        let (task, handle) = RuntimeTask::new(|| async {}, |_| {});
+        let rejection = runtime
+            .spawn(task)
+            .expect_err("stopped custom runtime must decline");
+        let (task, error) = rejection.into_parts();
+        task.reject_with(error);
+        assert!(handle.is_cancelled());
+    }
 }

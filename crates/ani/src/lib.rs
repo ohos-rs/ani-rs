@@ -68,7 +68,9 @@ pub mod vm;
 pub use crate::async_runtime::within_runtime_if_available;
 /// napi-rs-aligned async runtime registration and lifecycle APIs.
 pub use crate::async_runtime::{
-    register_async_runtime, shutdown_async_runtime, start_async_runtime, try_register_async_runtime,
+    block_on_future_result, register_async_runtime, shutdown_async_runtime, spawn_future,
+    spawn_future_factory, spawn_future_result, spawn_future_result_factory, start_async_runtime,
+    try_register_async_runtime,
 };
 /// Tokio compatibility helpers. These stay Tokio-backed whenever `tokio_rt` is
 /// enabled, even if a custom [`AsyncRuntime`] is selected.
@@ -89,9 +91,11 @@ pub mod prelude {
     pub use crate::async_runtime::{
         AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
         RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
-        activate_async_runtime, register_async_runtime, register_cancellation_error_factory,
-        runtime_cancellation_error, shutdown_async_runtime, shutdown_runtime_domain,
-        spawn_future_result_factory_with_handle, start_async_runtime, try_register_async_runtime,
+        activate_async_runtime, block_on_future_result, register_async_runtime,
+        register_cancellation_error_factory, runtime_cancellation_error, shutdown_async_runtime,
+        shutdown_runtime_domain, spawn_future, spawn_future_factory, spawn_future_result,
+        spawn_future_result_factory, spawn_future_result_factory_with_handle, start_async_runtime,
+        try_register_async_runtime,
     };
     pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{
