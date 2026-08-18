@@ -63,6 +63,20 @@ pub mod tokio;
 pub mod types;
 pub mod vm;
 
+/// Enter the registered custom backend when Tokio is not linked.
+#[cfg(not(feature = "tokio_rt"))]
+pub use crate::async_runtime::within_runtime_if_available;
+/// napi-rs-aligned async runtime registration and lifecycle APIs.
+pub use crate::async_runtime::{
+    register_async_runtime, shutdown_async_runtime, start_async_runtime, try_register_async_runtime,
+};
+/// Tokio compatibility helpers. These stay Tokio-backed whenever `tokio_rt` is
+/// enabled, even if a custom [`AsyncRuntime`] is selected.
+#[cfg(feature = "tokio_rt")]
+pub use crate::tokio::{
+    block_on, create_custom_tokio_runtime, spawn, spawn_blocking, within_runtime_if_available,
+};
+
 /// Prelude module - commonly used types and traits
 ///
 /// Import everything you need with:
@@ -70,12 +84,14 @@ pub mod vm;
 /// use ani::prelude::*;
 /// ```
 pub mod prelude {
+    #[cfg(not(feature = "tokio_rt"))]
+    pub use crate::async_runtime::within_runtime_if_available;
     pub use crate::async_runtime::{
         AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
         RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
         activate_async_runtime, register_async_runtime, register_cancellation_error_factory,
-        runtime_cancellation_error, shutdown_runtime_domain,
-        spawn_future_result_factory_with_handle, try_register_async_runtime,
+        runtime_cancellation_error, shutdown_async_runtime, shutdown_runtime_domain,
+        spawn_future_result_factory_with_handle, start_async_runtime, try_register_async_runtime,
     };
     pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{
@@ -84,6 +100,10 @@ pub mod prelude {
     };
     pub use crate::runtime::{RuntimeMetrics, assert_no_runtime_leaks, runtime_metrics};
     pub use crate::scheduler::{RuntimeKernel, SchedulerMetrics, runtime_kernel, shutdown_runtime};
+    #[cfg(feature = "tokio_rt")]
+    pub use crate::tokio::{
+        block_on, create_custom_tokio_runtime, spawn, spawn_blocking, within_runtime_if_available,
+    };
     pub use crate::types::{
         AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
         AniEnum, AniEnumItem, AniError, AniField, AniFixedArray, AniFixedArrayBoolean,

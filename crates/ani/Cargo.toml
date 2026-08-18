@@ -26,7 +26,10 @@ serde-json = ["dep:serde", "dep:serde_json"]
 async-runtime = []
 # Ergonomic batteries-included alias. Tokio is only the default backend.
 async = ["async-runtime", "tokio_rt"]
-# Enable ani's built-in Tokio AsyncRuntime backend and Tokio helper APIs.
+# Enable ani's built-in Tokio AsyncRuntime backend and the Tokio compatibility
+# helpers (`spawn`, `block_on`, `spawn_blocking`, `within_runtime_if_available`,
+# `create_custom_tokio_runtime`). Generated async still follows the selected
+# AsyncRuntime.
 tokio_rt = ["async-runtime", "dep:tokio"]
 # Tokio passthrough feature set aligned with napi-rs naming.
 tokio_fs = ["tokio/fs"]
