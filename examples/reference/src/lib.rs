@@ -117,8 +117,8 @@ pub fn clear_stored_object() -> Result<()> {
 pub fn use_stored_object(env: &Env) -> Result<bool> {
     let guard = STORED_OBJECT.lock().unwrap();
     if let Some(ref obj_ref) = *guard {
-        // Borrow the stored reference as a local AniObject
-        let _obj = obj_ref.borrow(env);
+        // Materialize the stored reference as a local AniObject
+        let _obj = obj_ref.to_object(env)?;
         // You can now use _obj for any operations that require AniObject
         // For example: call methods, get fields, etc.
         Ok(true)

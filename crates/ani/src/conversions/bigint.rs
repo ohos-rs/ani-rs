@@ -218,7 +218,7 @@ impl<'env> FromAni<'env> for BigInt {
         }
         let object = unsafe { AniObject::from_raw(value) };
         let class = find_bigint_class(env)?;
-        if !env.object_instance_of(&object, &class)? {
+        if !env.is_instance_of(&object, &class)? {
             return Err(Error::new(
                 Status::InvalidType,
                 "value is not an ArkTS bigint",
@@ -227,7 +227,7 @@ impl<'env> FromAni<'env> for BigInt {
         let method = env
             .find_method(&class, "toString", ":C{std.core.String}")
             .or_else(|_| env.find_method(&class, "toString", ":Lstd/core/String;"))?;
-        let value = env.call_ref_method(&object, &method, &[])?;
+        let value = env.call_method_ref(&object, &method, &[])?;
         let value = unsafe { AniString::from_raw(value.as_raw() as sys::ani_string) };
         Self::from_decimal(env.get_string(&value)?)
     }

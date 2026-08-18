@@ -353,7 +353,7 @@ fn expand_object_type_impls(
 
                 let obj = unsafe { ani::types::AniObject::from_raw(value) };
                 let class = env.find_class(Self::arkts_name())?;
-                if !env.object_instance_of(&obj, &class)? {
+                if !env.is_instance_of(&obj, &class)? {
                     return Err(ani::error::Error::new(
                         ani::error::Status::InvalidType,
                         format!(
@@ -409,7 +409,7 @@ fn expand_object_type_impls(
                     Ok(class) => class,
                     Err(_) => return false,
                 };
-                env.object_instance_of(&obj, &class).unwrap_or(false)
+                env.is_instance_of(&obj, &class).unwrap_or(false)
             }
         }
 

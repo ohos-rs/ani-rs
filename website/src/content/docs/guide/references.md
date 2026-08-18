@@ -61,7 +61,7 @@ pub fn use_object(env: &Env<'_>) -> Result<bool> {
         return Ok(false);
     };
 
-    let object = reference.borrow(env);
+    let object = reference.to_object(env)?;
     Ok(!object.is_null())
 }
 ```

@@ -27,7 +27,6 @@
 //!
 //! ## Architecture
 //!
-//! - `bindgen_runtime`: Type conversion traits and runtime support
 //! - `env`: ANI environment wrapper
 //! - `vm`: ANI VM wrapper
 //! - `types`: ANI type wrappers (AniString, AniObject, etc.)
@@ -50,7 +49,6 @@ pub use serde_json;
 
 // Core modules
 pub mod async_runtime;
-pub mod bindgen_runtime;
 pub mod conversions;
 #[macro_use]
 pub mod env;
@@ -68,8 +66,8 @@ pub mod vm;
 pub use crate::async_runtime::within_runtime_if_available;
 /// napi-rs-aligned async runtime registration and lifecycle APIs.
 pub use crate::async_runtime::{
-    block_on_future_result, register_async_runtime, shutdown_async_runtime, spawn_future,
-    spawn_future_factory, spawn_future_result, spawn_future_result_factory, start_async_runtime,
+    block_on_future, register_async_runtime, shutdown_async_runtime, spawn_future,
+    spawn_future_result, spawn_local_future, spawn_local_future_result, start_async_runtime,
     try_register_async_runtime,
 };
 /// Tokio compatibility helpers. These stay Tokio-backed whenever `tokio_rt` is
@@ -91,11 +89,10 @@ pub mod prelude {
     pub use crate::async_runtime::{
         AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
         RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
-        activate_async_runtime, block_on_future_result, register_async_runtime,
-        register_cancellation_error_factory, runtime_cancellation_error, shutdown_async_runtime,
-        shutdown_runtime_domain, spawn_future, spawn_future_factory, spawn_future_result,
-        spawn_future_result_factory, spawn_future_result_factory_with_handle, start_async_runtime,
-        try_register_async_runtime,
+        block_on_future, register_async_runtime, register_cancellation_error_factory,
+        runtime_cancellation_error, shutdown_async_runtime, shutdown_runtime_domain, spawn_future,
+        spawn_future_result, spawn_local_future, spawn_local_future_result,
+        spawn_local_future_with_handle, start_async_runtime, try_register_async_runtime,
     };
     pub use crate::env::{Env, LocalScopeGuard};
     pub use crate::error::{
@@ -109,29 +106,19 @@ pub mod prelude {
         block_on, create_custom_tokio_runtime, spawn, spawn_blocking, within_runtime_if_available,
     };
     pub use crate::types::{
-        AniArray, AniArrayBuffer, AniArrayDouble, AniArrayInt, AniArrayLong, AniArrayRef, AniClass,
-        AniEnum, AniEnumItem, AniError, AniField, AniFixedArray, AniFixedArrayBoolean,
-        AniFixedArrayByte, AniFixedArrayChar, AniFixedArrayDouble, AniFixedArrayFloat,
-        AniFixedArrayInt, AniFixedArrayLong, AniFixedArrayRef, AniFixedArrayShort, AniFnObject,
-        AniFunction, AniMethod, AniModule, AniNamespace, AniObject, AniRef, AniResolver,
-        AniStaticField, AniStaticMethod, AniString, AniTupleValue, AniType, AniVariable, GlobalRef,
-        WeakRef, ani_value_boolean, ani_value_byte, ani_value_char, ani_value_double,
-        ani_value_float, ani_value_int, ani_value_long, ani_value_ref, ani_value_short,
-        native_function,
+        AniArray, AniArrayBuffer, AniClass, AniEnum, AniEnumItem, AniError, AniField,
+        AniFixedArray, AniFixedArrayBoolean, AniFixedArrayByte, AniFixedArrayChar,
+        AniFixedArrayDouble, AniFixedArrayFloat, AniFixedArrayInt, AniFixedArrayLong,
+        AniFixedArrayRef, AniFixedArrayShort, AniFnObject, AniFunction, AniMethod, AniModule,
+        AniNamespace, AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString,
+        AniTupleValue, AniType, AniVariable, GlobalRef, WeakRef, ani_value_boolean,
+        ani_value_byte, ani_value_char, ani_value_double, ani_value_float, ani_value_int,
+        ani_value_long, ani_value_ref, ani_value_short, native_function,
     };
     pub use crate::vm::{AniVm, AttachGuard, VmOptions};
 
-    // Deprecated type aliases for backward compatibility
-    #[allow(deprecated)]
-    pub use crate::error::{JsError, JsRangeError, JsTypeError};
-
     // Export all conversion types/traits/helpers.
     pub use crate::conversions::*;
-
-    // Keep backward compatibility by also exporting from bindgen_runtime
-    pub use crate::bindgen_runtime::{
-        FromAni as BrFromAni, ToAni as BrToAni, TypeInfo as BrTypeInfo,
-    };
 
     pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
 }

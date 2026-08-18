@@ -2,7 +2,7 @@
 //!
 //! Combined `async-runtime` + `tokio_rt` routing matches napi-rs:
 //! - Generated `#[ani(async)]` futures, [`spawn_future`], and
-//!   [`block_on_future_result`] follow the selected [`AsyncRuntime`].
+//!   [`block_on_future`] follow the selected [`AsyncRuntime`].
 //! - The established Tokio compatibility helpers ([`spawn`], [`block_on`],
 //!   [`spawn_blocking`], [`within_runtime_if_available`]) stay Tokio-backed
 //!   whenever `tokio_rt` is enabled, so Cargo feature unification cannot
@@ -360,8 +360,10 @@ mod imp {
         drain_tokio_helper_runtime();
     }
 
-    /// Spawn a future factory through the selected [`AsyncRuntime`].
-    pub fn spawn_future_result_factory<'env, T, Build, F, E>(
+    /// Spawn a domain-error future factory through the selected
+    /// [`AsyncRuntime`]. The factory runs on the runtime thread, so the
+    /// future it builds may be `!Send`.
+    pub fn spawn_local_future_result<'env, T, Build, F, E>(
         env: &Env<'env>,
         build: Build,
     ) -> Result<PromiseRaw<'env, T>>
@@ -371,11 +373,13 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + 'static,
         E: AniErrorPayload,
     {
-        crate::async_runtime::spawn_future_result_factory(env, build)
+        crate::async_runtime::spawn_local_future_result(env, build)
     }
 
-    /// Spawn a future factory returning [`crate::error::Result`].
-    pub fn spawn_future_factory<'env, T, Build, F>(
+    /// Spawn a future factory returning [`crate::error::Result`] through the
+    /// selected [`AsyncRuntime`]. The factory runs on the runtime thread, so
+    /// the future it builds may be `!Send`.
+    pub fn spawn_local_future<'env, T, Build, F>(
         env: &Env<'env>,
         build: Build,
     ) -> Result<PromiseRaw<'env, T>>
@@ -384,7 +388,7 @@ mod imp {
         Build: FnOnce() -> F + Send + 'static,
         F: Future<Output = crate::error::Result<T>> + 'static,
     {
-        spawn_future_result_factory(env, build)
+        crate::async_runtime::spawn_local_future(env, build)
     }
 
     /// Drive a current-thread future through the selected [`AsyncRuntime`].
@@ -392,23 +396,25 @@ mod imp {
     /// This keeps execution on the caller thread, which is required for
     /// async constructors/getters/setters that preserve synchronous ArkTS
     /// signatures while still allowing Rust async bodies.
-    pub fn block_on_future_result<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
+    pub fn block_on_future<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
     where
         F: Future<Output = std::result::Result<T, E>>,
     {
-        crate::async_runtime::block_on_future_result(future)
+        crate::async_runtime::block_on_future(future)
     }
 
-    /// Spawn an already-built `Send` future through the selected runtime.
+    /// Spawn an already-built `Send` future returning
+    /// [`crate::error::Result`] through the selected runtime.
     pub fn spawn_future<'env, T, F>(env: &Env<'env>, future: F) -> Result<PromiseRaw<'env, T>>
     where
         T: Send + 'static + for<'vm> PromiseValue<'vm>,
         F: Future<Output = crate::error::Result<T>> + Send + 'static,
     {
-        spawn_future_factory(env, move || future)
+        spawn_local_future(env, move || future)
     }
 
-    /// Spawn an already-built `Send` result future through the selected runtime.
+    /// Spawn an already-built `Send` future with a domain error type through
+    /// the selected runtime.
     pub fn spawn_future_result<'env, T, F, E>(
         env: &Env<'env>,
         future: F,
@@ -418,7 +424,7 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + Send + 'static,
         E: AniErrorPayload,
     {
-        spawn_future_result_factory(env, move || future)
+        spawn_local_future_result(env, move || future)
     }
 }
 
@@ -451,7 +457,7 @@ mod imp {
         crate::async_runtime::spawn_future(env, future)
     }
 
-    /// Spawn through the registered executor-independent runtime backend.
+    /// Spawn a domain-error future through the registered backend.
     pub fn spawn_future_result<'env, T, F, E>(
         env: &Env<'env>,
         future: F,
@@ -464,8 +470,10 @@ mod imp {
         crate::async_runtime::spawn_future_result(env, future)
     }
 
-    /// Spawn a future factory through the registered custom runtime.
-    pub fn spawn_future_factory<'env, T, Build, F>(
+    /// Spawn a future factory returning [`crate::error::Result`] through the
+    /// registered custom runtime. The factory runs on the runtime thread, so
+    /// the future it builds may be `!Send`.
+    pub fn spawn_local_future<'env, T, Build, F>(
         env: &Env<'env>,
         build: Build,
     ) -> Result<PromiseRaw<'env, T>>
@@ -474,11 +482,13 @@ mod imp {
         Build: FnOnce() -> F + Send + 'static,
         F: Future<Output = crate::error::Result<T>> + 'static,
     {
-        crate::async_runtime::spawn_future_factory(env, build)
+        crate::async_runtime::spawn_local_future(env, build)
     }
 
-    /// Spawn a result factory through the registered custom runtime.
-    pub fn spawn_future_result_factory<'env, T, Build, F, E>(
+    /// Spawn a domain-error future factory through the registered custom
+    /// runtime. The factory runs on the runtime thread, so the future it
+    /// builds may be `!Send`.
+    pub fn spawn_local_future_result<'env, T, Build, F, E>(
         env: &Env<'env>,
         build: Build,
     ) -> Result<PromiseRaw<'env, T>>
@@ -488,15 +498,15 @@ mod imp {
         F: Future<Output = std::result::Result<T, E>> + 'static,
         E: AniErrorPayload,
     {
-        crate::async_runtime::spawn_future_result_factory(env, build)
+        crate::async_runtime::spawn_local_future_result(env, build)
     }
 
     /// Block through the registered custom runtime backend.
-    pub fn block_on_future_result<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
+    pub fn block_on_future<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
     where
         F: Future<Output = std::result::Result<T, E>>,
     {
-        crate::async_runtime::block_on_future_result(future)
+        crate::async_runtime::block_on_future(future)
     }
 }
 
@@ -513,8 +523,8 @@ pub use imp::TokioAsyncRuntime;
 #[cfg(feature = "tokio_rt")]
 pub use imp::{block_on, create_custom_tokio_runtime, runtime, spawn, spawn_blocking};
 pub use imp::{
-    block_on_future_result, shutdown_runtime, spawn_future, spawn_future_factory,
-    spawn_future_result, spawn_future_result_factory, within_runtime_if_available,
+    block_on_future, shutdown_runtime, spawn_future, spawn_future_result, spawn_local_future,
+    spawn_local_future_result, within_runtime_if_available,
 };
 #[cfg(feature = "tokio_rt")]
 pub(crate) use imp::{

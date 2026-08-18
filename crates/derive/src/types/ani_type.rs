@@ -169,7 +169,6 @@ pub enum RuntimeHandleType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayHandleType {
     Array,
-    ArrayRef,
     FixedArray,
     FixedArrayRef,
 }
@@ -897,7 +896,7 @@ impl AniType {
 impl ArrayHandleType {
     fn to_ani_c_type(self) -> TokenStream {
         match self {
-            Self::Array | Self::ArrayRef => quote! { ani::sys::ani_array },
+            Self::Array => quote! { ani::sys::ani_array },
             Self::FixedArray => quote! { ani::sys::ani_fixedarray },
             Self::FixedArrayRef => quote! { ani::sys::ani_fixedarray_ref },
         }
@@ -1296,7 +1295,6 @@ fn parse_primitive(ident: &str) -> Option<PrimitiveType> {
 fn parse_array_handle_type(ident: &str) -> Option<ArrayHandleType> {
     match ident {
         "AniArray" => Some(ArrayHandleType::Array),
-        "AniArrayRef" => Some(ArrayHandleType::ArrayRef),
         "AniFixedArray" => Some(ArrayHandleType::FixedArray),
         "AniFixedArrayRef" => Some(ArrayHandleType::FixedArrayRef),
         _ => None,
@@ -1309,10 +1307,10 @@ fn parse_fixed_array_type(ident: &str) -> Option<PrimitiveType> {
         "FixedByteArray" | "AniFixedArrayByte" => Some(PrimitiveType::I8),
         "FixedShortArray" | "AniFixedArrayShort" => Some(PrimitiveType::I16),
         "FixedCharArray" | "AniFixedArrayChar" => Some(PrimitiveType::U16),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some(PrimitiveType::I32),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some(PrimitiveType::I64),
+        "FixedIntArray" | "AniFixedArrayInt" => Some(PrimitiveType::I32),
+        "FixedLongArray" | "AniFixedArrayLong" => Some(PrimitiveType::I64),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some(PrimitiveType::F32),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some(PrimitiveType::F64),
+        "FixedDoubleArray" | "AniFixedArrayDouble" => Some(PrimitiveType::F64),
         _ => None,
     }
 }
@@ -1641,17 +1639,15 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
     match ident {
         "AniString" => Some("Lstd/core/String;"),
         "AniArrayBuffer" => Some("Lstd/core/ArrayBuffer;"),
-        "AniArray" | "AniArrayRef" | "AniFixedArray" | "AniFixedArrayRef" => {
-            Some("A{C{std.core.Object}}")
-        }
+        "AniArray" | "AniFixedArray" | "AniFixedArrayRef" => Some("A{C{std.core.Object}}"),
         "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("A{z}"),
         "FixedByteArray" | "AniFixedArrayByte" => Some("A{b}"),
         "FixedShortArray" | "AniFixedArrayShort" => Some("A{s}"),
         "FixedCharArray" | "AniFixedArrayChar" => Some("A{c}"),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("A{i}"),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("A{l}"),
+        "FixedIntArray" | "AniFixedArrayInt" => Some("A{i}"),
+        "FixedLongArray" | "AniFixedArrayLong" => Some("A{l}"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("A{f}"),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("A{d}"),
+        "FixedDoubleArray" | "AniFixedArrayDouble" => Some("A{d}"),
         "AniFunction" | "AniFnObject" => Some("Lstd/core/Function;"),
         "Null" => Some("C{std.core.Null}"),
         "Undefined" => Some("U"),
@@ -2131,7 +2127,6 @@ mod tests {
         let ty: Type = syn::parse_quote!(ani::conversions::BigInt);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/BigInt;");
-
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
@@ -2531,10 +2526,6 @@ mod tests {
         assert!(matches!(
             AniType::from_syn_type(&syn::parse_quote!(AniArray<'_>)),
             AniType::ArrayHandle(ArrayHandleType::Array)
-        ));
-        assert!(matches!(
-            AniType::from_syn_type(&syn::parse_quote!(AniArrayRef<'_>)),
-            AniType::ArrayHandle(ArrayHandleType::ArrayRef)
         ));
         assert!(matches!(
             AniType::from_syn_type(&syn::parse_quote!(AniFixedArray<'_>)),

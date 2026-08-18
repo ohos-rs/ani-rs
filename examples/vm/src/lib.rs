@@ -26,13 +26,14 @@ pub fn query_vm_version_with_closure(env: &Env<'_>) -> Result<u32> {
 #[ani]
 pub fn query_vm_version_with_guard(env: &Env<'_>) -> Result<u32> {
     let vm = env.get_vm()?;
-    let guard = vm.attach_current_thread_scoped()?;
+    let guard = vm.attach_current_thread()?;
     guard.env().get_version()
 }
 
 #[ani]
 pub fn query_vm_version_with_permanent_attach(env: &Env<'_>) -> Result<u32> {
     let vm = env.get_vm()?;
+    // The thread stays attached; it is not detached automatically.
     let attached_env = vm.attach_current_thread_permanently()?;
     attached_env.get_version()
 }

@@ -289,7 +289,7 @@ impl<'env> ValidateFromAni<'env> for String {
         let obj = unsafe { AniObject::from_raw(value) };
 
         if let Ok(cls) = env.find_class("std.core.String")
-            && env.object_instance_of(&obj, &cls).unwrap_or(false)
+            && env.is_instance_of(&obj, &cls).unwrap_or(false)
         {
             return true;
         }
@@ -306,7 +306,7 @@ impl<'env> ValidateFromAni<'env> for String {
             "std.core.Double",
         ] {
             if let Ok(cls) = env.find_class(numeric_cls)
-                && env.object_instance_of(&obj, &cls).unwrap_or(false)
+                && env.is_instance_of(&obj, &cls).unwrap_or(false)
             {
                 return false;
             }
@@ -324,7 +324,7 @@ macro_rules! impl_validate_for_boxed {
             unsafe fn validate(env: &Env<'env>, value: sys::ani_object) -> bool {
                 if let Ok(cls) = env.find_class($class_descriptor) {
                     let obj = unsafe { AniObject::from_raw(value) };
-                    env.object_instance_of(&obj, &cls).unwrap_or(false)
+                    env.is_instance_of(&obj, &cls).unwrap_or(false)
                 } else {
                     false
                 }

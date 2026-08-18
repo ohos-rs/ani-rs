@@ -65,14 +65,14 @@ pub fn clear_label_by_name(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> 
 pub fn describe_by_handle(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
     let cls = env.find_class(RUNTIME_BOX_CLASS)?;
     let method = env.find_method(&cls, "describe", RUNTIME_BOX_DESCRIBE_SIG)?;
-    let result = env.call_ref_method(&obj, &method, &[])?;
+    let result = env.call_method_ref(&obj, &method, &[])?;
     ref_to_string(env, result)
 }
 
 #[ani]
 pub fn is_runtime_box_instance(env: &Env<'_>, obj: AniObject<'_>) -> Result<bool> {
     let cls = env.find_class(RUNTIME_BOX_CLASS)?;
-    env.object_instance_of(&obj, &cls)
+    env.is_instance_of(&obj, &cls)
 }
 
 #[ani]
@@ -87,7 +87,7 @@ pub fn runtime_box_assignable_to_base(env: &Env<'_>, obj: AniObject<'_>) -> Resu
 pub fn runtime_box_has_super(env: &Env<'_>, obj: AniObject<'_>) -> Result<bool> {
     let obj_ty = env.get_object_type(&obj)?;
     let super_cls = env.get_super_class(&obj_ty)?;
-    env.object_instance_of(&obj, &super_cls)
+    env.is_instance_of(&obj, &super_cls)
 }
 
 #[cfg(test)]

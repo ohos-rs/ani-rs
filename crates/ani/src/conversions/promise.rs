@@ -47,7 +47,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::task::{Context, Poll, Waker};
 
-use crate::bindgen_runtime::ToAni as BindgenToAni;
 use crate::env::Env;
 use crate::error::{
     AniErrorDecodeLimits, AniErrorPayload, AniErrorValue, DynAniError, Error, Result, Status,
@@ -584,11 +583,11 @@ impl PromiseFutureValue for () {
 /// rejection retains its exact object, while runtime cancellation retains the
 /// application payload created by the registered cancellation factory.
 #[derive(Debug)]
-pub struct ArktsRejection {
+pub struct PromiseRejection {
     payload: DynAniError,
 }
 
-impl ArktsRejection {
+impl PromiseRejection {
     /// Wrap any structured rejection payload without erasing its materializer.
     pub fn new(payload: DynAniError) -> Self {
         Self { payload }
@@ -605,13 +604,13 @@ impl ArktsRejection {
     }
 }
 
-impl std::fmt::Display for ArktsRejection {
+impl std::fmt::Display for PromiseRejection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.payload.fmt(formatter)
     }
 }
 
-impl AniErrorPayload for ArktsRejection {
+impl AniErrorPayload for PromiseRejection {
     fn ani_status(&self) -> &str {
         self.payload.ani_status()
     }
@@ -657,11 +656,11 @@ pub trait RejectionDecoder<E>: Send + Sync + 'static {
 /// Bounded default decoder preserving name, message, code, stack, typed
 /// metadata, cause relationships, and the exact raw rejection.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ArktsRejectionDecoder {
+pub struct DefaultRejectionDecoder {
     limits: AniErrorDecodeLimits,
 }
 
-impl ArktsRejectionDecoder {
+impl DefaultRejectionDecoder {
     /// Creates a decoder with explicit untrusted-graph limits.
     pub const fn new(limits: AniErrorDecodeLimits) -> Self {
         Self { limits }
@@ -673,17 +672,17 @@ impl ArktsRejectionDecoder {
     }
 }
 
-impl RejectionDecoder<ArktsRejection> for ArktsRejectionDecoder {
-    fn decode(&self, env: &Env<'_>, rejection: AniRef<'_>) -> ArktsRejection {
-        ArktsRejection::new(Box::new(promise_rejection_error_with_limits(
+impl RejectionDecoder<PromiseRejection> for DefaultRejectionDecoder {
+    fn decode(&self, env: &Env<'_>, rejection: AniRef<'_>) -> PromiseRejection {
+        PromiseRejection::new(Box::new(promise_rejection_error_with_limits(
             env,
             rejection,
             self.limits,
         )))
     }
 
-    fn runtime_error(&self, error: DynAniError) -> ArktsRejection {
-        ArktsRejection::new(error)
+    fn runtime_error(&self, error: DynAniError) -> PromiseRejection {
+        PromiseRejection::new(error)
     }
 }
 
@@ -781,15 +780,15 @@ impl<T: PromiseFutureValue, E: Send + 'static> PromiseBridgeObserver for Promise
 /// bridge to attach public `then` continuations. Those continuations settle a
 /// tokenized Rust waiter directly; no runtime-private Promise fields are read
 /// and no scheduler worker or timer is consumed while the Promise is pending.
-pub struct PromiseFuture<T, E: Send + 'static = ArktsRejection> {
+pub struct PromiseFuture<T, E: Send + 'static = PromiseRejection> {
     state: Arc<PromiseFutureState<T, E>>,
     completed: bool,
 }
 
-impl<T: PromiseFutureValue> PromiseFuture<T, ArktsRejection> {
+impl<T: PromiseFutureValue> PromiseFuture<T, PromiseRejection> {
     /// Creates a future and promotes the Promise to a global ANI reference.
     pub fn new<'env>(env: &Env<'env>, promise: PromiseRaw<'env, T>) -> Result<Self> {
-        Self::with_decoder(env, promise, Arc::new(ArktsRejectionDecoder::default()))
+        Self::with_decoder(env, promise, Arc::new(DefaultRejectionDecoder::default()))
     }
 }
 
@@ -931,7 +930,7 @@ impl<T: PromiseFutureValue, E: Send + 'static> std::future::Future for PromiseFu
 ///     Ok(promise.await?)
 /// }
 /// ```
-pub struct Promise<T, E: Send + 'static = ArktsRejection> {
+pub struct Promise<T, E: Send + 'static = PromiseRejection> {
     inner: PromiseFuture<T, E>,
 }
 
@@ -1055,7 +1054,7 @@ fn decode_promise_rejection(
             Status::OutOfRange,
             "ArkTS rejection cause graph exceeds configured decode limits",
         )
-        .with_status_name("ArktsRejectionLimit");
+        .with_status_name("PromiseRejectionLimit");
         error.preserve_rejection(RefContainer::new(env, &value).ok());
         return error;
     }
@@ -1073,7 +1072,7 @@ fn decode_promise_rejection(
                 }
                 let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
                 let string_class = env.find_class("std.core.String")?;
-                if !env.object_instance_of(&object, &string_class)? {
+                if !env.is_instance_of(&object, &string_class)? {
                     return Err(Error::new(
                         Status::InvalidType,
                         "error property is not a string",
@@ -1240,7 +1239,7 @@ unsafe impl<T> Sync for Deferred<T> {}
 impl AniResolver {
     /// Resolve the associated Promise with a reference value.
     pub fn resolve_ref(&self, env: &Env<'_>, value: &AniRef<'_>) -> Result<()> {
-        env.promise_resolve(self, value)
+        env.resolve_promise(self, value)
     }
 
     /// Resolve the associated Promise with any supported Rust value.
@@ -1254,12 +1253,12 @@ impl AniResolver {
 
     /// Reject the associated Promise with an ANI error object.
     pub fn reject_error(&self, env: &Env<'_>, error: &AniError<'_>) -> Result<()> {
-        env.promise_reject(self, error)
+        env.reject_promise(self, error)
     }
 
     /// Reject the associated Promise with a string message.
     pub fn reject_message(&self, env: &Env<'_>, error: impl AsRef<str>) -> Result<()> {
-        env.promise_reject_with_message(self, error.as_ref())
+        env.reject_promise_with_message(self, error.as_ref())
     }
 
     /// Reject the associated Promise with a typed [`Error`].
@@ -1392,17 +1391,8 @@ where
 impl<'env> PromiseValue<'env> for () {
     fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
         // `Promise<void>` resolves to `undefined` in ArkTS.
-        let raw = env.get_undefined_object()?;
-        Ok(unsafe { AniRef::from_raw(raw as sys::ani_ref) })
-    }
-}
-
-impl<'env, T> PromiseValue<'env> for T
-where
-    T: BindgenToAni<'env, Output = sys::ani_object>,
-{
-    fn into_promise_ref(self, env: &Env<'env>) -> Result<AniRef<'env>> {
-        Ok(unsafe { AniRef::from_raw(self.to_ani(env)? as sys::ani_ref) })
+        let undefined = env.get_undefined_object()?;
+        Ok(unsafe { AniRef::from_raw(undefined.into_raw() as sys::ani_ref) })
     }
 }
 
@@ -1669,7 +1659,7 @@ pub(crate) fn create_promise_error<'a>(
         let undefined = env.get_undefined_object()?;
         let args = [
             crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
-            crate::types::ani_value_ref(undefined as sys::ani_ref),
+            crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
         ];
         let err_obj = env.new_object(&err_cls, &err_ctor, &args)?;
         return Ok(unsafe {
@@ -1715,10 +1705,13 @@ mod tests {
             let _ = deferred
                 .as_resolver()
                 .reject_with_error(env, Error::new(Status::InvalidArgs, "bad"));
-            let _ = env.promise_resolved("done".to_string());
-            let _ = env.promise_rejected::<String>("boom");
+            let _ = env.create_resolved_promise("done".to_string());
+            let _ = env.create_rejected_promise::<String>("boom");
             let _ = env
-                .promise_rejected_with_error::<String, _>(Error::new(Status::InvalidArgs, "boom"));
+                .create_rejected_promise_with_error::<String, _>(Error::new(
+                    Status::InvalidArgs,
+                    "boom",
+                ));
 
             let deferred = deferred.cast::<bool>();
             let resolver = deferred.into_resolver();

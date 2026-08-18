@@ -59,8 +59,8 @@
 //! pub fn use_stored_object(env: &Env) -> Result<String> {
 //!     let guard = STORED_OBJECT.lock().unwrap();
 //!     if let Some(ref obj_ref) = *guard {
-//!         // Borrow back as a local reference
-//!         let obj = obj_ref.borrow(env);
+//!         // Materialize back as a local reference
+//!         let obj = obj_ref.to_object(env)?;
 //!         // Use the object...
 //!         Ok("Object exists".to_string())
 //!     } else {
@@ -117,14 +117,14 @@ use super::traits::{FromAni, ToAni, TypeInfo};
 /// }
 ///
 /// // Use the stored reference
-/// fn use_callback(env: &Env, obj_ref: &Ref<AniObject<'static>>) {
-///     let obj = obj_ref.borrow(env);
+/// fn use_callback(env: &Env, obj_ref: &Ref<AniObject<'static>>) -> Result<()> {
+///     let obj = obj_ref.to_object(env)?;
 ///     // Use obj...
+///     Ok(())
 /// }
 /// ```
 pub struct Ref<T> {
-    vm: Option<AniVm>,
-    inner: Option<GlobalRef>,
+    inner: GlobalRef,
     _marker: PhantomData<T>,
 }
 
@@ -133,23 +133,10 @@ unsafe impl<T> Send for Ref<T> {}
 unsafe impl<T> Sync for Ref<T> {}
 
 impl<T> Ref<T> {
-    #[inline]
-    fn managed(vm: AniVm, inner: GlobalRef) -> Self {
-        Self {
-            vm: Some(vm),
-            inner: Some(inner),
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    fn inner_ref(&self) -> &GlobalRef {
-        self.inner
-            .as_ref()
-            .expect("Ref<T> should contain a global ref until consumed")
-    }
-
     /// Create a new `Ref<T>` from a `GlobalRef`
+    ///
+    /// The reference-management behaviour (automatic deletion on drop or
+    /// manual) is inherited from the given `GlobalRef`.
     ///
     /// # Safety
     ///
@@ -158,53 +145,33 @@ impl<T> Ref<T> {
     #[inline]
     pub unsafe fn from_global_ref(inner: GlobalRef) -> Self {
         Self {
-            vm: None,
-            inner: Some(inner),
+            inner,
             _marker: PhantomData,
         }
-    }
-
-    /// Create a managed `Ref<T>` from a `GlobalRef` and owning [`AniVm`].
-    ///
-    /// Values created via [`FromAni`] already use this path automatically.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure the `GlobalRef` actually points to an object of
-    /// type `T`, and that `vm` is the owning VM for that reference.
-    #[inline]
-    pub unsafe fn from_global_ref_managed(vm: AniVm, inner: GlobalRef) -> Self {
-        Self::managed(vm, inner)
     }
 
     /// Get the underlying raw pointer
     #[inline]
     pub fn as_raw(&self) -> sys::ani_ref {
-        self.inner_ref().as_raw()
+        self.inner.as_raw()
     }
 
     /// Consume self and return the underlying `GlobalRef`
     #[inline]
-    pub fn into_global_ref(mut self) -> GlobalRef {
+    pub fn into_global_ref(self) -> GlobalRef {
         self.inner
-            .take()
-            .expect("Ref<T> should contain a global ref before into_global_ref")
     }
 
     /// Get a reference to the underlying `GlobalRef`
     #[inline]
     pub fn as_global_ref(&self) -> &GlobalRef {
-        self.inner_ref()
+        &self.inner
     }
 
     /// Delete this global reference explicitly.
     #[inline]
-    pub fn delete(mut self, env: &Env<'_>) -> Result<()> {
-        let global = self
-            .inner
-            .take()
-            .expect("Ref<T> should contain a global ref before delete");
-        env.delete_global_ref(global)
+    pub fn delete(self, env: &Env<'_>) -> Result<()> {
+        env.delete_global_ref(self.inner)
     }
 }
 
@@ -297,7 +264,7 @@ impl WeakRef {
 // ============================================================================
 
 impl Ref<AniObject<'static>> {
-    /// Borrow the reference as a local `AniObject`
+    /// Materialize the reference as a local `AniObject`
     ///
     /// The returned object is a fresh local reference valid for the current
     /// native call scope.
@@ -305,22 +272,21 @@ impl Ref<AniObject<'static>> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// fn use_object(env: &Env, obj_ref: &Ref<AniObject<'static>>) {
-    ///     let obj = obj_ref.borrow(env);
+    /// fn use_object(env: &Env, obj_ref: &Ref<AniObject<'static>>) -> Result<()> {
+    ///     let obj = obj_ref.to_object(env)?;
     ///     // obj is now usable as AniObject
+    ///     Ok(())
     /// }
     /// ```
     #[inline]
-    pub fn borrow<'env>(&self, env: &Env<'env>) -> AniObject<'env> {
+    pub fn to_object<'env>(&self, env: &Env<'env>) -> Result<AniObject<'env>> {
         env.local_object_from_global_ref(self.as_global_ref())
-            .expect("Ref<AniObject>::borrow failed to materialize local object")
     }
 
-    /// Borrow the reference as a local `AniRef`
+    /// Materialize the reference as a local `AniRef`
     #[inline]
-    pub fn borrow_as_ref<'env>(&self, env: &Env<'env>) -> AniRef<'env> {
+    pub fn to_local<'env>(&self, env: &Env<'env>) -> Result<AniRef<'env>> {
         env.local_ref_from_global_ref(self.as_global_ref())
-            .expect("Ref<AniObject>::borrow_as_ref failed to materialize local ref")
     }
 }
 
@@ -373,11 +339,12 @@ impl<'env> FromAni<'env> for Ref<AniObject<'static>> {
             return Err(Error::new(Status::InvalidArgs, "Object value is null"));
         }
 
-        // Create a global reference from the local reference
+        // Create a global reference from the local reference. The returned
+        // GlobalRef is managed, so the Ref deletes it automatically on drop.
         let ani_ref = unsafe { AniRef::from_raw(value as sys::ani_ref) };
         let global_ref = env.create_global_ref(&ani_ref)?;
 
-        Ok(Ref::managed(env.get_vm()?, global_ref))
+        Ok(unsafe { Ref::from_global_ref(global_ref) })
     }
 }
 
@@ -429,7 +396,8 @@ impl<'env> ToAni<'env> for GlobalRef {
     type Output = sys::ani_ref;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self.as_raw())
+        // Ownership crosses the ANI boundary; give up automatic deletion.
+        Ok(self.into_raw())
     }
 }
 
@@ -445,7 +413,8 @@ impl<'env> ToAni<'env> for WeakRef {
     type Output = sys::ani_wref;
 
     fn to_ani(self, _env: &Env<'env>) -> Result<Self::Output> {
-        Ok(self.as_raw())
+        // Ownership crosses the ANI boundary; give up automatic deletion.
+        Ok(self.into_raw())
     }
 }
 
@@ -478,7 +447,7 @@ impl<T> Ref<T> {
     pub fn clone_ref(&self, env: &Env<'_>) -> Result<Self> {
         let ani_ref = env.local_ref_from_global_ref(self.as_global_ref())?;
         let new_global = env.create_global_ref(&ani_ref)?;
-        Ok(Ref::managed(env.get_vm()?, new_global))
+        Ok(unsafe { Ref::from_global_ref(new_global) })
     }
 }
 
@@ -495,21 +464,8 @@ impl<T> ToGlobalRefSource for Ref<T> {
 impl<T> std::fmt::Debug for Ref<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ref")
-            .field("raw", &self.inner.as_ref().map(GlobalRef::as_raw))
+            .field("raw", &self.inner.as_raw())
             .finish()
-    }
-}
-
-impl<T> Drop for Ref<T> {
-    fn drop(&mut self) {
-        let Some(vm) = self.vm.as_ref() else {
-            return;
-        };
-        let Some(global) = self.inner.take() else {
-            return;
-        };
-
-        let _ = vm.with_attached(|env| env.delete_global_ref(global));
     }
 }
 
@@ -566,10 +522,6 @@ impl_global_ref_bridge_for_ref_type!(AniEnum, sys::ani_enum);
 impl_global_ref_bridge_for_ref_type!(AniError, sys::ani_error);
 impl_global_ref_bridge_for_ref_type!(AniFnObject, sys::ani_fn_object);
 impl_global_ref_bridge_for_ref_type!(AniArray, sys::ani_array);
-impl_global_ref_bridge_for_ref_type!(AniArrayInt, sys::ani_fixedarray_int);
-impl_global_ref_bridge_for_ref_type!(AniArrayLong, sys::ani_fixedarray_long);
-impl_global_ref_bridge_for_ref_type!(AniArrayDouble, sys::ani_fixedarray_double);
-impl_global_ref_bridge_for_ref_type!(AniArrayRef, sys::ani_array);
 impl_global_ref_bridge_for_ref_type!(AniFixedArray, sys::ani_fixedarray);
 impl_global_ref_bridge_for_ref_type!(AniFixedArrayBoolean, sys::ani_fixedarray_boolean);
 impl_global_ref_bridge_for_ref_type!(AniFixedArrayChar, sys::ani_fixedarray_char);
@@ -599,14 +551,12 @@ impl<'env> FromGlobalRef<'env> for AnyValue<'env> {
 
 /// Owned global-reference container for async tasks.
 ///
-/// `RefContainer` captures a thread-affine ANI local handle as a [`GlobalRef`]
-/// together with its owning [`AniVm`]. When the container is dropped, it
-/// reattaches to the VM if needed and deletes the global reference
-/// automatically. This provides a napi-rs-style "ref container" building block
-/// for async workflows.
+/// `RefContainer` captures a thread-affine ANI local handle as a managed
+/// [`GlobalRef`]. When the container is dropped, the global reference is
+/// deleted automatically (reattaching to the VM if needed). This provides a
+/// napi-rs-style "ref container" building block for async workflows.
 pub struct RefContainer {
-    vm: AniVm,
-    inner: Option<GlobalRef>,
+    inner: GlobalRef,
 }
 
 impl RefContainer {
@@ -615,25 +565,23 @@ impl RefContainer {
     where
         T: ToGlobalRefSource,
     {
-        let vm = env.get_vm()?;
         let inner = value.to_global_ref(env)?;
-        Ok(Self {
-            vm,
-            inner: Some(inner),
-        })
+        Ok(Self { inner })
     }
 
     /// Create a container from an existing [`GlobalRef`].
+    ///
+    /// The reference becomes managed by `vm`: it is deleted automatically
+    /// when the container is dropped.
     pub fn from_global_ref(vm: AniVm, inner: GlobalRef) -> Self {
         Self {
-            vm,
-            inner: Some(inner),
+            inner: inner.into_managed(vm),
         }
     }
 
     /// Borrow the owned [`GlobalRef`].
-    pub fn as_global_ref(&self) -> Option<&GlobalRef> {
-        self.inner.as_ref()
+    pub fn as_global_ref(&self) -> &GlobalRef {
+        &self.inner
     }
 
     /// Materialize the requested local ANI handle on the current thread.
@@ -641,51 +589,27 @@ impl RefContainer {
     where
         T: FromGlobalRef<'env>,
     {
-        let global = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| Error::new(Status::InvalidArgs, "RefContainer has no global ref"))?;
-        T::from_global_ref(env, global)
+        T::from_global_ref(env, &self.inner)
     }
 
     /// Create a second container pointing at the same object.
     pub fn clone_container(&self, env: &Env<'_>) -> Result<Self> {
         let local = self.to_local::<AniRef<'_>>(env)?;
         let cloned = env.create_global_ref(&local)?;
-        Ok(Self {
-            vm: env.get_vm()?,
-            inner: Some(cloned),
-        })
+        Ok(Self { inner: cloned })
     }
 
-    /// Consume the container and return the owned [`GlobalRef`] without
-    /// deleting it on drop.
-    pub fn into_global_ref(mut self) -> GlobalRef {
+    /// Consume the container and return the owned [`GlobalRef`].
+    pub fn into_global_ref(self) -> GlobalRef {
         self.inner
-            .take()
-            .expect("RefContainer should always contain a global ref before into_global_ref")
     }
 }
 
 impl std::fmt::Debug for RefContainer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RefContainer")
-            .field("raw", &self.inner.as_ref().map(GlobalRef::as_raw))
+            .field("raw", &self.inner.as_raw())
             .finish()
-    }
-}
-
-impl Drop for RefContainer {
-    fn drop(&mut self) {
-        let Some(global) = self.inner.take() else {
-            return;
-        };
-
-        // Reuse the current Env when drop runs inside an async callback. ANI
-        // rejects a second AttachCurrentThread on an already-attached thread;
-        // treating that as a detach/attach failure used to silently leak this
-        // global reference on Promise rejection and async-iterator throw.
-        let _ = self.vm.with_attached(|env| env.delete_global_ref(global));
     }
 }
 
@@ -747,6 +671,9 @@ mod tests {
         let container = RefContainer::from_global_ref(vm, global);
         let global = container.into_global_ref();
         assert_eq!(global.as_raw(), raw);
+        // Disarm the managed handle: the dangling test VM must never be
+        // dereferenced by an automatic delete on drop.
+        let _ = global.into_raw();
     }
 
     #[test]

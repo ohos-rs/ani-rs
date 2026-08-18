@@ -54,7 +54,7 @@ pub trait Task: Send + Sized + 'static {
     /// Worker-thread result passed to [`resolve`](Self::resolve).
     type Output: Send + 'static;
     /// ArkTS value used to resolve the resulting Promise.
-    type JsValue: for<'env> PromiseValue<'env>;
+    type Value: for<'env> PromiseValue<'env>;
     /// Structured application error retained across the scheduler boundary.
     type Error: AniErrorPayload;
 
@@ -70,11 +70,11 @@ pub trait Task: Send + Sized + 'static {
         self,
         env: &Env<'env>,
         output: Self::Output,
-    ) -> std::result::Result<Self::JsValue, Self::Error>;
+    ) -> std::result::Result<Self::Value, Self::Error>;
 }
 
 /// A scheduler-backed background task that converts directly to `Promise<Object>`.
-pub struct AsyncTask<T: Task, V = <T as Task>::JsValue> {
+pub struct AsyncTask<T: Task, V = <T as Task>::Value> {
     task: T,
     cancellation: CancellationToken,
     value: PhantomData<fn() -> V>,
@@ -82,7 +82,7 @@ pub struct AsyncTask<T: Task, V = <T as Task>::JsValue> {
 
 impl<T, V> AsyncTask<T, V>
 where
-    T: Task<JsValue = V>,
+    T: Task<Value = V>,
     V: for<'env> PromiseValue<'env> + 'static,
 {
     /// Creates a task with a fresh cancellation token.
@@ -109,9 +109,9 @@ where
     }
 
     /// Starts the task and returns its typed Promise.
-    pub fn run<'env>(self, env: &Env<'env>) -> Result<PromiseRaw<'env, T::JsValue>> {
+    pub fn run<'env>(self, env: &Env<'env>) -> Result<PromiseRaw<'env, T::Value>> {
         let vm = Arc::new(env.get_vm()?);
-        let (deferred, promise) = PromiseRaw::<T::JsValue>::deferred(env)?;
+        let (deferred, promise) = PromiseRaw::<T::Value>::deferred(env)?;
         let cancellation = Arc::new(self.cancellation);
         let settlement = Arc::new(Mutex::new(Some(deferred.cast::<()>())));
         let work_settlement = Arc::clone(&settlement);
@@ -157,7 +157,7 @@ where
 
 impl<T, V> TypeInfo for AsyncTask<T, V>
 where
-    T: Task<JsValue = V>,
+    T: Task<Value = V>,
     V: for<'env> PromiseValue<'env> + 'static,
 {
     fn type_signature() -> &'static str {
@@ -171,7 +171,7 @@ where
 
 impl<'env, T, V> ToAni<'env> for AsyncTask<T, V>
 where
-    T: Task<JsValue = V>,
+    T: Task<Value = V>,
     V: for<'vm> PromiseValue<'vm> + 'static,
 {
     type Output = sys::ani_object;

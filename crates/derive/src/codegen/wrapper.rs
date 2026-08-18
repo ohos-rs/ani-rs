@@ -382,7 +382,7 @@ pub fn generate_async_wrapper_with_target(
             #conversions
             #async_param_captures
 
-            match ani::async_runtime::spawn_future_result_factory(&__ani_env, move || async move {
+            match ani::async_runtime::spawn_local_future_result(&__ani_env, move || async move {
                 #async_injected
                 #async_param_restores
                 #call_target(#(#call_args),*)
@@ -450,7 +450,7 @@ pub fn generate_async_blocking_wrapper_with_target(
                     .await
                     .map_err(|e| -> ani::error::DynAniError { Box::new(e) })
             };
-            let result = match ani::tokio::block_on_future_result(__ani_future) {
+            let result = match ani::tokio::block_on_future(__ani_future) {
                 Ok(result) => result,
                 Err(e) => {
                     unsafe { ani::error::throw_error_payload(__ani_env_outer.as_raw(), &e) };
@@ -562,7 +562,7 @@ fn generate_async_promise_injected_vars(
     binding_kind: WrapperBindingKind,
 ) -> TokenStream {
     let mut vars = vec![quote! {
-        let __ani_attach = __ani_vm.attach_current_thread_scoped()
+        let __ani_attach = __ani_vm.attach_current_thread()
             .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
         let __ani_env = __ani_attach.env();
         let env = __ani_env.as_raw();

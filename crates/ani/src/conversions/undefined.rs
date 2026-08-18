@@ -57,7 +57,7 @@ impl<'env> FromAniObject<'env> for Undefined {
 
 impl<'env> ToAniObject<'env> for Undefined {
     fn to_ani_object(self, env: &Env<'env>) -> Result<sys::ani_object> {
-        env.get_undefined_object()
+        Ok(env.get_undefined_object()?.into_raw())
     }
 }
 

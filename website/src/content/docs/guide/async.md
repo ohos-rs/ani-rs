@@ -9,7 +9,7 @@ description: 使用 #[ani(async)]、RuntimeDomain 和可替换执行器导出 Pr
 
 ```rust
 #[ani(async)]
-pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, ArktsRejection> {
+pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, PromiseRejection> {
     promise.await
 }
 ```
@@ -28,7 +28,7 @@ pub fn await_arkts(
 
 `Promise<T>` 在 `FromAni` 时挂上生成的 ETS continuation bridge，把 ArkTS `then`/reject 转成 Rust waker。等待过程不读取 Promise 的私有字段，也不占用 scheduler worker。`cancel()` 和 Drop 只注销 Rust 侧等待；ANI 没有 Promise 取消原语，不会终止 ArkTS 自己的操作。
 
-默认错误类型是 `ArktsRejection`。需要领域错误时，用 `Promise::from_raw_promise_with_decoder` 或 `PromiseRaw::into_future_with_decoder`。
+默认错误类型是 `PromiseRejection`。需要领域错误时，用 `Promise::from_raw_promise_with_decoder` 或 `PromiseRaw::into_future_with_decoder`。
 
 底层 waiter 仍是 `PromiseFuture<T>`；`PromiseRaw::into_future` 继续可用。
 
@@ -47,7 +47,7 @@ tokio = { version = "1", default-features = false, features = ["time"] }
 
 组合构建（`async-runtime` + `tokio_rt`）的路由与 napi-rs 一致：
 
-- 生成的 `#[ani(async)]` future、`spawn_future` 和 `block_on_future_result` 跟随**选中的** `AsyncRuntime`。
+- 生成的 `#[ani(async)]` future、`spawn_future` 和 `block_on_future` 跟随**选中的** `AsyncRuntime`。
 - `spawn` / `block_on` / `spawn_blocking` / `within_runtime_if_available` 在开启 `tokio_rt` 时始终走 Tokio helper runtime。
 - 选中自定义 backend 不会构造 Tokio；第一次调用 Tokio helper 才会惰性创建。
 - 只用 `async-runtime`、不链接 Tokio 时，缺失 backend 的错误不会冻结注册窗口。
@@ -128,7 +128,7 @@ pub fn ready_message(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    env.promise_resolved(format!("ready:{value}"))
+    env.create_resolved_promise(format!("ready:{value}"))
         .map(PromiseRaw::into_static)
 }
 ```
@@ -141,7 +141,7 @@ pub fn create_deferred(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    let (deferred, promise) = env.promise_new_typed::<String>()?;
+    let (deferred, promise) = env.create_deferred::<String>()?;
     deferred.resolve_value(env, value)?;
     Ok(promise.into_static())
 }
@@ -152,9 +152,9 @@ pub fn create_deferred(
 | 需要 | 使用 |
 | --- | --- |
 | 普通 Rust Future | `#[ani(async)]` |
-| 立即返回成功 Promise | `Env::promise_resolved` |
-| 立即返回失败 Promise | `Env::promise_rejected` |
-| 手动 resolve / reject | `Env::promise_new_typed` + `Deferred<T>` |
+| 立即返回成功 Promise | `Env::create_resolved_promise` |
+| 立即返回失败 Promise | `Env::create_rejected_promise` |
+| 手动 resolve / reject | `Env::create_deferred` + `Deferred<T>` |
 | 已有底层 resolver | `AniResolver` |
 
 ## 跨 await 的数据
@@ -179,7 +179,7 @@ struct Square { input: i32 }
 
 impl Task for Square {
     type Output = i32;
-    type JsValue = i32;
+    type Value = i32;
     type Error = Error;
 
     fn compute(&mut self, cancel: &CancellationToken) -> Result<i32> {
@@ -294,7 +294,7 @@ fn init() {
 
 ## ArkTS 主动取消
 
-`spawn_future_result_factory_with_handle` 返回 Promise 与 `RuntimeTaskHandle`。调用 `cancel_with(Box<dyn AniErrorPayload>)` 可使用任意业务错误；`bridge_token()` 把 handle 注册到生成的 `AniCancelHandle` native bridge。ETS 必须在 `AbortSignal` 创建线程读取 `signal.reason` 并调用 `handle.cancel(reason)`，worker 从不访问线程亲和的 AbortSignal。
+`spawn_local_future_with_handle` 返回 Promise 与 `RuntimeTaskHandle`。调用 `cancel_with(Box<dyn AniErrorPayload>)` 可使用任意业务错误；`bridge_token()` 把 handle 注册到生成的 `AniCancelHandle` native bridge。ETS 必须在 `AbortSignal` 创建线程读取 `signal.reason` 并调用 `handle.cancel(reason)`，worker 从不访问线程亲和的 AbortSignal。
 
 ## 跨线程回调
 

@@ -358,24 +358,24 @@ pub fn promise_maybe_succeed(env: &Env<'_>, should_succeed: bool, value: i32) ->
 }
 
 #[ani]
-pub fn promise_new_typed_resolve(
+pub fn create_deferred_resolve(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    let (deferred, promise) = env.promise_new_typed::<String>()?;
+    let (deferred, promise) = env.create_deferred::<String>()?;
     deferred.resolve_value(env, format!("typed:{value}"))?;
     Ok(promise.into_static())
 }
 
 #[ani]
 pub fn promise_env_resolved(env: &Env<'_>, value: String) -> Result<PromiseRaw<'static, String>> {
-    env.promise_resolved(format!("env:{value}"))
+    env.create_resolved_promise(format!("env:{value}"))
         .map(PromiseRaw::into_static)
 }
 
 #[ani]
 pub fn promise_env_rejected(env: &Env<'_>, message: String) -> Result<PromiseRaw<'static, String>> {
-    env.promise_rejected::<String>(&message)
+    env.create_rejected_promise::<String>(&message)
         .map(PromiseRaw::into_static)
 }
 
@@ -384,7 +384,7 @@ pub fn promise_resolver_resolve_value(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    let (resolver, promise) = env.promise_new()?;
+    let (resolver, promise) = env.create_promise()?;
     resolver.resolve_value(env, format!("resolver:{value}"))?;
     Ok(unsafe { PromiseRaw::<String>::from_raw(promise.into_raw()) }.into_static())
 }
@@ -394,7 +394,7 @@ pub fn promise_resolver_into_deferred(
     env: &Env<'_>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    let (resolver, promise) = env.promise_new()?;
+    let (resolver, promise) = env.create_promise()?;
     let deferred: Deferred<String> = resolver.into_deferred();
     deferred.resolve_value(env, format!("bridge:{value}"))?;
     Ok(unsafe { PromiseRaw::<String>::from_raw(promise.into_raw()) }.into_static())
@@ -405,7 +405,7 @@ pub fn promise_resolver_reject_message(
     env: &Env<'_>,
     message: String,
 ) -> Result<PromiseRaw<'static, ()>> {
-    let (resolver, promise) = env.promise_new()?;
+    let (resolver, promise) = env.create_promise()?;
     resolver.reject_message(env, &message)?;
     Ok(unsafe { PromiseRaw::<()>::from_raw(promise.into_raw()) }.into_static())
 }
@@ -419,7 +419,7 @@ pub fn get_info(_env: &Env<'_>, this: &AniObject<'_>) -> String {
 #[ani(class = "example.MyClass", static)]
 pub fn create(env: &Env<'_>, _name: String) -> Result<i64> {
     let raw = env.get_undefined_object()?;
-    Ok(raw as i64)
+    Ok(raw.into_raw() as i64)
 }
 
 #[ani(async)]
@@ -544,9 +544,9 @@ pub fn tokio_manual_ref_container_ready(
     let vm = env.get_vm()?;
     let container = RefContainer::new(env, &value)?;
 
-    ani::tokio::spawn_future_factory(env, move || async move {
+    ani::tokio::spawn_local_future(env, move || async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let attach = vm.attach_current_thread_scoped()?;
+        let attach = vm.attach_current_thread()?;
         let env = attach.env();
         let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
@@ -566,9 +566,9 @@ pub fn tokio_manual_global_ref_container_ready(
     let container = RefContainer::new(env, &global)?;
     global.delete(env)?;
 
-    ani::tokio::spawn_future_factory(env, move || async move {
+    ani::tokio::spawn_local_future(env, move || async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let attach = vm.attach_current_thread_scoped()?;
+        let attach = vm.attach_current_thread()?;
         let env = attach.env();
         let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
@@ -585,9 +585,9 @@ pub fn tokio_manual_typed_ref_container_ready(
     let vm = env.get_vm()?;
     let container = RefContainer::new(env, &value)?;
 
-    ani::tokio::spawn_future_factory(env, move || async move {
+    ani::tokio::spawn_local_future(env, move || async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let attach = vm.attach_current_thread_scoped()?;
+        let attach = vm.attach_current_thread()?;
         let env = attach.env();
         let local: AniObject<'_> = container.to_local(env)?;
         let ty = env.get_object_type(&local)?;
@@ -602,7 +602,7 @@ pub fn tokio_manual_function_ref_container_call(
     callback: ThreadsafeFunction<(String,), String>,
     value: String,
 ) -> Result<PromiseRaw<'static, String>> {
-    ani::tokio::spawn_future_factory(env, move || async move {
+    ani::tokio::spawn_local_future(env, move || async move {
         tokio::time::sleep(Duration::from_millis(5)).await;
         callback.call_attached((value,))
     })
@@ -619,7 +619,7 @@ pub struct SlowCancellableTask {
 
 impl Task for SlowCancellableTask {
     type Output = i32;
-    type JsValue = i32;
+    type Value = i32;
     type Error = Error;
 
     fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output> {
@@ -634,14 +634,14 @@ impl Task for SlowCancellableTask {
         Ok(self.delay_ms)
     }
 
-    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::JsValue> {
+    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::Value> {
         Ok(output)
     }
 }
 
 impl Task for SquareTask {
     type Output = i32;
-    type JsValue = i32;
+    type Value = i32;
     type Error = Error;
 
     fn compute(&mut self, cancellation: &CancellationToken) -> Result<Self::Output> {
@@ -649,7 +649,7 @@ impl Task for SquareTask {
         Ok(self.input * self.input)
     }
 
-    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::JsValue> {
+    fn resolve<'env>(self, _env: &Env<'env>, output: Self::Output) -> Result<Self::Value> {
         Ok(output)
     }
 }
@@ -790,7 +790,7 @@ mod tests {
     fn async_widget_logic_works() {
         let mut widget = AsyncWidget { _tag: 0 };
 
-        let bumped = ani::tokio::block_on_future_result(widget.bump(2))
+        let bumped = ani::tokio::block_on_future(widget.bump(2))
             .expect("runtime should execute")
             .expect("future should succeed");
         assert_eq!(bumped, 2);
@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn async_signature_override_logic_works() {
         let echoed =
-            ani::tokio::block_on_future_result(signature_override_echo("value".to_string()))
+            ani::tokio::block_on_future(signature_override_echo("value".to_string()))
                 .expect("runtime should execute")
                 .expect("future should succeed");
         assert_eq!(echoed, "sig:value");
@@ -812,7 +812,7 @@ mod tests {
         let _ = async_ref_roundtrip;
         let _ = async_call_scoped_callback;
         let _ = async_echo_function_ref;
-        let _ = promise_new_typed_resolve;
+        let _ = create_deferred_resolve;
         let _ = promise_env_resolved;
         let _ = promise_env_rejected;
         let _ = promise_resolver_resolve_value;
@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn async_constructor_combo_logic_works() {
-        ani::tokio::block_on_future_result(async_ctor_box_new("demo".to_string(), 9))
+        ani::tokio::block_on_future(async_ctor_box_new("demo".to_string(), 9))
             .expect("runtime should execute")
             .expect("constructor should succeed");
         assert_eq!(async_ctor_box_total(), 9);
@@ -846,12 +846,12 @@ mod tests {
     fn async_accessor_combo_logic_works() {
         async_accessor_box_new("start".to_string());
 
-        let summary = ani::tokio::block_on_future_result(async_accessor_box_summary())
+        let summary = ani::tokio::block_on_future(async_accessor_box_summary())
             .expect("runtime should execute")
             .expect("getter should succeed");
         assert_eq!(summary, "note:start");
 
-        ani::tokio::block_on_future_result(async_accessor_box_set_note("done".to_string()))
+        ani::tokio::block_on_future(async_accessor_box_set_note("done".to_string()))
             .expect("runtime should execute")
             .expect("setter should succeed");
         assert_eq!(async_accessor_box_note(), "done");

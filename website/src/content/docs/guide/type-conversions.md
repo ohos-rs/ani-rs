@@ -7,7 +7,7 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 
 - `FromAni`：把 ArkTS 传入值转换为 Rust。
 - `ToAni`：把 Rust 返回值转换为 ANI。
-- `AniType`：提供绑定签名和 ETS 公共类型。
+- `TypeInfo`：提供绑定签名和 ETS 公共类型。
 
 使用 `#[ani]` 时通常不需要手动调用这些 trait。
 
@@ -229,7 +229,7 @@ fn run_on_worker(callback: ThreadsafeFunction<(String,), String>) -> Result<Stri
 
 ## 自定义转换
 
-只有在现有类型和 `#[ani(object)]` 无法表达时，才实现自定义 `ToAni`、`FromAni` 与 `AniType`。三个实现必须保持一致：
+只有在现有类型和 `#[ani(object)]` 无法表达时，才实现自定义 `ToAni`、`FromAni` 与 `TypeInfo`。三个实现必须保持一致：
 
 1. 绑定签名描述的类型能被 `FromAni` 接收。
 2. ETS 公共类型和运行时值一致。

@@ -143,25 +143,25 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 
 ## Type Mappings
 
-| Rust Type | ANI Signature | ArkTS Type |
-|-----------|---------------|------------|
-| `bool` | `Z` | `boolean` |
-| `i8` | `B` | `byte` |
-| `i16` | `S` | `short` |
-| `i32` | `I` | `int` |
-| `i64` | `J` | `long` |
-| `f32` | `F` | `float` |
-| `f64` | `D` | `double` |
-| `String` | `Lstd/core/String;` | `String` |
-| `Vec<T>` | `[T` | `Array<T>` |
-| `Option<i32>` | `Lstd/core/Int;` | `Int \| null` |
+| Rust Type     | ANI Signature       | ArkTS Type    |
+| ------------- | ------------------- | ------------- |
+| `bool`        | `Z`                 | `boolean`     |
+| `i8`          | `B`                 | `byte`        |
+| `i16`         | `S`                 | `short`       |
+| `i32`         | `I`                 | `int`         |
+| `i64`         | `J`                 | `long`        |
+| `f32`         | `F`                 | `float`       |
+| `f64`         | `D`                 | `double`      |
+| `String`      | `Lstd/core/String;` | `String`      |
+| `Vec<T>`      | `[T`                | `Array<T>`    |
+| `Option<i32>` | `Lstd/core/Int;`    | `Int \| null` |
 
 ## Workspace
 
-| Crate | Description |
-|-------|-------------|
-| `ani-sys` | Raw FFI bindings to the ANI C API |
-| `ani` | Safe runtime wrappers, conversions, Promise bridge, refs, and registration |
+| Crate        | Description                                                                       |
+| ------------ | --------------------------------------------------------------------------------- |
+| `ani-sys`    | Raw FFI bindings to the ANI C API                                                 |
+| `ani`        | Safe runtime wrappers, conversions, Promise bridge, refs, and registration        |
 | `ani-derive` | Procedural macros for `#[ani]`, `#[ani(init)]`, `#[ani(async)]`, and ETS emission |
 
 ## Examples
@@ -208,7 +208,7 @@ pnpm docs:build
 
 ## Requirements
 
-- Rust 1.85+
+- Rust 1.88+
 - HarmonyOS SDK (for device/emulator testing)
 - ArkTS 1.2 compatible runtime
 

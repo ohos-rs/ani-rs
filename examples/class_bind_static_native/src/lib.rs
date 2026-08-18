@@ -13,8 +13,8 @@ unsafe extern "C" fn native_answer(
 #[ani]
 pub fn bind_static_natives(env: &Env<'_>, cls: AniClass<'_>) -> Result<()> {
     let methods = [native_function(
-        "answer\0",
-        ":i\0",
+        c"answer",
+        c":i",
         native_answer as *const std::ffi::c_void,
     )];
     env.bind_class_static_native_methods(&cls, &methods)

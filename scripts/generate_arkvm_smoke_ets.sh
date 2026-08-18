@@ -196,8 +196,8 @@ function main(): void {
   __assert_true("tokio_void_async", tokioVoidAsync);
   let envText: string = waitForCompletion(() => __ANI_GENERATED__.env_roundtrip("hello"));
   __assert_eq_string("env_roundtrip", envText, "env:hello");
-  let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.promise_new_typed_resolve("hello"));
-  __assert_eq_string("promise_new_typed_resolve", typedPromiseText, "typed:hello");
+  let typedPromiseText: string = waitForCompletion(() => __ANI_GENERATED__.create_deferred_resolve("hello"));
+  __assert_eq_string("create_deferred_resolve", typedPromiseText, "typed:hello");
   let envResolvedText: string = waitForCompletion(() => __ANI_GENERATED__.promise_env_resolved("hello"));
   __assert_eq_string("promise_env_resolved", envResolvedText, "env:hello");
   let envRejected: boolean = waitForCompletion(async (): Promise<boolean> => {
