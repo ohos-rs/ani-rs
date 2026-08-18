@@ -70,6 +70,23 @@ pub fn date_identity(value: SystemTime) -> SystemTime {
 
 启用 `chrono` cargo feature 后，`chrono::DateTime<Utc>` 通过相同的毫秒表示参与转换。完整示例见 `examples/date`。
 
+## 同步迭代器
+
+`AniIterator<T>` 惰性消费任何 ArkTS `Iterable<T>` 或 `Iterator<T>`（Array、Set、Map、自定义类），不像 `Vec<T>` / `HashSet<T>` 那样一次性物化整个序列。Iterable 通过 `$_iterator()` 解析（回退到 `values()`，再回退到对象自身的 `next()`）：
+
+```rust
+use ani::conversions::AniIterator;
+
+#[ani]
+pub fn iter_join_strings(env: &Env<'_>, values: AniIterator<'_, String>) -> Result<String> {
+    Ok(values.into_vec(env)?.join(","))
+}
+```
+
+`next(env)` 逐个取值，`iter(env)` 提供 std `Iterator` 适配器，`advance(env)` 只推进不解码。
+
+生产方向（Rust → ArkTS）：绑定一个类名以 `Iterator` 结尾的 class，其 `next` 方法返回 `Option<T>` 即自动生成 ArkTS `Iterator<T>` 协议实现；再加 `#[ani(name = "$_iterator")]` 方法即可支持 `for..of`。双向完整示例见 `examples/iterator`。
+
 ## Null 与 Undefined
 
 `null` 和 `undefined` 是两个不同的值：

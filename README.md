@@ -156,6 +156,7 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 | `Vec<T>`      | `[T`                | `Array<T>`    |
 | `Option<i32>` | `Lstd/core/Int;`    | `Int \| null` |
 | `SystemTime`  | `Lescompat/Date;`   | `Date`        |
+| `AniIterator<T>` | `Lstd/core/Object;` | `Iterable<T>` |
 
 ## Workspace
 
@@ -167,13 +168,14 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 
 ## Examples
 
-The [`examples`](examples/) workspace currently contains 53 runnable cases covering:
+The [`examples`](examples/) workspace currently contains 54 runnable cases covering:
 
 - module / namespace / class bindings
 - overload, constructor, getter, setter, and `impl` receiver methods
 - object/class derives and ETS public type generation
 - async `Promise<T>` export and manual resolver/deferred flows
 - refs, `GlobalRef`, `WeakRef`, VM/runtime handles, and ArkVM smoke coverage
+- `Date` conversion and the synchronous iterator protocol in both directions
 
 Start with:
 

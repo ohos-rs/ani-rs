@@ -187,6 +187,9 @@ pub enum AniType {
     /// ArkTS `escompat.Date` (Rust `std::time::SystemTime` or
     /// `chrono::DateTime<Utc>`).
     Date,
+    /// ArkTS synchronous iterator protocol (`AniIterator<T>`), rendered as
+    /// `Iterable<T>` in ETS.
+    Iterator(Option<Box<AniType>>),
     /// Unit type ()
     Unit,
     /// Null literal type
@@ -593,6 +596,13 @@ impl AniType {
             return AniType::Date;
         }
 
+        if ident == "AniIterator" {
+            return AniType::Iterator(
+                extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
+            );
+        }
+
         if ident == "TupleValue" || ident == "AniTupleValue" {
             return AniType::TupleValue;
         }
@@ -870,6 +880,7 @@ impl AniType {
             AniType::String(_) => quote! { ani::sys::ani_string },
             AniType::BigInt => quote! { ani::sys::ani_object },
             AniType::Date => quote! { ani::sys::ani_object },
+            AniType::Iterator(_) => quote! { ani::sys::ani_object },
             AniType::Unit => quote! { () },
             AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
@@ -1056,6 +1067,7 @@ impl AniType {
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::BigInt => "Lstd/core/BigInt;".to_string(),
             AniType::Date => "Lescompat/Date;".to_string(),
+            AniType::Iterator(_) => "Lstd/core/Object;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -1125,6 +1137,7 @@ impl AniType {
             AniType::String(_) => "C{std.core.String}".to_string(),
             AniType::BigInt => "C{std.core.BigInt}".to_string(),
             AniType::Date => "C{escompat.Date}".to_string(),
+            AniType::Iterator(_) => "C{std.core.Object}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
@@ -2148,6 +2161,11 @@ mod tests {
         let ty: Type = syn::parse_quote!(chrono::DateTime<chrono::Utc>);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::Date));
+
+        let ty: Type = syn::parse_quote!(ani::conversions::AniIterator<'_, String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Iterator(Some(_))));
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
 
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);

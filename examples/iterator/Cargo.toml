@@ -1,0 +1,13 @@
+[package]
+name = "ani-example-iterator"
+version = "0.1.0"
+publish = false
+license.workspace = true
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ani = { workspace = true }
+ani-derive = { workspace = true }

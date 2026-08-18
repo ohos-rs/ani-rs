@@ -120,7 +120,7 @@ fn find_record_indexable_setter<'env>(env: &Env<'env>, class: &AniClass<'_>) -> 
     Ok(unsafe { AniMethod::from_raw(method) })
 }
 
-fn find_method_no_signature<'env>(
+pub(crate) fn find_method_no_signature<'env>(
     env: &Env<'env>,
     class: &AniClass<'_>,
     name: &str,
