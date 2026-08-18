@@ -52,10 +52,12 @@ pub fn system_time_to_millis(time: SystemTime) -> f64 {
         Ok(after) => after.as_millis() as f64,
         // Pre-epoch times: negative offset. `unwrap` cannot fail because
         // `duration_since` erring means `UNIX_EPOCH > time`.
-        Err(_) => -(UNIX_EPOCH
-            .duration_since(time)
-            .expect("time is before the Unix epoch")
-            .as_millis() as f64),
+        Err(_) => {
+            -(UNIX_EPOCH
+                .duration_since(time)
+                .expect("time is before the Unix epoch")
+                .as_millis() as f64)
+        }
     }
 }
 

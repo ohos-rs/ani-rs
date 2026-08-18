@@ -1707,11 +1707,10 @@ mod tests {
                 .reject_with_error(env, Error::new(Status::InvalidArgs, "bad"));
             let _ = env.create_resolved_promise("done".to_string());
             let _ = env.create_rejected_promise::<String>("boom");
-            let _ = env
-                .create_rejected_promise_with_error::<String, _>(Error::new(
-                    Status::InvalidArgs,
-                    "boom",
-                ));
+            let _ = env.create_rejected_promise_with_error::<String, _>(Error::new(
+                Status::InvalidArgs,
+                "boom",
+            ));
 
             let deferred = deferred.cast::<bool>();
             let resolver = deferred.into_resolver();

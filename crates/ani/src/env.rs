@@ -252,9 +252,7 @@ macro_rules! ani_call_ret_mid {
         let status = unsafe {
             let api = &*(*raw);
             match api.$func {
-                Some(func) => {
-                    $crate::error::check_status(func(raw, $a, $b, $c, &mut result, $d))
-                }
+                Some(func) => $crate::error::check_status(func(raw, $a, $b, $c, &mut result, $d)),
                 None => Err($crate::__ani_missing_fn_error!($func)),
             }
         };
@@ -437,7 +435,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &T {
-        self.handle.as_ref().expect("AutoLocal handle already taken")
+        self.handle
+            .as_ref()
+            .expect("AutoLocal handle already taken")
     }
 }
 
@@ -5601,7 +5601,10 @@ impl<'local> Env<'local> {
     }
 
     /// Create and immediately reject a typed Promise with a message.
-    pub fn create_rejected_promise<T>(&self, error: impl AsRef<str>) -> Result<PromiseRaw<'local, T>> {
+    pub fn create_rejected_promise<T>(
+        &self,
+        error: impl AsRef<str>,
+    ) -> Result<PromiseRaw<'local, T>> {
         PromiseRaw::<T>::reject(self, error)
     }
 

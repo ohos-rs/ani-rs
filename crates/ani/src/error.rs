@@ -156,9 +156,9 @@ impl AniErrorValue {
         }
 
         match self {
-            Self::Null => Ok(unsafe {
-                AniRef::from_raw(env.get_null_object()?.into_raw() as sys::ani_ref)
-            }),
+            Self::Null => {
+                Ok(unsafe { AniRef::from_raw(env.get_null_object()?.into_raw() as sys::ani_ref) })
+            }
             Self::Bool(value) => (*value).box_value(env).map(object_ref),
             Self::Integer(value) => (*value).box_value(env).map(object_ref),
             Self::Number(value) => (*value).box_value(env).map(object_ref),

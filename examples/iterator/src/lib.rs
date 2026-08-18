@@ -8,7 +8,7 @@
 
 use ani::conversions::AniIterator;
 use ani::prelude::*;
-use ani_derive::{AniClass, ani};
+use ani_derive::{ani, AniClass};
 
 // ============================================================================
 // Consumption: ArkTS Iterable/Iterator -> Rust

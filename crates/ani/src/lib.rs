@@ -88,11 +88,11 @@ pub mod prelude {
     pub use crate::async_runtime::within_runtime_if_available;
     pub use crate::async_runtime::{
         AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
-        RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
-        block_on_future, register_async_runtime, register_cancellation_error_factory,
-        runtime_cancellation_error, shutdown_async_runtime, shutdown_runtime_domain, spawn_future,
-        spawn_future_result, spawn_local_future, spawn_local_future_result,
-        spawn_local_future_with_handle, start_async_runtime, try_register_async_runtime,
+        RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle, block_on_future,
+        register_async_runtime, register_cancellation_error_factory, runtime_cancellation_error,
+        shutdown_async_runtime, shutdown_runtime_domain, spawn_future, spawn_future_result,
+        spawn_local_future, spawn_local_future_result, spawn_local_future_with_handle,
+        start_async_runtime, try_register_async_runtime,
     };
     pub use crate::env::{AutoLocal, Env, LocalScopeGuard};
     pub use crate::error::{
@@ -111,9 +111,9 @@ pub mod prelude {
         AniFixedArrayDouble, AniFixedArrayFloat, AniFixedArrayInt, AniFixedArrayLong,
         AniFixedArrayRef, AniFixedArrayShort, AniFnObject, AniFunction, AniMethod, AniModule,
         AniNamespace, AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString,
-        AniTupleValue, AniType, AniVariable, GlobalRef, WeakRef, ani_value_boolean,
-        ani_value_byte, ani_value_char, ani_value_double, ani_value_float, ani_value_int,
-        ani_value_long, ani_value_ref, ani_value_short, native_function,
+        AniTupleValue, AniType, AniVariable, GlobalRef, WeakRef, ani_value_boolean, ani_value_byte,
+        ani_value_char, ani_value_double, ani_value_float, ani_value_int, ani_value_long,
+        ani_value_ref, ani_value_short, native_function,
     };
     pub use crate::vm::{AniVm, AttachGuard, VmOptions};
 

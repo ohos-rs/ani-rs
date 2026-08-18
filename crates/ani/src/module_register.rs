@@ -618,9 +618,7 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
                     match api.Namespace_BindNativeFunctions {
-                        Some(bind) => unsafe {
-                            bind(env, ns, functions.as_ptr(), functions.len())
-                        },
+                        Some(bind) => unsafe { bind(env, ns, functions.as_ptr(), functions.len()) },
                         None => sys::ani_status_ANI_ERROR,
                     }
                 }
