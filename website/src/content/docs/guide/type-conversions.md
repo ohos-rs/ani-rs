@@ -7,7 +7,7 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 
 - `FromAni`：把 ArkTS 传入值转换为 Rust。
 - `ToAni`：把 Rust 返回值转换为 ANI。
-- `AniType`：提供绑定签名和 ETS 公共类型。
+- `TypeInfo`：提供绑定签名和 ETS 公共类型。
 
 使用 `#[ani]` 时通常不需要手动调用这些 trait。
 
@@ -28,6 +28,7 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 | `f64` | `D` | `double` |
 | `String` | string reference | `string` |
 | `BigInt` | `Lstd/core/BigInt;` | `bigint` |
+| `SystemTime` | `Lescompat/Date;` | `Date` |
 
 无符号和平台宽度整数都执行范围检查，不会使用 `as` 静默截断。`u8`、`u32`、`usize` 和 `isize` 在 ArkTS 侧使用更宽的有符号类型；`u64`、`i128` 和 `u128` 使用 BigInt。Rust `char` 通过单 Unicode scalar 字符串传输，因此 `🦀` 等非 BMP 字符不会被截断为一个 UTF-16 code unit。
 
@@ -52,6 +53,39 @@ pub fn bigint_from_text(value: String) -> Result<BigInt> {
 ```
 
 只有显式调用 `BigInt::to_i64()` 时才会缩窄；超出范围会返回 `OutOfRange`，不会截断。
+
+## Date
+
+`std::time::SystemTime` 双向映射 ArkTS `Date`（`escompat.Date`），以带符号的 epoch 毫秒为传输表示；早于 Unix epoch 的时间映射为负毫秒。亚毫秒精度会被截断，非有限或超出 ArkTS `Date` 范围（±8.64e15 ms）的毫秒值会返回错误而不是静默截断：
+
+```rust
+use std::time::SystemTime;
+use ani_derive::ani;
+
+#[ani]
+pub fn date_identity(value: SystemTime) -> SystemTime {
+    value
+}
+```
+
+启用 `chrono` cargo feature 后，`chrono::DateTime<Utc>` 通过相同的毫秒表示参与转换。完整示例见 `examples/date`。
+
+## 同步迭代器
+
+`AniIterator<T>` 惰性消费任何 ArkTS `Iterable<T>` 或 `Iterator<T>`（Array、Set、Map、自定义类），不像 `Vec<T>` / `HashSet<T>` 那样一次性物化整个序列。Iterable 通过 `$_iterator()` 解析（回退到 `values()`，再回退到对象自身的 `next()`）：
+
+```rust
+use ani::conversions::AniIterator;
+
+#[ani]
+pub fn iter_join_strings(env: &Env<'_>, values: AniIterator<'_, String>) -> Result<String> {
+    Ok(values.into_vec(env)?.join(","))
+}
+```
+
+`next(env)` 逐个取值，`iter(env)` 提供 std `Iterator` 适配器，`advance(env)` 只推进不解码。
+
+生产方向（Rust → ArkTS）：绑定一个类名以 `Iterator` 结尾的 class，其 `next` 方法返回 `Option<T>` 即自动生成 ArkTS `Iterator<T>` 协议实现；再加 `#[ani(name = "$_iterator")]` 方法即可支持 `for..of`。双向完整示例见 `examples/iterator`。
 
 ## Null 与 Undefined
 
@@ -229,7 +263,7 @@ fn run_on_worker(callback: ThreadsafeFunction<(String,), String>) -> Result<Stri
 
 ## 自定义转换
 
-只有在现有类型和 `#[ani(object)]` 无法表达时，才实现自定义 `ToAni`、`FromAni` 与 `AniType`。三个实现必须保持一致：
+只有在现有类型和 `#[ani(object)]` 无法表达时，才实现自定义 `ToAni`、`FromAni` 与 `TypeInfo`。三个实现必须保持一致：
 
 1. 绑定签名描述的类型能被 `FromAni` 接收。
 2. ETS 公共类型和运行时值一致。

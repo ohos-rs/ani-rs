@@ -883,6 +883,8 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Primitive(_) => "0".to_string(),
         AniType::String(_) => "\"\"".to_string(),
         AniType::BigInt => "0n".to_string(),
+        AniType::Date => "new Date(0)".to_string(),
+        AniType::Iterator(_) => format!("(new Array<Object>()) as {}", ets_type),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
@@ -1016,6 +1018,14 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         }
         AniType::AniObject => "Object".to_string(),
         AniType::BigInt => "bigint".to_string(),
+        AniType::Date => "Date".to_string(),
+        AniType::Iterator(inner) => match inner {
+            Some(element) => format!(
+                "Iterable<{}>",
+                ani_type_to_ets_in_context(element.as_ref(), context)
+            ),
+            None => "Iterable<Object>".to_string(),
+        },
         AniType::GlobalRef => builtin_ets_public_type("GlobalRef").unwrap().to_string(),
         AniType::WeakRef => builtin_ets_public_type("WeakRef").unwrap().to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),
@@ -1240,7 +1250,7 @@ fn runtime_handle_to_ets(handle: RuntimeHandleType) -> &'static str {
 
 fn default_array_handle_value(handle: ArrayHandleType, ets_type: &str) -> String {
     match handle {
-        ArrayHandleType::Array | ArrayHandleType::ArrayRef => format!("[] as {}", ets_type),
+        ArrayHandleType::Array => format!("[] as {}", ets_type),
         ArrayHandleType::FixedArray | ArrayHandleType::FixedArrayRef => {
             format!("[] as {}", ets_type)
         }
@@ -1256,7 +1266,7 @@ fn default_runtime_handle_value(handle: RuntimeHandleType, ets_type: &str) -> St
 
 fn array_handle_to_ets(handle: ArrayHandleType) -> &'static str {
     match handle {
-        ArrayHandleType::Array | ArrayHandleType::ArrayRef => "Array<Object>",
+        ArrayHandleType::Array => "Array<Object>",
         ArrayHandleType::FixedArray | ArrayHandleType::FixedArrayRef => "FixedArray<Object>",
     }
 }
@@ -1277,16 +1287,16 @@ fn known_ani_runtime_type(ident: &str) -> Option<&'static str> {
         "Undefined" => Some("undefined"),
         "AniArrayBuffer" => Some("ArrayBuffer"),
         "AniFnObject" | "AniFunction" => Some("Function"),
-        "AniArray" | "AniArrayRef" => Some("Array<Object>"),
+        "AniArray" => Some("Array<Object>"),
         "AniFixedArray" | "AniFixedArrayRef" => Some("FixedArray<Object>"),
         "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("ValueArray<boolean>"),
         "FixedByteArray" | "AniFixedArrayByte" => Some("ValueArray<byte>"),
         "FixedShortArray" | "AniFixedArrayShort" => Some("ValueArray<short>"),
         "FixedCharArray" | "AniFixedArrayChar" => Some("ValueArray<char>"),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("ValueArray<int>"),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("ValueArray<long>"),
+        "FixedIntArray" | "AniFixedArrayInt" => Some("ValueArray<int>"),
+        "FixedLongArray" | "AniFixedArrayLong" => Some("ValueArray<long>"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("ValueArray<float>"),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("ValueArray<double>"),
+        "FixedDoubleArray" | "AniFixedArrayDouble" => Some("ValueArray<double>"),
         _ => None,
     }
 }
@@ -3007,11 +3017,11 @@ set name(name: string | null | undefined) {
     #[test]
     fn test_generate_fn_ets_decl_maps_raw_array_handles_without_unknown_fallback() {
         let sig: Signature = syn::parse_quote! {
-            fn inspect(values: AniArray<'_>, refs: AniArrayRef<'_>, fixed: AniFixedArray<'_>, fixed_refs: AniFixedArrayRef<'_>) -> AniFixedArrayRef<'_>
+            fn inspect(values: AniArray<'_>, fixed: AniFixedArray<'_>, fixed_refs: AniFixedArrayRef<'_>) -> AniFixedArrayRef<'_>
         };
         assert_eq!(
             generate_fn_ets_decl(&sig, "inspect", false),
-            "inspect(values: Array<Object>, refs: Array<Object>, fixed: FixedArray<Object>, fixed_refs: FixedArray<Object>): FixedArray<Object>"
+            "inspect(values: Array<Object>, fixed: FixedArray<Object>, fixed_refs: FixedArray<Object>): FixedArray<Object>"
         );
     }
 

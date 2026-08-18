@@ -168,6 +168,11 @@ pub unsafe fn execute_finalizers(env: *mut sys::ani_env) -> sys::ani_status {
 }
 
 /// Queue a native binding export.
+///
+/// `name` and `signature` are later handed to ANI as C strings, so both must
+/// end with a NUL terminator (`"\0"`). Generated code appends it via
+/// `concat!`; entries without it are rejected here instead of causing
+/// undefined behaviour at bind time.
 #[doc(hidden)]
 pub fn queue_binding(
     target: BindingTarget,
@@ -175,6 +180,12 @@ pub fn queue_binding(
     signature: &'static str,
     pointer: *const c_void,
 ) -> sys::ani_status {
+    if !name.ends_with('\0') || !signature.ends_with('\0') {
+        eprintln!(
+            "[ani] rejected binding without NUL terminator: name={name:?} signature={signature:?}"
+        );
+        return sys::ani_status_ANI_INVALID_ARGS;
+    }
     let entry = PendingBindingEntry {
         target,
         name,
@@ -365,6 +376,9 @@ unsafe fn find_module_with_fallback(
     if candidates.is_empty() {
         return (sys::ani_status_ANI_OK, std::ptr::null_mut());
     }
+    let Some(find_module) = api.FindModule else {
+        return (sys::ani_status_ANI_ERROR, std::ptr::null_mut());
+    };
 
     let mut last_status = sys::ani_status_ANI_NOT_FOUND;
     for candidate in candidates {
@@ -373,7 +387,7 @@ unsafe fn find_module_with_fallback(
             Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
         };
         let mut module: sys::ani_module = std::ptr::null_mut();
-        let status = unsafe { (api.FindModule.unwrap())(env, c_descriptor.as_ptr(), &mut module) };
+        let status = unsafe { find_module(env, c_descriptor.as_ptr(), &mut module) };
         if debug {
             eprintln!("[ani] FindModule descriptor={candidate} status={status} ptr={module:p}");
         }
@@ -399,6 +413,9 @@ unsafe fn find_namespace_with_fallback(
     if candidates.is_empty() {
         return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut());
     }
+    let Some(find_namespace) = api.FindNamespace else {
+        return (sys::ani_status_ANI_ERROR, std::ptr::null_mut());
+    };
 
     let mut last_status = sys::ani_status_ANI_NOT_FOUND;
     for candidate in candidates {
@@ -407,7 +424,7 @@ unsafe fn find_namespace_with_fallback(
             Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
         };
         let mut ns: sys::ani_namespace = std::ptr::null_mut();
-        let status = unsafe { (api.FindNamespace.unwrap())(env, c_descriptor.as_ptr(), &mut ns) };
+        let status = unsafe { find_namespace(env, c_descriptor.as_ptr(), &mut ns) };
         if debug {
             eprintln!("[ani] FindNamespace descriptor={candidate} status={status} ptr={ns:p}");
         }
@@ -433,6 +450,9 @@ unsafe fn find_class_with_fallback(
     if candidates.is_empty() {
         return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut());
     }
+    let Some(find_class) = api.FindClass else {
+        return (sys::ani_status_ANI_ERROR, std::ptr::null_mut());
+    };
 
     let mut last_status = sys::ani_status_ANI_NOT_FOUND;
     for candidate in candidates {
@@ -441,7 +461,7 @@ unsafe fn find_class_with_fallback(
             Err(_) => return (sys::ani_status_ANI_INVALID_ARGS, std::ptr::null_mut()),
         };
         let mut cls: sys::ani_class = std::ptr::null_mut();
-        let status = unsafe { (api.FindClass.unwrap())(env, c_descriptor.as_ptr(), &mut cls) };
+        let status = unsafe { find_class(env, c_descriptor.as_ptr(), &mut cls) };
         if debug {
             eprintln!("[ani] FindClass descriptor={candidate} status={status} ptr={cls:p}");
         }
@@ -574,21 +594,17 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
                     match scope {
-                        ClassBindingScope::Static => unsafe {
-                            (api.Class_BindStaticNativeMethods.unwrap())(
-                                env,
-                                cls,
-                                functions.as_ptr(),
-                                functions.len(),
-                            )
+                        ClassBindingScope::Static => match api.Class_BindStaticNativeMethods {
+                            Some(bind) => unsafe {
+                                bind(env, cls, functions.as_ptr(), functions.len())
+                            },
+                            None => sys::ani_status_ANI_ERROR,
                         },
-                        ClassBindingScope::Instance => unsafe {
-                            (api.Class_BindNativeMethods.unwrap())(
-                                env,
-                                cls,
-                                functions.as_ptr(),
-                                functions.len(),
-                            )
+                        ClassBindingScope::Instance => match api.Class_BindNativeMethods {
+                            Some(bind) => unsafe {
+                                bind(env, cls, functions.as_ptr(), functions.len())
+                            },
+                            None => sys::ani_status_ANI_ERROR,
                         },
                     }
                 }
@@ -601,13 +617,9 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                 } else if ns.is_null() {
                     sys::ani_status_ANI_NOT_FOUND
                 } else {
-                    unsafe {
-                        (api.Namespace_BindNativeFunctions.unwrap())(
-                            env,
-                            ns,
-                            functions.as_ptr(),
-                            functions.len(),
-                        )
+                    match api.Namespace_BindNativeFunctions {
+                        Some(bind) => unsafe { bind(env, ns, functions.as_ptr(), functions.len()) },
+                        None => sys::ani_status_ANI_ERROR,
                     }
                 }
             }
@@ -622,30 +634,22 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     } else if module.is_null() {
                         sys::ani_status_ANI_NOT_FOUND
                     } else {
-                        if debug {
+                        if debug && let Some(find_function) = api.Module_FindFunction {
                             for (idx, f) in functions.iter().enumerate() {
                                 let mut found: sys::ani_function = core::ptr::null_mut();
                                 let check_status = unsafe {
-                                    (api.Module_FindFunction.unwrap())(
-                                        env,
-                                        module,
-                                        f.name,
-                                        f.signature,
-                                        &mut found,
-                                    )
+                                    find_function(env, module, f.name, f.signature, &mut found)
                                 };
                                 eprintln!(
                                     "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
                                 );
                             }
                         }
-                        unsafe {
-                            (api.Module_BindNativeFunctions.unwrap())(
-                                env,
-                                module,
-                                functions.as_ptr(),
-                                functions.len(),
-                            )
+                        match api.Module_BindNativeFunctions {
+                            Some(bind) => unsafe {
+                                bind(env, module, functions.as_ptr(), functions.len())
+                            },
+                            None => sys::ani_status_ANI_ERROR,
                         }
                     }
                 }
@@ -829,8 +833,8 @@ mod tests {
                 descriptor: "demo.Test",
                 scope: ClassBindingScope::Instance,
             },
-            "m1",
-            ":",
+            "m1\0",
+            ":\0",
             ptr::null(),
         );
         assert_eq!(status, sys::ani_status_ANI_OK);
@@ -839,8 +843,8 @@ mod tests {
                 descriptor: "demo.Test",
                 scope: ClassBindingScope::Static,
             },
-            "m2",
-            ":",
+            "m2\0",
+            ":\0",
             ptr::null(),
         );
         assert_eq!(status, sys::ani_status_ANI_OK);
@@ -872,9 +876,9 @@ mod tests {
         clear_registrations();
 
         let target = BindingTarget::Module("demo.Entry");
-        let _ = queue_binding(target, "zeta", "I:I", 3usize as *const c_void);
-        let _ = queue_binding(target, "alpha", "J:J", 2usize as *const c_void);
-        let _ = queue_binding(target, "alpha", "I:I", std::ptr::dangling::<c_void>());
+        let _ = queue_binding(target, "zeta\0", "I:I\0", 3usize as *const c_void);
+        let _ = queue_binding(target, "alpha\0", "J:J\0", 2usize as *const c_void);
+        let _ = queue_binding(target, "alpha\0", "I:I\0", std::ptr::dangling::<c_void>());
 
         let pending = PENDING_BINDINGS.read().expect("read pending");
         let grouped = prepare_grouped_bindings(&pending, false).expect("grouping should succeed");
@@ -885,7 +889,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             order,
-            vec![("alpha", "I:I", 1), ("alpha", "J:J", 2), ("zeta", "I:I", 3)]
+            vec![
+                ("alpha\0", "I:I\0", 1),
+                ("alpha\0", "J:J\0", 2),
+                ("zeta\0", "I:I\0", 3)
+            ]
         );
     }
 
@@ -895,8 +903,8 @@ mod tests {
         clear_registrations();
 
         let target = BindingTarget::Namespace("demo.ns");
-        let _ = queue_binding(target, "dup", "I:I", std::ptr::dangling::<c_void>());
-        let _ = queue_binding(target, "dup", "I:I", 2usize as *const c_void);
+        let _ = queue_binding(target, "dup\0", "I:I\0", std::ptr::dangling::<c_void>());
+        let _ = queue_binding(target, "dup\0", "I:I\0", 2usize as *const c_void);
 
         let pending = PENDING_BINDINGS.read().expect("read pending");
         let status =
@@ -911,14 +919,14 @@ mod tests {
 
         let _ = queue_binding(
             BindingTarget::Module("demo.Entry"),
-            "same",
-            "I:I",
+            "same\0",
+            "I:I\0",
             std::ptr::dangling::<c_void>(),
         );
         let _ = queue_binding(
             BindingTarget::Namespace("demo.ns"),
-            "same",
-            "I:I",
+            "same\0",
+            "I:I\0",
             2usize as *const c_void,
         );
 

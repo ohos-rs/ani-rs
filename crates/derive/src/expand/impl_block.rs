@@ -465,7 +465,7 @@ fn generate_async_blocking_receiver_wrapper(
                 #writeback
                 result.map_err(|e| -> ani::error::DynAniError { Box::new(e) })
             };
-            let result = match ani::tokio::block_on_future_result(__ani_future) {
+            let result = match ani::tokio::block_on_future(__ani_future) {
                 Ok(result) => result,
                 Err(e) => {
                     unsafe { ani::error::throw_error_payload(__ani_env_outer.as_raw(), &e) };
@@ -543,9 +543,9 @@ fn generate_async_receiver_wrapper(
             #conversions
             #async_param_captures
 
-            match ani::async_runtime::spawn_future_result_factory(&__ani_env, move || async move {
+            match ani::async_runtime::spawn_local_future_result(&__ani_env, move || async move {
                 let __ani_attach = __ani_vm
-                    .attach_current_thread_scoped()
+                    .attach_current_thread()
                     .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
                 let __ani_env = __ani_attach.env();
                 let env = __ani_env.as_raw();

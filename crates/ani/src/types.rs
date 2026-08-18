@@ -5,6 +5,16 @@
 use crate::sys;
 use std::marker::PhantomData;
 
+/// Types wrapping a raw ANI reference handle.
+///
+/// Implemented by every local handle type (`AniObject`, `AniString`,
+/// `AniClass`, ...). Enables generic reference management such as
+/// [`crate::env::AutoLocal`].
+pub trait AsAniRef {
+    /// Returns the underlying raw ANI reference.
+    fn as_ani_ref(&self) -> sys::ani_ref;
+}
+
 /// Basic reference type macro
 macro_rules! define_ref_type {
     (
@@ -48,6 +58,14 @@ macro_rules! define_ref_type {
             #[inline]
             pub fn is_null(&self) -> bool {
                 self.raw.is_null()
+            }
+        }
+
+        impl<'local> $crate::types::AsAniRef for $name<'local> {
+            #[inline]
+            #[allow(clippy::unnecessary_cast)]
+            fn as_ani_ref(&self) -> $crate::sys::ani_ref {
+                self.raw as $crate::sys::ani_ref
             }
         }
     };
@@ -149,26 +167,6 @@ define_ref_type!(
 define_ref_type!(
     /// ANI array type (generic)
     AniArray, sys::ani_array
-);
-
-define_ref_type!(
-    /// ANI int array type
-    AniArrayInt, sys::ani_fixedarray_int
-);
-
-define_ref_type!(
-    /// ANI long array type
-    AniArrayLong, sys::ani_fixedarray_long
-);
-
-define_ref_type!(
-    /// ANI double array type
-    AniArrayDouble, sys::ani_fixedarray_double
-);
-
-define_ref_type!(
-    /// ANI reference array type
-    AniArrayRef, sys::ani_array
 );
 
 define_ref_type!(
@@ -289,28 +287,80 @@ define_opaque_type!(
 
 /// ANI global reference
 ///
-/// Global references are not limited by local reference frames and must be manually released
-#[repr(transparent)]
+/// Global references are not limited by local reference frames. References
+/// created through [`Env::create_global_ref`](crate::env::Env::create_global_ref)
+/// own their target and are deleted automatically on drop; use
+/// [`delete`](Self::delete) for explicit deletion or [`into_raw`](Self::into_raw)
+/// to give up ownership.
 #[derive(Debug)]
 pub struct GlobalRef {
     raw: sys::ani_ref,
+    vm: Option<crate::vm::AniVm>,
 }
 
 impl GlobalRef {
-    /// Create from raw pointer
+    /// Create an unmanaged handle from a raw pointer.
+    ///
+    /// The returned handle does **not** delete the underlying global
+    /// reference on drop; the caller stays responsible for its lifetime.
+    /// Use [`into_managed`](Self::into_managed) to hand ownership over.
     ///
     /// # Safety
     ///
-    /// Caller must ensure the pointer is valid
+    /// Caller must ensure the pointer is a valid ANI global reference.
     #[inline]
     pub unsafe fn from_raw(raw: sys::ani_ref) -> Self {
-        Self { raw }
+        Self { raw, vm: None }
+    }
+
+    /// Create a managed handle that deletes the global reference on drop.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the pointer is a valid ANI global reference owned
+    /// by `vm`, and that no other owner will delete it.
+    #[inline]
+    pub unsafe fn from_raw_managed(raw: sys::ani_ref, vm: crate::vm::AniVm) -> Self {
+        Self { raw, vm: Some(vm) }
+    }
+
+    /// Attach an owning VM so the global reference is deleted automatically
+    /// when this handle is dropped.
+    #[inline]
+    pub fn into_managed(mut self, vm: crate::vm::AniVm) -> Self {
+        self.vm = Some(vm);
+        self
     }
 
     /// Get raw pointer
     #[inline]
     pub fn as_raw(&self) -> sys::ani_ref {
         self.raw
+    }
+
+    /// Consume the handle and return the raw pointer without deleting the
+    /// global reference. The caller becomes responsible for deletion.
+    #[inline]
+    pub fn into_raw(self) -> sys::ani_ref {
+        let raw = self.raw;
+        std::mem::forget(self);
+        raw
+    }
+}
+
+impl Drop for GlobalRef {
+    fn drop(&mut self) {
+        let Some(vm) = self.vm.take() else {
+            return;
+        };
+        if self.raw.is_null() {
+            return;
+        }
+        let raw = self.raw;
+        // Reuse the current Env when already attached; otherwise attach for
+        // the duration of the deletion. Errors are ignored: drop must not
+        // panic, and a failed delete only leaks this single reference.
+        let _ = vm.with_attached(|env| env.delete_global_ref(unsafe { GlobalRef::from_raw(raw) }));
     }
 }
 
@@ -323,26 +373,68 @@ unsafe impl Sync for GlobalRef {}
 // ============================================================================
 
 /// ANI weak reference
-#[repr(transparent)]
+///
+/// References created through
+/// [`Env::create_weak_ref`](crate::env::Env::create_weak_ref) own their weak
+/// slot and delete it automatically on drop; use [`delete`](Self::delete) for
+/// explicit deletion or [`into_raw`](Self::into_raw) to give up ownership.
+#[derive(Debug)]
 pub struct WeakRef {
     raw: sys::ani_wref,
+    vm: Option<crate::vm::AniVm>,
 }
 
 impl WeakRef {
-    /// Create from raw pointer
+    /// Create an unmanaged handle from a raw pointer.
+    ///
+    /// The returned handle does **not** delete the underlying weak reference
+    /// on drop; the caller stays responsible for its lifetime.
     ///
     /// # Safety
     ///
-    /// Caller must ensure the pointer is valid
+    /// Caller must ensure the pointer is a valid ANI weak reference.
     #[inline]
     pub unsafe fn from_raw(raw: sys::ani_wref) -> Self {
-        Self { raw }
+        Self { raw, vm: None }
+    }
+
+    /// Create a managed handle that deletes the weak reference on drop.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the pointer is a valid ANI weak reference owned by
+    /// `vm`, and that no other owner will delete it.
+    #[inline]
+    pub unsafe fn from_raw_managed(raw: sys::ani_wref, vm: crate::vm::AniVm) -> Self {
+        Self { raw, vm: Some(vm) }
     }
 
     /// Get raw pointer
     #[inline]
     pub fn as_raw(&self) -> sys::ani_wref {
         self.raw
+    }
+
+    /// Consume the handle and return the raw pointer without deleting the
+    /// weak reference. The caller becomes responsible for deletion.
+    #[inline]
+    pub fn into_raw(self) -> sys::ani_wref {
+        let raw = self.raw;
+        std::mem::forget(self);
+        raw
+    }
+}
+
+impl Drop for WeakRef {
+    fn drop(&mut self) {
+        let Some(vm) = self.vm.take() else {
+            return;
+        };
+        if self.raw.is_null() {
+            return;
+        }
+        let raw = self.raw;
+        let _ = vm.with_attached(|env| env.delete_weak_ref(unsafe { WeakRef::from_raw(raw) }));
     }
 }
 
@@ -449,24 +541,34 @@ pub fn ani_value_ref(r: sys::ani_ref) -> sys::ani_value {
 
 /// Create ani_native_function struct
 ///
+/// Using [`CStr`](std::ffi::CStr) guarantees NUL termination at compile time;
+/// use `c"..."` literals:
+///
+/// ```rust,ignore
+/// let method = native_function(c"answer", c":i", native_answer as *const _);
+/// ```
+///
+/// For plain `&str` literals, use the [`ani_native_fn!`](crate::ani_native_fn)
+/// macro which appends the NUL terminator itself.
+///
 /// # Safety
 ///
-/// Caller must ensure name and signature are valid C strings,
-/// and pointer points to a function with the correct signature
+/// The function itself is safe, but callers must ensure `pointer` refers to a
+/// function whose ABI matches `signature` before registering it with ANI.
 #[inline]
 pub const fn native_function(
-    name: &'static str,
-    signature: &'static str,
+    name: &'static std::ffi::CStr,
+    signature: &'static std::ffi::CStr,
     pointer: *const std::ffi::c_void,
 ) -> sys::ani_native_function {
     sys::ani_native_function {
-        name: name.as_ptr() as *const std::ffi::c_char,
-        signature: signature.as_ptr() as *const std::ffi::c_char,
+        name: name.as_ptr(),
+        signature: signature.as_ptr(),
         pointer,
     }
 }
 
-/// Create ani_native_function with null terminator
+/// Create ani_native_function from `&str` literals, appending NUL terminators.
 #[macro_export]
 macro_rules! ani_native_fn {
     ($name:expr, $sig:expr, $fn:expr) => {

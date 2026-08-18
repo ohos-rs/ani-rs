@@ -1055,15 +1055,6 @@ pub fn start_async_runtime() {
     }
 }
 
-/// Starts the selected backend without submitting work.
-///
-/// Prefer [`start_async_runtime`], which matches the napi-rs name and is
-/// infallible. This alias remains for existing callers.
-pub fn activate_async_runtime() -> Result<()> {
-    start_async_runtime();
-    Ok(())
-}
-
 /// Shutdown the async runtime.
 ///
 /// When a custom backend has been registered, this calls its
@@ -1221,8 +1212,17 @@ impl PromiseSettlement {
     }
 }
 
-/// Executes an async factory on the selected runtime and returns its Promise.
-pub fn spawn_future_result_factory<'env, T, Build, F, E>(
+/// Executes an async factory with a domain error type on the selected
+/// runtime and returns its Promise.
+///
+/// The factory closure is `Send` and runs on the runtime thread, so the
+/// future it builds may be `!Send` (compare [`tokio::task::spawn_local`]'s
+/// "local" naming). For factories returning ani-rs' built-in
+/// [`crate::error::Result`], prefer [`spawn_local_future`], whose fixed
+/// error type lets `?`-style async blocks infer without annotations.
+///
+/// [`tokio::task::spawn_local`]: https://docs.rs/tokio/latest/tokio/task/fn.spawn_local.html
+pub fn spawn_local_future_result<'env, T, Build, F, E>(
     env: &Env<'env>,
     build: Build,
 ) -> Result<PromiseRaw<'env, T>>
@@ -1232,12 +1232,30 @@ where
     F: Future<Output = std::result::Result<T, E>> + 'static,
     E: AniErrorPayload,
 {
-    spawn_future_result_factory_with_handle(env, build).map(|(promise, _handle)| promise)
+    spawn_local_future_with_handle(env, build).map(|(promise, _handle)| promise)
+}
+
+/// Executes an async factory returning [`crate::error::Result`] on the
+/// selected runtime and returns its Promise.
+///
+/// The factory closure is `Send` and runs on the runtime thread, so the
+/// future it builds may be `!Send`. For domain error types implementing
+/// [`AniErrorPayload`], use [`spawn_local_future_result`].
+pub fn spawn_local_future<'env, T, Build, F>(
+    env: &Env<'env>,
+    build: Build,
+) -> Result<PromiseRaw<'env, T>>
+where
+    T: for<'vm> PromiseValue<'vm>,
+    Build: FnOnce() -> F + Send + 'static,
+    F: Future<Output = Result<T>> + 'static,
+{
+    spawn_local_future_result(env, build)
 }
 
 /// Executes an async factory and also returns a handle suitable for explicit
 /// cancellation or [`RuntimeTaskHandle::bridge_token`].
-pub fn spawn_future_result_factory_with_handle<'env, T, Build, F, E>(
+pub fn spawn_local_future_with_handle<'env, T, Build, F, E>(
     env: &Env<'env>,
     build: Build,
 ) -> Result<(PromiseRaw<'env, T>, RuntimeTaskHandle)>
@@ -1269,40 +1287,43 @@ where
     Ok((promise, handle))
 }
 
-/// Convenience form for ani-rs' built-in [`crate::error::Result`].
-pub fn spawn_future_factory<'env, T, Build, F>(
-    env: &Env<'env>,
-    build: Build,
-) -> Result<PromiseRaw<'env, T>>
-where
-    T: for<'vm> PromiseValue<'vm>,
-    Build: FnOnce() -> F + Send + 'static,
-    F: Future<Output = Result<T>> + 'static,
-{
-    spawn_future_result_factory(env, build)
-}
-
-/// Convenience helper for an already-built `Send` future.
+/// Spawns an already-built `Send` future with a domain error type on the
+/// selected runtime and returns its Promise.
+///
+/// For futures returning ani-rs' built-in [`crate::error::Result`], prefer
+/// [`spawn_future`], whose fixed error type lets `?`-style async blocks
+/// infer without annotations. For `!Send` futures use
+/// [`spawn_local_future_result`] with a factory closure.
 pub fn spawn_future_result<'env, T, F, E>(env: &Env<'env>, future: F) -> Result<PromiseRaw<'env, T>>
 where
     T: Send + 'static + for<'vm> PromiseValue<'vm>,
     F: Future<Output = std::result::Result<T, E>> + Send + 'static,
     E: AniErrorPayload,
 {
-    spawn_future_result_factory(env, move || future)
+    spawn_local_future_result(env, move || future)
 }
 
-/// Convenience helper for an already-built ani-rs result future.
+/// Spawns an already-built `Send` future returning [`crate::error::Result`]
+/// on the selected runtime and returns its Promise.
+///
+/// For domain error types implementing [`AniErrorPayload`], use
+/// [`spawn_future_result`]. For `!Send` futures use [`spawn_local_future`]
+/// with a factory closure.
 pub fn spawn_future<'env, T, F>(env: &Env<'env>, future: F) -> Result<PromiseRaw<'env, T>>
 where
     T: Send + 'static + for<'vm> PromiseValue<'vm>,
     F: Future<Output = Result<T>> + Send + 'static,
 {
-    spawn_future_factory(env, move || future)
+    spawn_local_future(env, move || future)
 }
 
-/// Drives a current-thread future through the selected backend.
-pub fn block_on_future_result<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
+/// Drives a current-thread future to completion through the selected backend.
+///
+/// The outer [`Result`] reports runtime infrastructure failures; the inner
+/// value is the future's own output. Unlike the Tokio compatibility helper
+/// [`crate::tokio::block_on`], this accepts `!Send` futures and follows the
+/// registered [`AsyncRuntime`] backend instead of always entering Tokio.
+pub fn block_on_future<F, T, E>(future: F) -> Result<std::result::Result<T, E>>
 where
     F: Future<Output = std::result::Result<T, E>>,
 {

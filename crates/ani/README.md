@@ -51,7 +51,7 @@ pub async fn load_value(key: String) -> Result<String> {
 }
 
 #[ani(async)]
-pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, ArktsRejection> {
+pub async fn join_name(promise: Promise<String>) -> std::result::Result<String, PromiseRejection> {
     promise.await
 }
 ```

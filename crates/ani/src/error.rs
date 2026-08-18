@@ -156,7 +156,9 @@ impl AniErrorValue {
         }
 
         match self {
-            Self::Null => Ok(unsafe { AniRef::from_raw(env.get_null_object()? as sys::ani_ref) }),
+            Self::Null => {
+                Ok(unsafe { AniRef::from_raw(env.get_null_object()?.into_raw() as sys::ani_ref) })
+            }
             Self::Bool(value) => (*value).box_value(env).map(object_ref),
             Self::Integer(value) => (*value).box_value(env).map(object_ref),
             Self::Number(value) => (*value).box_value(env).map(object_ref),
@@ -228,7 +230,7 @@ impl AniErrorValue {
             let object = unsafe { AniObject::from_raw(value.as_raw() as sys::ani_object) };
             let instance_of = |descriptor: &str| {
                 env.find_class(descriptor)
-                    .and_then(|class| env.object_instance_of(&object, &class))
+                    .and_then(|class| env.is_instance_of(&object, &class))
                     .unwrap_or(false)
             };
             if instance_of("std.core.String") {
@@ -780,7 +782,7 @@ impl fmt::Display for PreservedArktsError {
 
 impl AniErrorPayload for PreservedArktsError {
     fn ani_status(&self) -> &str {
-        "ArktsRejection"
+        "PromiseRejection"
     }
 
     fn ani_message(&self) -> &str {
@@ -1224,7 +1226,7 @@ fn create_error_payload(
     {
         let args = [
             crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
-            crate::types::ani_value_ref(undefined as sys::ani_ref),
+            crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
         ];
         if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
             set_error_metadata(env_ref, &err_obj, status, message, code);
@@ -1267,17 +1269,6 @@ impl BusinessError<Status> {
         BusinessError(Error::from_reason(reason))
     }
 }
-
-// Type aliases for backward compatibility
-/// Alias for BusinessError (deprecated, use BusinessError instead)
-#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
-pub type JsError<S = Status> = BusinessError<S>;
-/// Alias for BusinessError (deprecated, use BusinessError instead)
-#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
-pub type JsTypeError<S = Status> = BusinessError<S>;
-/// Alias for BusinessError (deprecated, use BusinessError instead)
-#[deprecated(since = "0.1.0", note = "Use BusinessError instead")]
-pub type JsRangeError<S = Status> = BusinessError<S>;
 
 // ============================================================================
 // Macros

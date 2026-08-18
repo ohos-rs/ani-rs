@@ -178,55 +178,22 @@ impl AniVm {
     /// Returns error when current thread is not attached.
     pub fn get_env_with_version<'vm>(&'vm self, version: u32) -> Result<Env<'vm>> {
         let mut env: *mut sys::ani_env = ptr::null_mut();
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.GetEnv.unwrap())(self.raw, version, &mut env)
-        };
+        let func = unsafe { (*(*self.raw)).GetEnv }
+            .ok_or_else(|| Error::new(Status::Error, "ANI function `GetEnv` is unavailable"))?;
+        let status = unsafe { func(self.raw, version, &mut env) };
         check_status(status)?;
         unsafe { Env::from_raw(env) }
     }
 
-    /// Attaches current thread and returns `Env` using default version (`ANI_VERSION_1`).
-    pub fn attach_current_thread<'vm>(&'vm self) -> Result<Env<'vm>> {
-        self.attach_current_thread_with_version(sys::ANI_VERSION_1)
-    }
-
-    /// Attaches current thread permanently and returns `Env`.
+    /// Attaches current thread and returns an [`AttachGuard`] using the
+    /// default version (`ANI_VERSION_1`).
     ///
-    /// Permanent attachment means thread detachment must be handled manually via
-    /// [`detach_current_thread`](Self::detach_current_thread).
-    pub fn attach_current_thread_permanently<'vm>(&'vm self) -> Result<Env<'vm>> {
-        self.attach_current_thread()
-    }
-
-    /// Attaches current thread permanently with explicit version.
-    ///
-    /// Permanent attachment means thread detachment must be handled manually via
-    /// [`detach_current_thread`](Self::detach_current_thread).
-    pub fn attach_current_thread_permanently_with_version<'vm>(
-        &'vm self,
-        version: u32,
-    ) -> Result<Env<'vm>> {
-        self.attach_current_thread_with_version(version)
-    }
-
-    /// Attaches current thread permanently with options and explicit version.
-    ///
-    /// Permanent attachment means thread detachment must be handled manually via
-    /// [`detach_current_thread`](Self::detach_current_thread).
-    pub fn attach_current_thread_permanently_with_options<'vm>(
-        &'vm self,
-        options: &VmOptions,
-        version: u32,
-    ) -> Result<Env<'vm>> {
-        self.attach_current_thread_with_options(options, version)
-    }
-
-    /// Attaches current thread and returns an [`AttachGuard`].
-    ///
-    /// The guard automatically detaches the thread when dropped.
-    pub fn attach_current_thread_scoped<'vm>(&'vm self) -> Result<AttachGuard<'vm>> {
-        let env = self.attach_current_thread()?;
+    /// The guard automatically detaches the thread when dropped. This mirrors
+    /// the jni-rs convention where scoped attachment is the safe default. For
+    /// attachment that outlives the current scope, use
+    /// [`attach_current_thread_permanently`](Self::attach_current_thread_permanently).
+    pub fn attach_current_thread<'vm>(&'vm self) -> Result<AttachGuard<'vm>> {
+        let env = self.attach_raw(None, sys::ANI_VERSION_1)?;
         Ok(AttachGuard {
             vm: self,
             env: Some(env),
@@ -237,17 +204,40 @@ impl AniVm {
     /// Attaches current thread with options and returns an [`AttachGuard`].
     ///
     /// The guard automatically detaches the thread when dropped.
-    pub fn attach_current_thread_scoped_with_options<'vm>(
+    pub fn attach_current_thread_with_options<'vm>(
         &'vm self,
         options: &VmOptions,
         version: u32,
     ) -> Result<AttachGuard<'vm>> {
-        let env = self.attach_current_thread_with_options(options, version)?;
+        let env = self.attach_raw(Some(options), version)?;
         Ok(AttachGuard {
             vm: self,
             env: Some(env),
             detach_on_drop: true,
         })
+    }
+
+    /// Attaches current thread permanently and returns `Env` using the
+    /// default version (`ANI_VERSION_1`).
+    ///
+    /// The thread stays attached until it is explicitly detached via
+    /// [`detach_current_thread`](Self::detach_current_thread); no automatic
+    /// detachment happens.
+    pub fn attach_current_thread_permanently<'vm>(&'vm self) -> Result<Env<'vm>> {
+        self.attach_raw(None, sys::ANI_VERSION_1)
+    }
+
+    /// Attaches current thread permanently with options and explicit version.
+    ///
+    /// The thread stays attached until it is explicitly detached via
+    /// [`detach_current_thread`](Self::detach_current_thread); no automatic
+    /// detachment happens.
+    pub fn attach_current_thread_permanently_with_options<'vm>(
+        &'vm self,
+        options: &VmOptions,
+        version: u32,
+    ) -> Result<Env<'vm>> {
+        self.attach_raw(Some(options), version)
     }
 
     /// Executes closure with an attached environment.
@@ -260,7 +250,7 @@ impl AniVm {
         match self.get_env() {
             Ok(env) => f(&env),
             Err(_) => {
-                let guard = self.attach_current_thread_scoped()?;
+                let guard = self.attach_current_thread()?;
                 f(guard.env())
             }
         }
@@ -279,45 +269,38 @@ impl AniVm {
         match self.get_env_with_version(version) {
             Ok(env) => f(&env),
             Err(_) => {
-                let guard = self.attach_current_thread_scoped_with_options(options, version)?;
+                let guard = self.attach_current_thread_with_options(options, version)?;
                 f(guard.env())
             }
         }
     }
 
-    /// Attaches current thread and returns `Env` with explicit version.
-    pub fn attach_current_thread_with_version<'vm>(&'vm self, version: u32) -> Result<Env<'vm>> {
+    fn attach_raw<'vm>(&'vm self, options: Option<&VmOptions>, version: u32) -> Result<Env<'vm>> {
         let mut env: *mut sys::ani_env = ptr::null_mut();
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.AttachCurrentThread.unwrap())(self.raw, ptr::null(), version, &mut env)
-        };
-        check_status(status)?;
-        unsafe { Env::from_raw(env) }
-    }
-
-    /// Attaches current thread with options and explicit version.
-    pub fn attach_current_thread_with_options<'vm>(
-        &'vm self,
-        options: &VmOptions,
-        version: u32,
-    ) -> Result<Env<'vm>> {
-        let mut env: *mut sys::ani_env = ptr::null_mut();
-        let raw_options = options.as_ani_options();
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.AttachCurrentThread.unwrap())(self.raw, &raw_options, version, &mut env)
-        };
+        let raw_options = options.map(VmOptions::as_ani_options);
+        let options_ptr = raw_options
+            .as_ref()
+            .map_or(ptr::null(), |options| options as *const sys::ani_options);
+        let func = unsafe { (*(*self.raw)).AttachCurrentThread }.ok_or_else(|| {
+            Error::new(
+                Status::Error,
+                "ANI function `AttachCurrentThread` is unavailable",
+            )
+        })?;
+        let status = unsafe { func(self.raw, options_ptr, version, &mut env) };
         check_status(status)?;
         unsafe { Env::from_raw(env) }
     }
 
     /// Detaches current thread from VM.
     pub fn detach_current_thread(&self) -> Result<()> {
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.DetachCurrentThread.unwrap())(self.raw)
-        };
+        let func = unsafe { (*(*self.raw)).DetachCurrentThread }.ok_or_else(|| {
+            Error::new(
+                Status::Error,
+                "ANI function `DetachCurrentThread` is unavailable",
+            )
+        })?;
+        let status = unsafe { func(self.raw) };
         check_status(status)
     }
 
@@ -328,10 +311,9 @@ impl AniVm {
     /// VM destruction is a global operation and must only be done when all
     /// attached threads and VM resources are in a safe state.
     pub unsafe fn destroy(self) -> Result<()> {
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.DestroyVM.unwrap())(self.raw)
-        };
+        let func = unsafe { (*(*self.raw)).DestroyVM }
+            .ok_or_else(|| Error::new(Status::Error, "ANI function `DestroyVM` is unavailable"))?;
+        let status = unsafe { func(self.raw) };
         check_status(status)
     }
 }

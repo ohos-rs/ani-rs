@@ -55,7 +55,7 @@ macro_rules! impl_option_for_boxed_primitive {
                         let boxed = value.box_value(env)?;
                         Ok(boxed.into_raw())
                     }
-                    None => env.get_null_object(),
+                    None => Ok(env.get_null_object()?.into_raw()),
                 }
             }
         }
@@ -98,7 +98,7 @@ impl<'env> ToAni<'env> for Option<String> {
                 let ani_str = env.create_string(&s)?;
                 Ok(ani_str.into_raw() as sys::ani_object)
             }
-            None => env.get_null_object(),
+            None => Ok(env.get_null_object()?.into_raw()),
         }
     }
 }
@@ -141,7 +141,7 @@ where
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         match self {
             Some(value) => value.to_ani(env),
-            None => env.get_null_object(),
+            None => Ok(env.get_null_object()?.into_raw()),
         }
     }
 }
@@ -186,57 +186,6 @@ impl OptionHelper {
     pub fn option_to_nullable<T>(opt: Option<*mut T>) -> *mut T {
         opt.unwrap_or(std::ptr::null_mut())
     }
-}
-
-// ============================================================================
-// Macro for extending Option support to custom types
-// ============================================================================
-
-/// Macro to implement `Option<T>` support for reference types
-///
-/// Use this macro to add Option support for custom types that implement
-/// ToAni and FromAni with reference-based outputs.
-///
-/// # Example
-///
-/// ```ignore
-/// impl_option_for_ref_type!(MyCustomType, sys::ani_object);
-/// ```
-#[macro_export]
-macro_rules! impl_option_for_ref_type {
-    ($ty:ty, $ani_ty:ty) => {
-        impl<'env> $crate::bindgen_runtime::ToAni<'env> for Option<$ty>
-        where
-            $ty: $crate::bindgen_runtime::ToAni<'env, Output = $ani_ty>,
-        {
-            type Output = $ani_ty;
-
-            fn to_ani(self, env: &$crate::env::Env<'env>) -> $crate::error::Result<Self::Output> {
-                match self {
-                    Some(value) => value.to_ani(env),
-                    None => Ok(std::ptr::null_mut()),
-                }
-            }
-        }
-
-        impl<'env> $crate::bindgen_runtime::FromAni<'env> for Option<$ty>
-        where
-            $ty: $crate::bindgen_runtime::FromAni<'env, Input = $ani_ty>,
-        {
-            type Input = $ani_ty;
-
-            unsafe fn from_ani(
-                env: &$crate::env::Env<'env>,
-                value: Self::Input,
-            ) -> $crate::error::Result<Self> {
-                if value.is_null() {
-                    Ok(None)
-                } else {
-                    Ok(Some(<$ty>::from_ani(env, value)?))
-                }
-            }
-        }
-    };
 }
 
 #[cfg(test)]

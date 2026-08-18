@@ -29,10 +29,12 @@ mod arraybuffer;
 mod bigint;
 mod boxed;
 mod collections;
+mod date;
 mod either;
 mod enum_item;
 mod fixed_array;
 mod function;
+mod iterator;
 #[cfg(feature = "serde-json")]
 mod json;
 mod null;
@@ -57,10 +59,12 @@ pub use arraybuffer::*;
 pub use bigint::*;
 pub use boxed::*;
 pub use collections::*;
+pub use date::*;
 pub use either::*;
 pub use enum_item::*;
 pub use fixed_array::*;
 pub use function::*;
+pub use iterator::*;
 #[cfg(feature = "serde-json")]
 pub use json::*;
 pub use null::*;

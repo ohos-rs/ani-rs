@@ -169,7 +169,6 @@ pub enum RuntimeHandleType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayHandleType {
     Array,
-    ArrayRef,
     FixedArray,
     FixedArrayRef,
 }
@@ -185,6 +184,12 @@ pub enum AniType {
     String(StringType),
     /// Arbitrary-precision ArkTS bigint.
     BigInt,
+    /// ArkTS `escompat.Date` (Rust `std::time::SystemTime` or
+    /// `chrono::DateTime<Utc>`).
+    Date,
+    /// ArkTS synchronous iterator protocol (`AniIterator<T>`), rendered as
+    /// `Iterable<T>` in ETS.
+    Iterator(Option<Box<AniType>>),
     /// Unit type ()
     Unit,
     /// Null literal type
@@ -585,6 +590,19 @@ impl AniType {
             return AniType::BigInt;
         }
 
+        // std::time::SystemTime and chrono::DateTime<Utc> both map to
+        // escompat.Date via millisecond timestamps.
+        if ident == "SystemTime" || ident == "DateTime" {
+            return AniType::Date;
+        }
+
+        if ident == "AniIterator" {
+            return AniType::Iterator(
+                extract_first_generic_type(&segment.arguments)
+                    .map(|t| Box::new(AniType::from_syn_type_with_type_params(&t, type_params))),
+            );
+        }
+
         if ident == "TupleValue" || ident == "AniTupleValue" {
             return AniType::TupleValue;
         }
@@ -861,6 +879,8 @@ impl AniType {
             AniType::Primitive(p) => p.to_ani_c_type(),
             AniType::String(_) => quote! { ani::sys::ani_string },
             AniType::BigInt => quote! { ani::sys::ani_object },
+            AniType::Date => quote! { ani::sys::ani_object },
+            AniType::Iterator(_) => quote! { ani::sys::ani_object },
             AniType::Unit => quote! { () },
             AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
@@ -897,7 +917,7 @@ impl AniType {
 impl ArrayHandleType {
     fn to_ani_c_type(self) -> TokenStream {
         match self {
-            Self::Array | Self::ArrayRef => quote! { ani::sys::ani_array },
+            Self::Array => quote! { ani::sys::ani_array },
             Self::FixedArray => quote! { ani::sys::ani_fixedarray },
             Self::FixedArrayRef => quote! { ani::sys::ani_fixedarray_ref },
         }
@@ -1046,6 +1066,8 @@ impl AniType {
             AniType::Primitive(p) => p.to_signature(),
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::BigInt => "Lstd/core/BigInt;".to_string(),
+            AniType::Date => "Lescompat/Date;".to_string(),
+            AniType::Iterator(_) => "Lstd/core/Object;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -1114,6 +1136,8 @@ impl AniType {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
             AniType::String(_) => "C{std.core.String}".to_string(),
             AniType::BigInt => "C{std.core.BigInt}".to_string(),
+            AniType::Date => "C{escompat.Date}".to_string(),
+            AniType::Iterator(_) => "C{std.core.Object}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
@@ -1296,7 +1320,6 @@ fn parse_primitive(ident: &str) -> Option<PrimitiveType> {
 fn parse_array_handle_type(ident: &str) -> Option<ArrayHandleType> {
     match ident {
         "AniArray" => Some(ArrayHandleType::Array),
-        "AniArrayRef" => Some(ArrayHandleType::ArrayRef),
         "AniFixedArray" => Some(ArrayHandleType::FixedArray),
         "AniFixedArrayRef" => Some(ArrayHandleType::FixedArrayRef),
         _ => None,
@@ -1309,10 +1332,10 @@ fn parse_fixed_array_type(ident: &str) -> Option<PrimitiveType> {
         "FixedByteArray" | "AniFixedArrayByte" => Some(PrimitiveType::I8),
         "FixedShortArray" | "AniFixedArrayShort" => Some(PrimitiveType::I16),
         "FixedCharArray" | "AniFixedArrayChar" => Some(PrimitiveType::U16),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some(PrimitiveType::I32),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some(PrimitiveType::I64),
+        "FixedIntArray" | "AniFixedArrayInt" => Some(PrimitiveType::I32),
+        "FixedLongArray" | "AniFixedArrayLong" => Some(PrimitiveType::I64),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some(PrimitiveType::F32),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some(PrimitiveType::F64),
+        "FixedDoubleArray" | "AniFixedArrayDouble" => Some(PrimitiveType::F64),
         _ => None,
     }
 }
@@ -1641,17 +1664,15 @@ fn known_ani_runtime_signature(ident: &str) -> Option<&'static str> {
     match ident {
         "AniString" => Some("Lstd/core/String;"),
         "AniArrayBuffer" => Some("Lstd/core/ArrayBuffer;"),
-        "AniArray" | "AniArrayRef" | "AniFixedArray" | "AniFixedArrayRef" => {
-            Some("A{C{std.core.Object}}")
-        }
+        "AniArray" | "AniFixedArray" | "AniFixedArrayRef" => Some("A{C{std.core.Object}}"),
         "FixedBooleanArray" | "AniFixedArrayBoolean" => Some("A{z}"),
         "FixedByteArray" | "AniFixedArrayByte" => Some("A{b}"),
         "FixedShortArray" | "AniFixedArrayShort" => Some("A{s}"),
         "FixedCharArray" | "AniFixedArrayChar" => Some("A{c}"),
-        "FixedIntArray" | "AniArrayInt" | "AniFixedArrayInt" => Some("A{i}"),
-        "FixedLongArray" | "AniArrayLong" | "AniFixedArrayLong" => Some("A{l}"),
+        "FixedIntArray" | "AniFixedArrayInt" => Some("A{i}"),
+        "FixedLongArray" | "AniFixedArrayLong" => Some("A{l}"),
         "FixedFloatArray" | "AniFixedArrayFloat" => Some("A{f}"),
-        "FixedDoubleArray" | "AniArrayDouble" | "AniFixedArrayDouble" => Some("A{d}"),
+        "FixedDoubleArray" | "AniFixedArrayDouble" => Some("A{d}"),
         "AniFunction" | "AniFnObject" => Some("Lstd/core/Function;"),
         "Null" => Some("C{std.core.Null}"),
         "Undefined" => Some("U"),
@@ -2132,6 +2153,20 @@ mod tests {
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/BigInt;");
 
+        let ty: Type = syn::parse_quote!(std::time::SystemTime);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Date));
+        assert_eq!(ani_type.to_signature(), "Lescompat/Date;");
+
+        let ty: Type = syn::parse_quote!(chrono::DateTime<chrono::Utc>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Date));
+
+        let ty: Type = syn::parse_quote!(ani::conversions::AniIterator<'_, String>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Iterator(Some(_))));
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
@@ -2531,10 +2566,6 @@ mod tests {
         assert!(matches!(
             AniType::from_syn_type(&syn::parse_quote!(AniArray<'_>)),
             AniType::ArrayHandle(ArrayHandleType::Array)
-        ));
-        assert!(matches!(
-            AniType::from_syn_type(&syn::parse_quote!(AniArrayRef<'_>)),
-            AniType::ArrayHandle(ArrayHandleType::ArrayRef)
         ));
         assert!(matches!(
             AniType::from_syn_type(&syn::parse_quote!(AniFixedArray<'_>)),

@@ -206,6 +206,8 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
         ani_type,
         AniType::AniObject
             | AniType::BigInt
+            | AniType::Date
+            | AniType::Iterator(_)
             | AniType::GlobalRef
             | AniType::WeakRef
             | AniType::RuntimeHandle(_)
@@ -625,7 +627,6 @@ fn is_known_runtime_wrapper_type(ident: &str) -> bool {
             | "AniEnumItem"
             | "AniTupleValue"
             | "AniArray"
-            | "AniArrayRef"
             | "AniFixedArray"
             | "AniFixedArrayRef"
             | "FixedBooleanArray"
@@ -637,15 +638,12 @@ fn is_known_runtime_wrapper_type(ident: &str) -> bool {
             | "FixedCharArray"
             | "AniFixedArrayChar"
             | "FixedIntArray"
-            | "AniArrayInt"
             | "AniFixedArrayInt"
             | "FixedLongArray"
-            | "AniArrayLong"
             | "AniFixedArrayLong"
             | "FixedFloatArray"
             | "AniFixedArrayFloat"
             | "FixedDoubleArray"
-            | "AniArrayDouble"
             | "AniFixedArrayDouble"
             | "AniMethod"
             | "AniStaticMethod"
@@ -701,6 +699,8 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
         ani_type,
         AniType::String(StringType::Str)
             | AniType::BigInt
+            | AniType::Date
+            | AniType::Iterator(_)
             | AniType::AniObject
             | AniType::RuntimeHandle(_)
             | AniType::AnyValue

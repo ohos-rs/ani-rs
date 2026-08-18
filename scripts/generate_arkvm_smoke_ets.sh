@@ -470,6 +470,23 @@ let maxU128 = new BigInt("340282366920938463463374607431768211455");
 __assert_eq_string("u128_max_lossless", __ANI_GENERATED__.u128_identity(maxU128).toString(), maxU128.toString());
 ETS
       ;;
+    ani-example-date)
+      cat <<'ETS'
+let epochMillis: long = 1700000000123;
+let sample = new Date(epochMillis);
+__assert_eq_double("date_to_millis", __ANI_GENERATED__.date_to_millis(sample), 1700000000123.0);
+__assert_eq_long("date_identity", __ANI_GENERATED__.date_identity(sample).getTime(), epochMillis);
+__assert_eq_long("date_from_millis", __ANI_GENERATED__.date_from_millis(1700000000123.0).getTime(), epochMillis);
+__assert_eq_long("date_add_days", __ANI_GENERATED__.date_add_days(sample, 2).getTime(), epochMillis + 172800000);
+__assert_eq_long("date_add_days_negative", __ANI_GENERATED__.date_add_days(sample, -1).getTime(), epochMillis - 86400000);
+__assert_true("date_is_before", __ANI_GENERATED__.date_is_before(sample, new Date(epochMillis + 1)));
+__assert_true("date_is_not_before", !__ANI_GENERATED__.date_is_before(sample, sample));
+__assert_eq_double("date_pre_epoch", __ANI_GENERATED__.date_to_millis(new Date(-86400000)), -86400000.0);
+__assert_throws("date_from_millis_nan", (): void => {
+  __ANI_GENERATED__.date_from_millis(Double.NaN);
+});
+ETS
+      ;;
     ani-example-derive-shapes)
       cat <<'ETS'
 let deriveBox = __ANI_GENERATED__.make_derive_box("box");
@@ -839,6 +856,34 @@ __ANI_GENERATED__.reset_init_state();
 let after = __ANI_GENERATED__.init_state();
 __assert_eq_int("init_state_reset_clears_runtime_flags", after, 0);
 __assert_eq_int("finalizer_not_run_before_vm_destroy", __ANI_GENERATED__.finalize_count(), 0);
+ETS
+      ;;
+    ani-example-iterator)
+      cat <<'ETS'
+let iterWords: Array<string> = ["a", "b", "c"];
+__assert_eq_string("iter_join_strings_iterable", __ANI_GENERATED__.iter_join_strings(iterWords), "a,b,c");
+__assert_eq_string("iter_join_strings_iterator", __ANI_GENERATED__.iter_join_strings(iterWords.values()), "a,b,c");
+let iterWordSet = new Set<string>(0);
+iterWordSet.add("x");
+iterWordSet.add("y");
+__assert_eq_string("iter_join_strings_set", __ANI_GENERATED__.iter_join_strings(iterWordSet), "x,y");
+let iterNums: Array<double> = [1.5, 2.5, 3.0];
+__assert_eq_double("iter_sum_numbers", __ANI_GENERATED__.iter_sum_numbers(iterNums), 7.0);
+let iterTaken = __ANI_GENERATED__.iter_take_strings(iterWords, 2);
+__assert_eq_int("iter_take_strings_len", iterTaken.length as int, 2);
+__assert_eq_string("iter_take_strings_first", iterTaken[0], "a");
+__assert_eq_int("iter_count_array", __ANI_GENERATED__.iter_count(iterWords), 3);
+
+let countdown = new CountdownIterator(3);
+let countdownFirst = countdown.next();
+__assert_true("countdown_first_not_done", !countdownFirst.done);
+__assert_eq_int("countdown_first_value", countdownFirst.value as int, 3);
+let countdownTotal: int = 0;
+for (const item of new CountdownIterator(3)) {
+  countdownTotal += item;
+}
+__assert_eq_int("countdown_for_of_total", countdownTotal, 6);
+__assert_eq_int("iter_count_countdown_roundtrip", __ANI_GENERATED__.iter_count(new CountdownIterator(4) as Iterable<Object>), 4);
 ETS
       ;;
     ani-example-interface)

@@ -58,7 +58,7 @@ impl<'env> FromAniObject<'env> for Null {
 
 impl<'env> ToAniObject<'env> for Null {
     fn to_ani_object(self, env: &Env<'env>) -> Result<sys::ani_object> {
-        env.get_null_object()
+        Ok(env.get_null_object()?.into_raw())
     }
 }
 

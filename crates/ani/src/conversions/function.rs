@@ -1157,28 +1157,18 @@ where
         self.vm.is_some()
     }
 
-    /// Borrow the function back as a scoped Function
+    /// Materialize the function as a scoped [`Function`] local to `env`.
     ///
     /// This is useful when you need to pass the function to an API that
     /// expects a scoped `Function` type.
-    ///
-    /// # Arguments
-    ///
-    /// * `_env` - The current ANI environment (used for lifetime binding)
-    ///
-    /// # Returns
-    ///
-    /// A `Function` that can be used in the current scope.
-    pub fn borrow_back<'scope>(&self, env: &Env<'scope>) -> Function<'scope, Args, Return> {
-        let local = env
-            .local_ref_from_global_ref(self.as_global_ref())
-            .expect("FunctionRef::borrow_back failed to materialize local function");
-        Function {
+    pub fn to_local<'scope>(&self, env: &Env<'scope>) -> Result<Function<'scope, Args, Return>> {
+        let local = env.local_ref_from_global_ref(self.as_global_ref())?;
+        Ok(Function {
             value: local.as_raw() as sys::ani_fn_object,
             _args: PhantomData,
             _return: PhantomData,
             _scope: PhantomData,
-        }
+        })
     }
 
     /// Clone this handle by creating a second global reference.

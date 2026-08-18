@@ -29,6 +29,19 @@ pub fn object_is_valid(
 }
 ```
 
+### `AutoLocal`：单个引用的 RAII 释放
+
+在同一 native 调用内批量创建临时引用（例如循环）会占满 local reference 槽位。`env.create_local_scope(n)` 以作用域为单位整体释放；`env.auto_local(handle)` 则精确释放单个引用（对应 jni-rs 的 `AutoLocal`），guard 在 drop 时调用 `Reference_Delete`：
+
+```rust
+for name in huge_name_list {
+    let s = env.auto_local(env.create_string(&name)?);
+    consume(&*s)?;
+} // 每次迭代结束即释放该 string 引用
+```
+
+`AutoLocal::forget()` 可取回句柄并放弃自动释放。
+
 ## `Ref<T>`
 
 `Ref<T>` 是带类型的 owning global reference，适合跨 native 调用保存对象：
@@ -61,7 +74,7 @@ pub fn use_object(env: &Env<'_>) -> Result<bool> {
         return Ok(false);
     };
 
-    let object = reference.borrow(env);
+    let object = reference.to_object(env)?;
     Ok(!object.is_null())
 }
 ```

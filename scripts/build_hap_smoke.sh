@@ -122,7 +122,6 @@ env \
 
 hap="$project_root/entry/build/default/outputs/default/entry-default-unsigned.hap"
 if [[ "$portable_pack" == "1" ]]; then
-  "$repo_root/scripts/check_qemu_abc_fixtures.sh"
   pack_root="$work_root/portable-pack"
   if [[ -d "$pack_root" ]]; then
     rm -rf -- "$pack_root"

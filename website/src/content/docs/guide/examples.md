@@ -55,6 +55,8 @@ description: 按使用场景查找可以直接运行和修改的 ani-rs 示例�
 | `map` | `BTreeMap<String, V>` / Map |
 | `set` | `HashSet<T>` / Set |
 | `bigint` | 大整数转换 |
+| `date` | `SystemTime` / `Date` 毫秒时间戳转换 |
+| `iterator` | `AniIterator<T>` 消费与 `*Iterator` class 生产 |
 
 ## 函数与运行时调用
 

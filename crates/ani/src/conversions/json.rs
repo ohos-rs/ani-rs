@@ -487,7 +487,7 @@ fn object_ref<'env>(object: AniObject<'env>) -> AniRef<'env> {
 fn json_to_ref<'env>(env: &Env<'env>, value: serde_json::Value) -> Result<AniRef<'env>> {
     match value {
         serde_json::Value::Null => {
-            Ok(unsafe { AniRef::from_raw(env.get_null_object()? as sys::ani_ref) })
+            Ok(unsafe { AniRef::from_raw(env.get_null_object()?.into_raw() as sys::ani_ref) })
         }
         serde_json::Value::Bool(value) => value.box_value(env).map(object_ref),
         serde_json::Value::Number(value) => {
@@ -537,7 +537,7 @@ fn json_to_ref<'env>(env: &Env<'env>, value: serde_json::Value) -> Result<AniRef
 
 fn instance_of(env: &Env<'_>, object: &AniObject<'_>, class: &str) -> Result<bool> {
     env.find_class(class)
-        .and_then(|class| env.object_instance_of(object, &class))
+        .and_then(|class| env.is_instance_of(object, &class))
 }
 
 unsafe fn json_from_ref<'env>(env: &Env<'env>, value: AniRef<'env>) -> Result<serde_json::Value> {

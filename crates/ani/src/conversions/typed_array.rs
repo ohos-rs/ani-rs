@@ -445,7 +445,7 @@ fn validate_typed_array<'env, T: TypedArrayElement>(
     }
     let object = unsafe { AniObject::from_raw(value) };
     let class = env.find_class(T::CLASS_NAME)?;
-    if !env.object_instance_of(&object, &class)? {
+    if !env.is_instance_of(&object, &class)? {
         return Err(Error::new(
             Status::InvalidType,
             format!("expected {}", T::CLASS_NAME),
@@ -701,7 +701,7 @@ impl<'env> FromAni<'env> for DataView {
         }
         let object = unsafe { AniObject::from_raw(value) };
         let class = env.find_class("std.core.DataView")?;
-        if !env.object_instance_of(&object, &class)? {
+        if !env.is_instance_of(&object, &class)? {
             return Err(Error::new(
                 Status::InvalidType,
                 "expected std.core.DataView",

@@ -143,36 +143,39 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 
 ## Type Mappings
 
-| Rust Type | ANI Signature | ArkTS Type |
-|-----------|---------------|------------|
-| `bool` | `Z` | `boolean` |
-| `i8` | `B` | `byte` |
-| `i16` | `S` | `short` |
-| `i32` | `I` | `int` |
-| `i64` | `J` | `long` |
-| `f32` | `F` | `float` |
-| `f64` | `D` | `double` |
-| `String` | `Lstd/core/String;` | `String` |
-| `Vec<T>` | `[T` | `Array<T>` |
-| `Option<i32>` | `Lstd/core/Int;` | `Int \| null` |
+| Rust Type     | ANI Signature       | ArkTS Type    |
+| ------------- | ------------------- | ------------- |
+| `bool`        | `Z`                 | `boolean`     |
+| `i8`          | `B`                 | `byte`        |
+| `i16`         | `S`                 | `short`       |
+| `i32`         | `I`                 | `int`         |
+| `i64`         | `J`                 | `long`        |
+| `f32`         | `F`                 | `float`       |
+| `f64`         | `D`                 | `double`      |
+| `String`      | `Lstd/core/String;` | `String`      |
+| `Vec<T>`      | `[T`                | `Array<T>`    |
+| `Option<i32>` | `Lstd/core/Int;`    | `Int \| null` |
+| `SystemTime`  | `Lescompat/Date;`   | `Date`        |
+| `AniIterator<T>` | `Lstd/core/Object;` | `Iterable<T>` |
 
 ## Workspace
 
-| Crate | Description |
-|-------|-------------|
-| `ani-sys` | Raw FFI bindings to the ANI C API |
-| `ani` | Safe runtime wrappers, conversions, Promise bridge, refs, and registration |
+| Crate        | Description                                                                       |
+| ------------ | --------------------------------------------------------------------------------- |
+| `ani-sys`    | Raw FFI bindings to the ANI C API                                                 |
+| `ani`        | Safe runtime wrappers, conversions, Promise bridge, refs, and registration        |
 | `ani-derive` | Procedural macros for `#[ani]`, `#[ani(init)]`, `#[ani(async)]`, and ETS emission |
 
 ## Examples
 
-The [`examples`](examples/) workspace currently contains 52 runnable cases covering:
+The [`examples`](examples/) workspace currently contains 54 runnable cases covering:
 
 - module / namespace / class bindings
 - overload, constructor, getter, setter, and `impl` receiver methods
 - object/class derives and ETS public type generation
 - async `Promise<T>` export and manual resolver/deferred flows
 - refs, `GlobalRef`, `WeakRef`, VM/runtime handles, and ArkVM smoke coverage
+- `Date` conversion and the synchronous iterator protocol in both directions
 
 Start with:
 
@@ -194,6 +197,7 @@ Repository docs ship as an Astro + Starlight package in the pnpm workspace at [`
 - [Async and Promise](website/src/content/docs/guide/async.md)
 - [Error handling](website/src/content/docs/guide/errors.md)
 - [References and lifetimes](website/src/content/docs/guide/references.md)
+- [Interop limits](website/src/content/docs/guide/interop-limits.md)
 - [Testing and debugging](website/src/content/docs/guide/testing.md)
 - [`#[ani]` attributes](website/src/content/docs/reference/macros.md)
 
@@ -208,7 +212,7 @@ pnpm docs:build
 
 ## Requirements
 
-- Rust 1.85+
+- Rust 1.88+
 - HarmonyOS SDK (for device/emulator testing)
 - ArkTS 1.2 compatible runtime
 

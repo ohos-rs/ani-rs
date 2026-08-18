@@ -52,6 +52,19 @@ fn decrement_tracked_reference(counter: &AtomicUsize) {
 // All ANI env API calls go through these macros. Usage: pass env (or self) as first arg.
 // Example: ani_call!(env, ThrowError, error.as_raw()), ani_call_ret!(self, GetVersion, u32, 0)
 
+/// Internal: build the error returned when an ANI function-table entry is
+/// missing (instead of panicking on `unwrap`).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __ani_missing_fn_error {
+    ($func:ident) => {
+        $crate::error::Error::new(
+            $crate::error::Status::Error,
+            concat!("ANI function `", stringify!($func), "` is unavailable"),
+        )
+    };
+}
+
 /// Call ANI API function without return value.
 /// Usage: `ani_call!($env, FunctionName, arg1, arg2, ...)`
 #[macro_export]
@@ -61,8 +74,10 @@ macro_rules! ani_call {
         #[allow(clippy::macro_metavars_in_unsafe)]
         unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw $(, $arg)*);
-            $crate::error::check_status(status)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw $(, $arg)*)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         }
     }};
 }
@@ -75,12 +90,14 @@ macro_rules! ani_call_ret {
         let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         #[allow(clippy::macro_metavars_in_unsafe)]
-        unsafe {
+        let status = unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result);
-            $crate::error::check_status(status)?;
-        }
-        Result::<$ret_ty>::Ok(result)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw $(, $arg)*, &mut result)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| result)
     }};
 }
 
@@ -93,12 +110,16 @@ macro_rules! ani_call_2ret {
         let mut result1: $ret1_ty = $default1;
         let mut result2: $ret2_ty = $default2;
         #[allow(clippy::macro_metavars_in_unsafe)]
-        unsafe {
+        let status = unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result1, &mut result2);
-            $crate::error::check_status(status)?;
-        }
-        Result::<($ret1_ty, $ret2_ty)>::Ok((result1, result2))
+            match api.$func {
+                Some(func) => {
+                    $crate::error::check_status(func(raw $(, $arg)*, &mut result1, &mut result2))
+                }
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| (result1, result2))
     }};
 }
 
@@ -111,8 +132,10 @@ macro_rules! ani_call_status {
         #[allow(clippy::macro_metavars_in_unsafe)]
         unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw $(, $arg)*);
-            $crate::error::check_status(status)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw $(, $arg)*)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         }
     }};
 }
@@ -125,12 +148,16 @@ macro_rules! ani_call_method_ret {
         let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         #[allow(clippy::macro_metavars_in_unsafe)]
-        unsafe {
+        let status = unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw, $obj, $method, &mut result, $args);
-            $crate::error::check_status(status)?;
-        }
-        Result::<$ret_ty>::Ok(result)
+            match api.$func {
+                Some(func) => {
+                    $crate::error::check_status(func(raw, $obj, $method, &mut result, $args))
+                }
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| result)
     }};
 }
 
@@ -144,9 +171,11 @@ macro_rules! ani_call_wrap {
         #[allow(clippy::macro_metavars_in_unsafe)]
         unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw $(, $arg)*, &mut result);
-            $crate::error::check_status(status)?;
-            Ok($wrap_ty::from_raw(result))
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw $(, $arg)*, &mut result))
+                    .map(|()| $wrap_ty::from_raw(result)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         }
     }};
 }
@@ -161,9 +190,13 @@ macro_rules! ani_call_method_wrap {
         #[allow(clippy::macro_metavars_in_unsafe)]
         unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw, $obj, $method, &mut result, $args);
-            $crate::error::check_status(status)?;
-            Ok($wrap_ty::from_raw(result))
+            match api.$func {
+                Some(func) => {
+                    $crate::error::check_status(func(raw, $obj, $method, &mut result, $args))
+                        .map(|()| $wrap_ty::from_raw(result))
+                }
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         }
     }};
 }
@@ -175,12 +208,17 @@ macro_rules! ani_call_by_name_ret {
     ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $obj:expr, $name:expr, $sig:expr, $args:expr) => {{
         let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
-        unsafe {
+        #[allow(clippy::macro_metavars_in_unsafe)]
+        let status = unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw, $obj, $name, $sig, &mut result, $args);
-            $crate::error::check_status(status)?;
-        }
-        Result::<$ret_ty>::Ok(result)
+            match api.$func {
+                Some(func) => {
+                    $crate::error::check_status(func(raw, $obj, $name, $sig, &mut result, $args))
+                }
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| result)
     }};
 }
 
@@ -194,12 +232,12 @@ macro_rules! ani_call_ret_result {
         #[allow(clippy::macro_metavars_in_unsafe)]
         let status = unsafe {
             let api = &*(*raw);
-            (api.$func.unwrap())(raw $(, $arg)*, &mut result)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw $(, $arg)*, &mut result)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         };
-        match $crate::error::check_status(status) {
-            Ok(()) => Ok(result),
-            Err(e) => Err(e),
-        }
+        status.map(|()| result)
     }};
 }
 
@@ -211,31 +249,47 @@ macro_rules! ani_call_ret_mid {
         let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         #[allow(clippy::macro_metavars_in_unsafe)]
-        unsafe {
+        let status = unsafe {
             let api = &*(*raw);
-            let status = (api.$func.unwrap())(raw, $a, $b, $c, &mut result, $d);
-            $crate::error::check_status(status)?;
-        }
-        Result::<$ret_ty>::Ok(result)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw, $a, $b, $c, &mut result, $d)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| result)
     }};
 }
 
 /// Call ANI API with result before last arg: (env, a, b, &mut result, c). For Object_New variadic.
 /// Usage: `ani_call_ret_before_last!($env, Func, ret_ty, default, a, b, c)`.
+/// Also accepts the 2-arg shape (env, a, &mut result, c) used by `Function_Call_*_A`.
 #[macro_export]
 macro_rules! ani_call_ret_before_last {
+    ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $a:expr, $c:expr) => {{
+        let raw = $env.as_raw();
+        let mut result: $ret_ty = $default;
+        #[allow(clippy::macro_metavars_in_unsafe)]
+        let status = unsafe {
+            let api = &*(*raw);
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw, $a, &mut result, $c)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
+        };
+        status.map(|()| result)
+    }};
     ($env:expr, $func:ident, $ret_ty:ty, $default:expr, $a:expr, $b:expr, $c:expr) => {{
         let raw = $env.as_raw();
         let mut result: $ret_ty = $default;
         #[allow(clippy::macro_metavars_in_unsafe)]
         let status = unsafe {
             let api = &*(*raw);
-            (api.$func.unwrap())(raw, $a, $b, &mut result, $c)
+            match api.$func {
+                Some(func) => $crate::error::check_status(func(raw, $a, $b, &mut result, $c)),
+                None => Err($crate::__ani_missing_fn_error!($func)),
+            }
         };
-        match $crate::error::check_status(status) {
-            Ok(()) => Ok(result),
-            Err(e) => Err(e),
-        }
+        status.map(|()| result)
     }};
 }
 
@@ -305,12 +359,14 @@ impl<'local> LocalScopeGuard<'local> {
             return Ok(());
         }
 
-        let status = unsafe {
-            let api = &*(*self.raw_env);
-            (api.DestroyLocalScope.unwrap())(self.raw_env)
-        };
         self.active = false;
-        check_status(status)
+        let func = unsafe { (*(*self.raw_env)).DestroyLocalScope }.ok_or_else(|| {
+            Error::new(
+                Status::Error,
+                "ANI function `DestroyLocalScope` is unavailable",
+            )
+        })?;
+        check_status(unsafe { func(self.raw_env) })
     }
 }
 
@@ -319,12 +375,88 @@ impl Drop for LocalScopeGuard<'_> {
         if !self.active {
             return;
         }
-
-        let _ = unsafe {
-            let api = &*(*self.raw_env);
-            check_status((api.DestroyLocalScope.unwrap())(self.raw_env))
-        };
         self.active = false;
+
+        if let Some(func) = unsafe { (*(*self.raw_env)).DestroyLocalScope } {
+            let _ = check_status(unsafe { func(self.raw_env) });
+        }
+    }
+}
+
+/// RAII guard that deletes a single local reference when dropped.
+///
+/// Complements [`LocalScopeGuard`] (the jni-rs `AutoLocal` analog): a scope
+/// frees every reference created inside it, while `AutoLocal` frees exactly
+/// one. Use it in loops that create many temporaries in the caller's scope,
+/// where each iteration's reference should be released before the next.
+///
+/// Deletion errors during drop are ignored; a failed delete only leaks the
+/// single reference until the surrounding scope ends. Call
+/// [`AutoLocal::forget`] to take back ownership without deleting.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// for name in huge_name_list {
+///     let s = env.auto_local(env.create_string(&name)?);
+///     consume(&*s)?;
+/// } // each string reference is deleted at the end of its iteration
+/// ```
+pub struct AutoLocal<'borrow, 'local, T>
+where
+    T: AsAniRef,
+{
+    env: &'borrow Env<'local>,
+    handle: Option<T>,
+}
+
+impl<'borrow, 'local, T> AutoLocal<'borrow, 'local, T>
+where
+    T: AsAniRef,
+{
+    /// Wraps a local reference so it is deleted when the guard drops.
+    pub fn new(env: &'borrow Env<'local>, handle: T) -> Self {
+        Self {
+            env,
+            handle: Some(handle),
+        }
+    }
+
+    /// Takes the handle back without deleting the reference.
+    pub fn forget(mut self) -> T {
+        self.handle.take().expect("AutoLocal handle already taken")
+    }
+}
+
+impl<T> std::ops::Deref for AutoLocal<'_, '_, T>
+where
+    T: AsAniRef,
+{
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.handle
+            .as_ref()
+            .expect("AutoLocal handle already taken")
+    }
+}
+
+impl<T> Drop for AutoLocal<'_, '_, T>
+where
+    T: AsAniRef,
+{
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let raw = handle.as_ani_ref();
+        if raw.is_null() {
+            return;
+        }
+        // Errors are ignored: drop must not panic, and a failed delete only
+        // leaks this single reference until the surrounding scope ends.
+        let local = unsafe { AniRef::from_raw(raw) };
+        let _ = self.env.delete_local_ref(&local);
     }
 }
 
@@ -1722,7 +1854,7 @@ impl<'local> Env<'local> {
     // ========================================================================
 
     /// Call method returning void
-    pub fn call_void_method(
+    pub fn call_method_void(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1738,7 +1870,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call method returning int
-    pub fn call_int_method(
+    pub fn call_method_int(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1756,7 +1888,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning long
-    pub fn call_long_method(
+    pub fn call_method_long(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1774,7 +1906,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning double
-    pub fn call_double_method(
+    pub fn call_method_double(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1792,7 +1924,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning boolean
-    pub fn call_boolean_method(
+    pub fn call_method_boolean(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1811,7 +1943,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning `char`.
-    pub fn call_char_method(
+    pub fn call_method_char(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1829,7 +1961,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning `i8`.
-    pub fn call_byte_method(
+    pub fn call_method_byte(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1847,7 +1979,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning `i16`.
-    pub fn call_short_method(
+    pub fn call_method_short(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1865,7 +1997,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning `f32`.
-    pub fn call_float_method(
+    pub fn call_method_float(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -1883,7 +2015,7 @@ impl<'local> Env<'local> {
     }
 
     /// Call a method returning object reference
-    pub fn call_ref_method(
+    pub fn call_method_ref(
         &self,
         obj: &AniObject<'_>,
         method: &AniMethod,
@@ -2726,22 +2858,6 @@ impl<'local> Env<'local> {
         signature: Option<&str>,
     ) -> Result<()> {
         self.call_method_by_name_void_with_args(obj, name, signature, &[])
-    }
-
-    /// Call a void method (using method handle)
-    pub fn call_method_void(
-        &self,
-        obj: &AniObject<'_>,
-        method: &AniMethod,
-        args: &[sys::ani_value],
-    ) -> Result<()> {
-        ani_call!(
-            self,
-            Object_CallMethod_Void_A,
-            obj.as_raw(),
-            method.as_raw(),
-            args.as_ptr()
-        )
     }
 
     // ========================================================================
@@ -3601,19 +3717,16 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<bool> {
-        let mut result: sys::ani_boolean = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Boolean_A.unwrap())(
-                self.raw,
-                function.as_raw(),
-                &mut result,
-                args_ptr,
-            )
-        };
-        check_status(status)?;
-        Ok(result != 0)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Boolean_A,
+            sys::ani_boolean,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
+        .map(|value| value != 0)
     }
 
     /// Call a module/namespace function and return `ani_char`.
@@ -3622,14 +3735,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<sys::ani_char> {
-        let mut result: sys::ani_char = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Char_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Char_A,
+            sys::ani_char,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `i8`.
@@ -3638,14 +3752,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<i8> {
-        let mut result: sys::ani_byte = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Byte_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Byte_A,
+            sys::ani_byte,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `i16`.
@@ -3654,14 +3769,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<i16> {
-        let mut result: sys::ani_short = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Short_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Short_A,
+            sys::ani_short,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `i32`.
@@ -3670,14 +3786,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<i32> {
-        let mut result: sys::ani_int = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Int_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Int_A,
+            sys::ani_int,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `i64`.
@@ -3686,14 +3803,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<i64> {
-        let mut result: sys::ani_long = 0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Long_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Long_A,
+            sys::ani_long,
+            0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `f32`.
@@ -3702,14 +3820,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<f32> {
-        let mut result: sys::ani_float = 0.0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Float_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Float_A,
+            sys::ani_float,
+            0.0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return `f64`.
@@ -3718,19 +3837,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<f64> {
-        let mut result: sys::ani_double = 0.0;
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Double_A.unwrap())(
-                self.raw,
-                function.as_raw(),
-                &mut result,
-                args_ptr,
-            )
-        };
-        check_status(status)?;
-        Ok(result)
+        ani_call_ret_before_last!(
+            self,
+            Function_Call_Double_A,
+            sys::ani_double,
+            0.0,
+            function.as_raw(),
+            args_ptr
+        )
     }
 
     /// Call a module/namespace function and return reference value.
@@ -3739,13 +3854,15 @@ impl<'local> Env<'local> {
         function: &AniFunction,
         args: &[sys::ani_value],
     ) -> Result<AniRef<'local>> {
-        let mut result: sys::ani_ref = ptr::null_mut();
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Ref_A.unwrap())(self.raw, function.as_raw(), &mut result, args_ptr)
-        };
-        check_status(status)?;
+        let result = ani_call_ret_before_last!(
+            self,
+            Function_Call_Ref_A,
+            sys::ani_ref,
+            ptr::null_mut(),
+            function.as_raw(),
+            args_ptr
+        )?;
         Ok(unsafe { AniRef::from_raw(result) })
     }
 
@@ -3756,11 +3873,7 @@ impl<'local> Env<'local> {
         args: &[sys::ani_value],
     ) -> Result<()> {
         let args_ptr = Self::value_args_ptr(args);
-        let status = unsafe {
-            let api = &*(*self.raw);
-            (api.Function_Call_Void_A.unwrap())(self.raw, function.as_raw(), args_ptr)
-        };
-        check_status(status)
+        ani_call!(self, Function_Call_Void_A, function.as_raw(), args_ptr)
     }
 
     /// Set `bool` value to a variable.
@@ -3921,23 +4034,11 @@ impl<'local> Env<'local> {
     }
 
     // ========================================================================
-    // Exception Handling
+    // Error Handling
     // ========================================================================
 
-    /// Check if there is an unhandled exception
-    pub fn has_exception(&self) -> bool {
-        ani_call_ret_result!(self, ExistUnhandledError, sys::ani_boolean, 0)
-            .map(|r| r != 0)
-            .unwrap_or(false)
-    }
-
-    /// Clear current exception
-    pub fn clear_exception(&self) -> Result<()> {
-        ani_call!(self, ResetError)
-    }
-
-    /// Describe current exception (print stack trace)
-    pub fn describe_exception(&self) -> Result<()> {
+    /// Describe the pending error (print stack trace)
+    pub fn describe_error(&self) -> Result<()> {
         ani_call!(self, DescribeError)
     }
 
@@ -3955,6 +4056,15 @@ impl<'local> Env<'local> {
     /// Delete a local reference explicitly.
     pub fn delete_local_ref(&self, local_ref: &AniRef<'_>) -> Result<()> {
         ani_call!(self, Reference_Delete, local_ref.as_raw())
+    }
+
+    /// Wraps a local reference in an [`AutoLocal`] guard that deletes it
+    /// when dropped.
+    pub fn auto_local<T>(&self, handle: T) -> AutoLocal<'_, 'local, T>
+    where
+        T: AsAniRef,
+    {
+        AutoLocal::new(self, handle)
     }
 
     /// Ensure enough local reference slots are available.
@@ -3985,24 +4095,30 @@ impl<'local> Env<'local> {
         Ok(unsafe { AniRef::from_raw(escaped) })
     }
 
-    /// Create a global reference
+    /// Create a global reference.
+    ///
+    /// The returned [`GlobalRef`] owns the reference and deletes it
+    /// automatically when dropped (attaching to the VM if needed). Use
+    /// [`delete_global_ref`](Self::delete_global_ref) or
+    /// [`GlobalRef::delete`] for explicit deletion, or
+    /// [`GlobalRef::into_raw`] to take over manual management.
     pub fn create_global_ref<'a>(&self, obj: &AniRef<'a>) -> Result<GlobalRef> {
-        let reference = (|| -> Result<GlobalRef> {
-            ani_call_wrap!(
-                self,
-                GlobalReference_Create,
-                sys::ani_ref,
-                GlobalRef,
-                obj.as_raw()
-            )
-        })()?;
+        let vm = self.get_vm()?;
+        let raw = ani_call_ret!(
+            self,
+            GlobalReference_Create,
+            sys::ani_ref,
+            ptr::null_mut(),
+            obj.as_raw()
+        )?;
         LIVE_GLOBAL_REFERENCES.fetch_add(1, Ordering::AcqRel);
-        Ok(reference)
+        Ok(unsafe { GlobalRef::from_raw_managed(raw, vm) })
     }
 
     /// Delete a global reference
     pub fn delete_global_ref(&self, gref: GlobalRef) -> Result<()> {
-        ani_call!(self, GlobalReference_Delete, gref.as_raw())?;
+        let raw = gref.into_raw();
+        ani_call!(self, GlobalReference_Delete, raw)?;
         decrement_tracked_reference(&LIVE_GLOBAL_REFERENCES);
         Ok(())
     }
@@ -4042,23 +4158,29 @@ impl<'local> Env<'local> {
     }
 
     /// Create a weak reference from a local/global reference.
+    ///
+    /// The returned [`WeakRef`] owns the weak slot and deletes it
+    /// automatically when dropped (attaching to the VM if needed). Use
+    /// [`delete_weak_ref`](Self::delete_weak_ref) or [`WeakRef::delete`] for
+    /// explicit deletion, or [`WeakRef::into_raw`] to take over manual
+    /// management.
     pub fn create_weak_ref<'a>(&self, obj: &AniRef<'a>) -> Result<WeakRef> {
-        let reference = (|| -> Result<WeakRef> {
-            ani_call_wrap!(
-                self,
-                WeakReference_Create,
-                sys::ani_wref,
-                WeakRef,
-                obj.as_raw()
-            )
-        })()?;
+        let vm = self.get_vm()?;
+        let raw = ani_call_ret!(
+            self,
+            WeakReference_Create,
+            sys::ani_wref,
+            ptr::null_mut(),
+            obj.as_raw()
+        )?;
         LIVE_WEAK_REFERENCES.fetch_add(1, Ordering::AcqRel);
-        Ok(reference)
+        Ok(unsafe { WeakRef::from_raw_managed(raw, vm) })
     }
 
     /// Delete a weak reference.
     pub fn delete_weak_ref(&self, wref: WeakRef) -> Result<()> {
-        ani_call!(self, WeakReference_Delete, wref.as_raw())?;
+        let raw = wref.into_raw();
+        ani_call!(self, WeakReference_Delete, raw)?;
         decrement_tracked_reference(&LIVE_WEAK_REFERENCES);
         Ok(())
     }
@@ -4141,15 +4263,15 @@ impl<'local> Env<'local> {
     }
 
     /// Get the null object reference
-    pub fn get_null_object(&self) -> Result<sys::ani_object> {
+    pub fn get_null_object(&self) -> Result<AniObject<'local>> {
         let r = ani_call_ret!(self, GetNull, sys::ani_ref, ptr::null_mut())?;
-        Ok(r as sys::ani_object)
+        Ok(unsafe { AniObject::from_raw(r as sys::ani_object) })
     }
 
     /// Get the undefined object reference
-    pub fn get_undefined_object(&self) -> Result<sys::ani_object> {
+    pub fn get_undefined_object(&self) -> Result<AniObject<'local>> {
         let r = ani_call_ret!(self, GetUndefined, sys::ani_ref, ptr::null_mut())?;
-        Ok(r as sys::ani_object)
+        Ok(unsafe { AniObject::from_raw(r as sys::ani_object) })
     }
 
     // ========================================================================
@@ -5043,17 +5165,6 @@ impl<'local> Env<'local> {
         )
     }
 
-    /// Create an int array
-    pub fn create_int_array(&self, length: usize) -> Result<AniArrayInt<'local>> {
-        ani_call_wrap!(
-            self,
-            FixedArray_New_Int,
-            sys::ani_fixedarray_int,
-            AniArrayInt,
-            length
-        )
-    }
-
     /// Get array length
     pub fn get_array_length(&self, array: &AniArray<'_>) -> Result<usize> {
         ani_call_ret!(self, Array_GetLength, sys::ani_size, 0, array.as_raw())
@@ -5065,8 +5176,8 @@ impl<'local> Env<'local> {
 
     /// Create a new ArrayBuffer with the specified size.
     ///
-    /// The buffer is initialized with unspecified values. Use `create_arraybuffer_zeroed`
-    /// if you need zero-initialized data.
+    /// The buffer contents are initialized by the runtime; treat them as
+    /// unspecified and overwrite the region you need via the returned pointer.
     ///
     /// # Arguments
     ///
@@ -5192,19 +5303,6 @@ impl<'local> Env<'local> {
     // ========================================================================
     // Type Checking
     // ========================================================================
-
-    /// Check if object is an instance of the specified class
-    pub fn object_instance_of(&self, obj: &AniObject<'_>, cls: &AniClass<'_>) -> Result<bool> {
-        let result = ani_call_ret!(
-            self,
-            Object_InstanceOf,
-            sys::ani_boolean,
-            0,
-            obj.as_raw(),
-            cls.as_raw()
-        )?;
-        Ok(result != 0)
-    }
 
     /// Get the direct super class of a type.
     pub fn get_super_class(&self, ty: &AniType<'_>) -> Result<AniClass<'local>> {
@@ -5380,12 +5478,12 @@ impl<'local> Env<'local> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if env.exist_unhandled_error()? {
+    /// if env.has_unhandled_error()? {
     ///     // Handle the error
     ///     env.reset_error()?;
     /// }
     /// ```
-    pub fn exist_unhandled_error(&self) -> Result<bool> {
+    pub fn has_unhandled_error(&self) -> Result<bool> {
         let has_error = ani_call_ret!(self, ExistUnhandledError, sys::ani_boolean, 0)?;
         Ok(has_error != 0)
     }
@@ -5394,7 +5492,7 @@ impl<'local> Env<'local> {
     ///
     /// Returns `None` if there is no pending error.
     pub fn get_unhandled_error(&self) -> Result<Option<AniError<'local>>> {
-        if !self.exist_unhandled_error()? {
+        if !self.has_unhandled_error()? {
             return Ok(None);
         }
         let result = ani_call_ret!(self, GetUnhandledError, sys::ani_error, ptr::null_mut())?;
@@ -5459,17 +5557,17 @@ impl<'local> Env<'local> {
     /// use ani::prelude::*;
     ///
     /// fn create_async_task(env: &Env) -> Result<AniObject> {
-    ///     let (resolver, promise) = env.promise_new()?;
+    ///     let (resolver, promise) = env.create_promise()?;
     ///
     ///     // In a real scenario, you'd spawn a thread or async task
     ///     // that eventually calls resolve or reject
     ///     let result = env.create_string("done")?;
-    ///     env.promise_resolve(&resolver, &result.into())?;
+    ///     env.resolve_promise(&resolver, &result.into())?;
     ///
     ///     Ok(promise)
     /// }
     /// ```
-    pub fn promise_new(&self) -> Result<(AniResolver, AniObject<'local>)> {
+    pub fn create_promise(&self) -> Result<(AniResolver, AniObject<'local>)> {
         let (resolver, promise) = ani_call_2ret!(
             self,
             Promise_New,
@@ -5485,17 +5583,17 @@ impl<'local> Env<'local> {
 
     /// Create a new Promise together with a typed [`Deferred<T>`] facade.
     ///
-    /// This bridges the low-level `promise_new()` API into the higher-level
+    /// This bridges the low-level `create_promise()` API into the higher-level
     /// `PromiseRaw<T> + Deferred<T>` model used by `ani::conversions`.
-    pub fn promise_new_typed<T>(&self) -> Result<(Deferred<T>, PromiseRaw<'local, T>)> {
-        let (resolver, promise) = self.promise_new()?;
+    pub fn create_deferred<T>(&self) -> Result<(Deferred<T>, PromiseRaw<'local, T>)> {
+        let (resolver, promise) = self.create_promise()?;
         Ok((Deferred::from_resolver(resolver), unsafe {
             PromiseRaw::from_raw(promise.into_raw())
         }))
     }
 
     /// Create and immediately resolve a typed Promise from a Rust value.
-    pub fn promise_resolved<V>(&self, value: V) -> Result<PromiseRaw<'local, V>>
+    pub fn create_resolved_promise<V>(&self, value: V) -> Result<PromiseRaw<'local, V>>
     where
         V: crate::conversions::PromiseValue<'local>,
     {
@@ -5503,12 +5601,15 @@ impl<'local> Env<'local> {
     }
 
     /// Create and immediately reject a typed Promise with a message.
-    pub fn promise_rejected<T>(&self, error: impl AsRef<str>) -> Result<PromiseRaw<'local, T>> {
+    pub fn create_rejected_promise<T>(
+        &self,
+        error: impl AsRef<str>,
+    ) -> Result<PromiseRaw<'local, T>> {
         PromiseRaw::<T>::reject(self, error)
     }
 
     /// Create and immediately reject a typed Promise with a typed [`Error`].
-    pub fn promise_rejected_with_error<
+    pub fn create_rejected_promise_with_error<
         T,
         S: AsRef<str> + std::fmt::Debug + Send + Sync + 'static,
     >(
@@ -5531,11 +5632,11 @@ impl<'local> Env<'local> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let (resolver, promise) = env.promise_new()?;
+    /// let (resolver, promise) = env.create_promise()?;
     /// let result = env.create_string("success")?;
-    /// env.promise_resolve(&resolver, &result.into())?;
+    /// env.resolve_promise(&resolver, &result.into())?;
     /// ```
-    pub fn promise_resolve(&self, resolver: &AniResolver, value: &AniRef<'_>) -> Result<()> {
+    pub fn resolve_promise(&self, resolver: &AniResolver, value: &AniRef<'_>) -> Result<()> {
         ani_call!(
             self,
             PromiseResolver_Resolve,
@@ -5557,11 +5658,11 @@ impl<'local> Env<'local> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let (resolver, promise) = env.promise_new()?;
+    /// let (resolver, promise) = env.create_promise()?;
     /// let error = env.create_error("Something went wrong")?;
-    /// env.promise_reject(&resolver, &error)?;
+    /// env.reject_promise(&resolver, &error)?;
     /// ```
-    pub fn promise_reject(&self, resolver: &AniResolver, error: &AniError<'_>) -> Result<()> {
+    pub fn reject_promise(&self, resolver: &AniResolver, error: &AniError<'_>) -> Result<()> {
         ani_call!(
             self,
             PromiseResolver_Reject,
@@ -5578,7 +5679,7 @@ impl<'local> Env<'local> {
     ///
     /// * `resolver` - The resolver for the promise to reject
     /// * `message` - The error message
-    pub fn promise_reject_with_message(&self, resolver: &AniResolver, message: &str) -> Result<()> {
+    pub fn reject_promise_with_message(&self, resolver: &AniResolver, message: &str) -> Result<()> {
         let error = crate::conversions::create_promise_error(self, message)?;
         ani_call!(
             self,
@@ -5586,5 +5687,50 @@ impl<'local> Env<'local> {
             resolver.as_raw(),
             error.as_raw()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DELETE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAST_DELETED: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn fake_reference_delete(
+        _env: *mut sys::ani_env,
+        lref: sys::ani_ref,
+    ) -> sys::ani_status {
+        DELETE_CALLS.fetch_add(1, Ordering::SeqCst);
+        LAST_DELETED.store(lref as usize, Ordering::SeqCst);
+        sys::ani_status_ANI_OK
+    }
+
+    #[test]
+    fn auto_local_deletes_exactly_once_and_forget_disarms() {
+        let mut api: sys::__ani_interaction_api = unsafe { std::mem::zeroed() };
+        api.Reference_Delete = Some(fake_reference_delete);
+        let mut env_ptr: sys::ani_env = &api;
+        let env = unsafe { Env::from_raw_unchecked(&mut env_ptr as *mut sys::ani_env) };
+
+        DELETE_CALLS.store(0, Ordering::SeqCst);
+        let fake_ref = 0x1234usize as sys::ani_ref;
+
+        {
+            let guard = env.auto_local(unsafe { AniObject::from_raw(fake_ref) });
+            assert!(!guard.is_null());
+            assert_eq!(guard.as_raw() as usize, 0x1234);
+        }
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_DELETED.load(Ordering::SeqCst), 0x1234);
+
+        let guard = env.auto_local(unsafe { AniObject::from_raw(fake_ref) });
+        let handle = guard.forget();
+        assert_eq!(handle.as_raw() as usize, 0x1234);
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
+
+        drop(env.auto_local(unsafe { AniObject::from_raw(std::ptr::null_mut()) }));
+        assert_eq!(DELETE_CALLS.load(Ordering::SeqCst), 1);
     }
 }

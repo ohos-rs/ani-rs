@@ -547,38 +547,6 @@ impl_ref_handle_conversion!(
 );
 
 impl_ref_handle_conversion!(
-    AniArrayRef,
-    sys::ani_array,
-    "A{C{std.core.Object}}",
-    "ani_array",
-    "array_ref"
-);
-
-impl_ref_handle_conversion!(
-    AniArrayInt,
-    sys::ani_fixedarray_int,
-    "A{i}",
-    "ani_fixedarray_int",
-    "array_int"
-);
-
-impl_ref_handle_conversion!(
-    AniArrayLong,
-    sys::ani_fixedarray_long,
-    "A{l}",
-    "ani_fixedarray_long",
-    "array_long"
-);
-
-impl_ref_handle_conversion!(
-    AniArrayDouble,
-    sys::ani_fixedarray_double,
-    "A{d}",
-    "ani_fixedarray_double",
-    "array_double"
-);
-
-impl_ref_handle_conversion!(
     AniFixedArray,
     sys::ani_fixedarray,
     "A{C{std.core.Object}}",
@@ -844,7 +812,6 @@ mod tests {
     #[test]
     fn test_array_handle_type_signatures() {
         assert_eq!(<AniArray>::type_signature(), "A{C{std.core.Object}}");
-        assert_eq!(<AniArrayRef>::type_signature(), "A{C{std.core.Object}}");
         assert_eq!(<AniFixedArray>::type_signature(), "A{C{std.core.Object}}");
         assert_eq!(
             <AniFixedArrayRef>::type_signature(),
@@ -857,10 +824,9 @@ mod tests {
     #[test]
     fn test_array_handle_ani_c_types() {
         assert_eq!(<AniArray>::ani_c_type(), "ani_array");
-        assert_eq!(<AniArrayRef>::ani_c_type(), "ani_array");
         assert_eq!(<AniFixedArray>::ani_c_type(), "ani_fixedarray");
         assert_eq!(<AniFixedArrayRef>::ani_c_type(), "ani_fixedarray_ref");
-        assert_eq!(<AniArrayInt>::ani_c_type(), "ani_fixedarray_int");
+        assert_eq!(<AniFixedArrayInt>::ani_c_type(), "ani_fixedarray_int");
         assert_eq!(<AniFixedArrayDouble>::ani_c_type(), "ani_fixedarray_double");
     }
 }

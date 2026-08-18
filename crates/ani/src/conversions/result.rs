@@ -7,8 +7,6 @@ use std::fmt::Debug;
 
 use crate::env::Env;
 use crate::error::{AniErrorPayload, Error, Result};
-use crate::sys;
-use crate::{ani_call, ani_call_ret_result};
 
 use super::traits::{ToAni, TypeInfo};
 
@@ -72,25 +70,6 @@ pub fn throw_type_error(env: &Env<'_>, expected: &str, got: &str) -> Result<()> 
 pub fn throw_null_error(env: &Env<'_>, name: &str) -> Result<()> {
     let message = format!("Null pointer error: {} is null", name);
     throw_error(env, &message)
-}
-
-/// Check if there is a pending exception
-pub fn check_exception(env: &Env<'_>) -> bool {
-    ani_call_ret_result!(env, ExistUnhandledError, sys::ani_boolean, 0)
-        .map(|r| r != 0)
-        .unwrap_or(false)
-}
-
-/// Clear pending exception
-pub fn clear_exception(env: &Env<'_>) -> Result<()> {
-    ani_call!(env, ResetError)
-}
-
-/// Get current exception
-pub fn get_exception(env: &Env<'_>) -> Option<sys::ani_error> {
-    ani_call_ret_result!(env, GetUnhandledError, sys::ani_error, std::ptr::null_mut())
-        .ok()
-        .filter(|p| !p.is_null())
 }
 
 // ============================================================================
