@@ -206,6 +206,7 @@ fn uses_typed_from_ani_param_conversion(ani_type: &AniType) -> bool {
         ani_type,
         AniType::AniObject
             | AniType::BigInt
+            | AniType::Date
             | AniType::GlobalRef
             | AniType::WeakRef
             | AniType::RuntimeHandle(_)
@@ -697,6 +698,7 @@ fn is_to_ani_value_type(ani_type: &AniType) -> bool {
         ani_type,
         AniType::String(StringType::Str)
             | AniType::BigInt
+            | AniType::Date
             | AniType::AniObject
             | AniType::RuntimeHandle(_)
             | AniType::AnyValue

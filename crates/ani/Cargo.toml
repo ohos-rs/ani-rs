@@ -19,6 +19,8 @@ api24 = []
 api26 = ["api24"]
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
+# Map chrono::DateTime<Utc> to ArkTS escompat.Date.
+chrono = ["dep:chrono"]
 # Map serde values to native ArkTS Record/Array/boxed primitive object graphs.
 serde-json = ["dep:serde", "dep:serde_json"]
 # Executor-independent async runtime SPI. Applications can provide the entire
@@ -50,6 +52,7 @@ ctor = "0.6"
 
 # Optional dependencies
 anyhow = { version = "1.0.103", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 tokio = { version = "1", optional = true, default-features = false, features = ["rt", "rt-multi-thread", "sync"] }

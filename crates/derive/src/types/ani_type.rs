@@ -184,6 +184,9 @@ pub enum AniType {
     String(StringType),
     /// Arbitrary-precision ArkTS bigint.
     BigInt,
+    /// ArkTS `escompat.Date` (Rust `std::time::SystemTime` or
+    /// `chrono::DateTime<Utc>`).
+    Date,
     /// Unit type ()
     Unit,
     /// Null literal type
@@ -584,6 +587,12 @@ impl AniType {
             return AniType::BigInt;
         }
 
+        // std::time::SystemTime and chrono::DateTime<Utc> both map to
+        // escompat.Date via millisecond timestamps.
+        if ident == "SystemTime" || ident == "DateTime" {
+            return AniType::Date;
+        }
+
         if ident == "TupleValue" || ident == "AniTupleValue" {
             return AniType::TupleValue;
         }
@@ -860,6 +869,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_ani_c_type(),
             AniType::String(_) => quote! { ani::sys::ani_string },
             AniType::BigInt => quote! { ani::sys::ani_object },
+            AniType::Date => quote! { ani::sys::ani_object },
             AniType::Unit => quote! { () },
             AniType::Null | AniType::Undefined => quote! { ani::sys::ani_object },
             AniType::Wrapper(w) => w.to_ani_c_type(),
@@ -1045,6 +1055,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_signature(),
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::BigInt => "Lstd/core/BigInt;".to_string(),
+            AniType::Date => "Lescompat/Date;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -1113,6 +1124,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
             AniType::String(_) => "C{std.core.String}".to_string(),
             AniType::BigInt => "C{std.core.BigInt}".to_string(),
+            AniType::Date => "C{escompat.Date}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
@@ -2127,6 +2139,16 @@ mod tests {
         let ty: Type = syn::parse_quote!(ani::conversions::BigInt);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/BigInt;");
+
+        let ty: Type = syn::parse_quote!(std::time::SystemTime);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Date));
+        assert_eq!(ani_type.to_signature(), "Lescompat/Date;");
+
+        let ty: Type = syn::parse_quote!(chrono::DateTime<chrono::Utc>);
+        let ani_type = AniType::from_syn_type(&ty);
+        assert!(matches!(ani_type, AniType::Date));
+
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);
         assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");

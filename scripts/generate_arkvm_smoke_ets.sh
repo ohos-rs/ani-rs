@@ -470,6 +470,23 @@ let maxU128 = new BigInt("340282366920938463463374607431768211455");
 __assert_eq_string("u128_max_lossless", __ANI_GENERATED__.u128_identity(maxU128).toString(), maxU128.toString());
 ETS
       ;;
+    ani-example-date)
+      cat <<'ETS'
+let epochMillis: double = 1700000000123.0;
+let sample = new Date(epochMillis);
+__assert_eq_double("date_to_millis", __ANI_GENERATED__.date_to_millis(sample), epochMillis);
+__assert_eq_double("date_identity", __ANI_GENERATED__.date_identity(sample).getTime(), epochMillis);
+__assert_eq_double("date_from_millis", __ANI_GENERATED__.date_from_millis(epochMillis).getTime(), epochMillis);
+__assert_eq_double("date_add_days", __ANI_GENERATED__.date_add_days(sample, 2).getTime(), epochMillis + 172800000.0);
+__assert_eq_double("date_add_days_negative", __ANI_GENERATED__.date_add_days(sample, -1).getTime(), epochMillis - 86400000.0);
+__assert_true("date_is_before", __ANI_GENERATED__.date_is_before(sample, new Date(epochMillis + 1.0)));
+__assert_true("date_is_not_before", !__ANI_GENERATED__.date_is_before(sample, sample));
+__assert_eq_double("date_pre_epoch", __ANI_GENERATED__.date_to_millis(new Date(-86400000.0)), -86400000.0);
+__assert_throws("date_from_millis_nan", (): void => {
+  __ANI_GENERATED__.date_from_millis(Double.NaN);
+});
+ETS
+      ;;
     ani-example-derive-shapes)
       cat <<'ETS'
 let deriveBox = __ANI_GENERATED__.make_derive_box("box");

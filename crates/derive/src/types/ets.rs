@@ -883,6 +883,7 @@ fn default_object_value_for_ani_type(ty: &AniType, ets_type: &str) -> String {
         AniType::Primitive(_) => "0".to_string(),
         AniType::String(_) => "\"\"".to_string(),
         AniType::BigInt => "0n".to_string(),
+        AniType::Date => "new Date(0)".to_string(),
         AniType::Null => "null".to_string(),
         AniType::Undefined => "undefined".to_string(),
         AniType::Wrapper(WrapperType::Option(_)) => "undefined".to_string(),
@@ -1016,6 +1017,7 @@ fn render_non_union_ani_type_to_ets(ty: &AniType, context: EtsRenderContext) -> 
         }
         AniType::AniObject => "Object".to_string(),
         AniType::BigInt => "bigint".to_string(),
+        AniType::Date => "Date".to_string(),
         AniType::GlobalRef => builtin_ets_public_type("GlobalRef").unwrap().to_string(),
         AniType::WeakRef => builtin_ets_public_type("WeakRef").unwrap().to_string(),
         AniType::RuntimeHandle(handle) => runtime_handle_to_ets(*handle).to_string(),

@@ -1,0 +1,19 @@
+[package]
+name = "ani-example-date"
+version = "0.1.0"
+publish = false
+license.workspace = true
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+# Exchange chrono::DateTime<Utc> with ArkTS Date.
+chrono_example = ["ani/chrono", "chrono"]
+
+[dependencies]
+ani = { workspace = true }
+ani-derive = { workspace = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }

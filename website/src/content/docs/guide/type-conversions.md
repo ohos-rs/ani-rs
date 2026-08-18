@@ -28,6 +28,7 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 | `f64` | `D` | `double` |
 | `String` | string reference | `string` |
 | `BigInt` | `Lstd/core/BigInt;` | `bigint` |
+| `SystemTime` | `Lescompat/Date;` | `Date` |
 
 无符号和平台宽度整数都执行范围检查，不会使用 `as` 静默截断。`u8`、`u32`、`usize` 和 `isize` 在 ArkTS 侧使用更宽的有符号类型；`u64`、`i128` 和 `u128` 使用 BigInt。Rust `char` 通过单 Unicode scalar 字符串传输，因此 `🦀` 等非 BMP 字符不会被截断为一个 UTF-16 code unit。
 
@@ -52,6 +53,22 @@ pub fn bigint_from_text(value: String) -> Result<BigInt> {
 ```
 
 只有显式调用 `BigInt::to_i64()` 时才会缩窄；超出范围会返回 `OutOfRange`，不会截断。
+
+## Date
+
+`std::time::SystemTime` 双向映射 ArkTS `Date`（`escompat.Date`），以带符号的 epoch 毫秒为传输表示；早于 Unix epoch 的时间映射为负毫秒。亚毫秒精度会被截断，非有限或超出 ArkTS `Date` 范围（±8.64e15 ms）的毫秒值会返回错误而不是静默截断：
+
+```rust
+use std::time::SystemTime;
+use ani_derive::ani;
+
+#[ani]
+pub fn date_identity(value: SystemTime) -> SystemTime {
+    value
+}
+```
+
+启用 `chrono` cargo feature 后，`chrono::DateTime<Utc>` 通过相同的毫秒表示参与转换。完整示例见 `examples/date`。
 
 ## Null 与 Undefined
 
