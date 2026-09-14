@@ -6,7 +6,12 @@
 use ani::prelude::*;
 use ani_derive::ani;
 
-const ACCESS_TARGET_CLASS: &str = "arkvm_test.AccessTarget";
+fn access_target_class() -> String {
+    let module = option_env!("ANI_MODULE_DESCRIPTOR")
+        .or(option_env!("ANI_TEST_MODULE_NAME"))
+        .unwrap_or("arkvm_test");
+    format!("{module}.AccessTarget")
+}
 
 #[ani]
 pub fn field_by_name_int_roundtrip(env: &Env<'_>, obj: AniObject<'_>, value: i32) -> Result<i32> {
@@ -16,7 +21,7 @@ pub fn field_by_name_int_roundtrip(env: &Env<'_>, obj: AniObject<'_>, value: i32
 
 #[ani]
 pub fn field_by_handle_int_roundtrip(env: &Env<'_>, obj: AniObject<'_>, value: i32) -> Result<i32> {
-    let cls = env.find_class(ACCESS_TARGET_CLASS)?;
+    let cls = env.find_class(&access_target_class())?;
     let field = env.find_field(&cls, "counter")?;
     env.set_field_int(&obj, &field, value)?;
     env.get_field_int(&obj, &field)
@@ -58,7 +63,6 @@ pub fn property_ref_roundtrip(
 
 #[cfg(test)]
 mod tests {
-    use super::ACCESS_TARGET_CLASS;
     use super::*;
 
     #[test]
@@ -68,6 +72,6 @@ mod tests {
         let _ = field_ref_roundtrip;
         let _ = property_by_name_double_roundtrip;
         let _ = property_ref_roundtrip;
-        assert_eq!(ACCESS_TARGET_CLASS, "arkvm_test.AccessTarget");
+        assert!(access_target_class().ends_with(".AccessTarget"));
     }
 }
