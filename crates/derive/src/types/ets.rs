@@ -377,9 +377,18 @@ fn render_class_block(
 ) {
     let pad = " ".repeat(indent);
     let iterator_suffix = if iterator_targets.contains(class_target) {
-        iterator_next_item_type(class)
-            .map(|item_ty| format!(" implements Iterator<{item_ty}>"))
-            .unwrap_or_default()
+        iterator_next_item_type(class).map_or_else(String::new, |item_ty| {
+            let protocol = if class.callable_members.iter().any(|member| {
+                member
+                    .iterator_factory_target()
+                    .is_some_and(|target| target == class_target)
+            }) {
+                "IterableIterator"
+            } else {
+                "Iterator"
+            };
+            format!(" implements {protocol}<{item_ty}>")
+        })
     } else {
         String::new()
     };
@@ -2743,6 +2752,48 @@ get age(): int {
         assert!(rendered.contains("return new IteratorResult<int>();"));
         assert!(rendered.contains("return new IteratorResult<int>(__ani_result);"));
         assert!(!rendered.contains("next(): int | null | undefined {"));
+    }
+
+    #[test]
+    fn test_render_decls_marks_self_returning_iterator_as_iterable() {
+        let owner = "demo.CountdownIterator";
+        let class_members = vec![
+            EtsClassMemberDecl {
+                target: owner.to_string(),
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
+                    metadata: class_member_metadata(
+                        owner,
+                        "$_iterator",
+                        ClassMemberScope::Instance,
+                    ),
+                    native_symbol_name: "$_iterator".to_string(),
+                    kind: ClassOpKind::IteratorFactory {
+                        iterator_class: owner.to_string(),
+                    },
+                })),
+                rendered: "native $_iterator(): CountdownIterator;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: owner.to_string(),
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
+                    metadata: class_member_metadata(owner, "next", ClassMemberScope::Instance),
+                    native_symbol_name: "__ani_native_next".to_string(),
+                    kind: ClassOpKind::IteratorNext {
+                        item_type: "int".to_string(),
+                    },
+                })),
+                rendered: generate_iterator_next_ets_binding(
+                    &syn::parse_quote! { fn next() -> Option<i32> },
+                    false,
+                ),
+            },
+        ];
+
+        let rendered = render_decls(&[], &[], &class_members);
+
+        assert!(
+            rendered.contains("export class CountdownIterator implements IterableIterator<int> {")
+        );
     }
 
     #[test]

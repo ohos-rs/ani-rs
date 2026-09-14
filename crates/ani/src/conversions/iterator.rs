@@ -202,7 +202,7 @@ where
 
 impl<T> TypeInfo for AniIterator<'_, T> {
     fn type_signature() -> &'static str {
-        "Lstd/core/Object;"
+        "Lstd/core/Iterable;"
     }
 
     fn ani_c_type() -> &'static str {
@@ -233,6 +233,6 @@ impl<T> ToAniArg for AniIterator<'_, T> {
     }
 
     fn arg_signature() -> &'static str {
-        "Lstd/core/Object;"
+        "Lstd/core/Iterable;"
     }
 }

@@ -156,7 +156,7 @@ pub async fn delayed_square(input: i32, delay_ms: i32) -> Result<i32> {
 | `Vec<T>`      | `[T`                | `Array<T>`    |
 | `Option<i32>` | `Lstd/core/Int;`    | `Int \| null` |
 | `SystemTime`  | `Lstd/core/Date;`   | `Date`        |
-| `AniIterator<T>` | `Lstd/core/Object;` | `Iterable<T>` |
+| `AniIterator<T>` | `Lstd/core/Iterable;` | `Iterable<T>` |
 
 ## Workspace
 

@@ -1067,7 +1067,7 @@ impl AniType {
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::BigInt => "Lstd/core/BigInt;".to_string(),
             AniType::Date => "Lstd/core/Date;".to_string(),
-            AniType::Iterator(_) => "Lstd/core/Object;".to_string(),
+            AniType::Iterator(_) => "Lstd/core/Iterable;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -1137,7 +1137,7 @@ impl AniType {
             AniType::String(_) => "C{std.core.String}".to_string(),
             AniType::BigInt => "C{std.core.BigInt}".to_string(),
             AniType::Date => "C{std.core.Date}".to_string(),
-            AniType::Iterator(_) => "C{std.core.Object}".to_string(),
+            AniType::Iterator(_) => "C{std.core.Iterable}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
             AniType::AniObject => "C{std.core.Object}".to_string(),
@@ -2165,7 +2165,7 @@ mod tests {
         let ty: Type = syn::parse_quote!(ani::conversions::AniIterator<'_, String>);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::Iterator(Some(_))));
-        assert_eq!(ani_type.to_signature(), "Lstd/core/Object;");
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Iterable;");
 
         let ty: Type = syn::parse_quote!(ani::conversions::AnyValue);
         let ani_type = AniType::from_syn_type(&ty);
