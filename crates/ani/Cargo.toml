@@ -1,7 +1,7 @@
 [package]
 name = "ani"
 version = "0.1.0-alpha.3"
-edition = "2024"
+edition = "2021"
 rust-version.workspace = true
 description = "ANI bindings for Rust - like napi-rs for ArkTS-Static"
 license = "MIT OR Apache-2.0"
@@ -10,7 +10,7 @@ keywords = ["ani", "arkts", "ohos", "harmonyos", "ffi"]
 categories = ["api-bindings", "development-tools::ffi"]
 
 [features]
-default = ["api24"]
+default = ["api26"]
 # Minimum-runtime contracts. `api26` is the release-validation profile and
 # includes every ANI operation available in the pinned API 26 header.  The ANI
 # ABI itself only added primitive boxing/unboxing after API 23, in API 24.
@@ -19,7 +19,7 @@ api24 = []
 api26 = ["api24"]
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
-# Map chrono::DateTime<Utc> to ArkTS escompat.Date.
+# Map chrono::DateTime<Utc> to ArkTS std.core.Date.
 chrono = ["dep:chrono"]
 # Map serde values to native ArkTS Record/Array/boxed primitive object graphs.
 serde-json = ["dep:serde", "dep:serde_json"]

@@ -4,6 +4,18 @@ use ani::prelude::*;
 use ani_derive::ani;
 
 fn current_test_module_name() -> String {
+    for value in [
+        option_env!("ANI_MODULE_DESCRIPTOR"),
+        option_env!("ANI_TEST_MODULE_NAME"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
     std::env::var("ANI_TEST_MODULE_NAME")
         .ok()
         .map(|value| value.trim().to_string())

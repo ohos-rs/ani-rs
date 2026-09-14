@@ -200,33 +200,15 @@ either_n!(Either14, A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 either_n!(Either15, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 either_n!(Either16, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 either_n!(Either17, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q);
-either_n!(
-    Either18, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R
-);
-either_n!(
-    Either19, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S
-);
-either_n!(
-    Either20, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T
-);
-either_n!(
-    Either21, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U
-);
-either_n!(
-    Either22, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V
-);
-either_n!(
-    Either23, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W
-);
-either_n!(
-    Either24, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X
-);
-either_n!(
-    Either25, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y
-);
-either_n!(
-    Either26, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z
-);
+either_n!(Either18, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R);
+either_n!(Either19, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S);
+either_n!(Either20, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T);
+either_n!(Either21, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U);
+either_n!(Either22, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V);
+either_n!(Either23, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W);
+either_n!(Either24, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X);
+either_n!(Either25, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y);
+either_n!(Either26, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z);
 
 // ============================================================================
 // Convenience methods for Either<A, B>
@@ -288,10 +270,10 @@ impl<'env> ValidateFromAni<'env> for String {
 
         let obj = unsafe { AniObject::from_raw(value) };
 
-        if let Ok(cls) = env.find_class("std.core.String")
-            && env.is_instance_of(&obj, &cls).unwrap_or(false)
-        {
-            return true;
+        if let Ok(cls) = env.find_class("std.core.String") {
+            if env.is_instance_of(&obj, &cls).unwrap_or(false) {
+                return true;
+            }
         }
 
         // Primitive wrappers should not be treated as string union variants.
@@ -305,10 +287,10 @@ impl<'env> ValidateFromAni<'env> for String {
             "std.core.Float",
             "std.core.Double",
         ] {
-            if let Ok(cls) = env.find_class(numeric_cls)
-                && env.is_instance_of(&obj, &cls).unwrap_or(false)
-            {
-                return false;
+            if let Ok(cls) = env.find_class(numeric_cls) {
+                if env.is_instance_of(&obj, &cls).unwrap_or(false) {
+                    return false;
+                }
             }
         }
 

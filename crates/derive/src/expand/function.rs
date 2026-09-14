@@ -9,19 +9,18 @@ use syn::{FnArg, ItemFn, ReturnType, Signature, Type};
 #[cfg(test)]
 use crate::codegen::ClassPropertyAccessorDescriptor;
 use crate::codegen::{
-    ClassCallableDescriptor, ClassDescriptorMember, ClassMemberMetadata, ClassMemberScope,
-    ClassOpDescriptor, ClassOpKind, ClassPropertyDescriptor, ClassRegisterDescriptor,
-    EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget, WrapperBindingKind,
     emit_export_plan_ets, generate_async_blocking_wrapper, generate_async_wrapper,
-    generate_register_fn, generate_wrapper,
+    generate_register_fn, generate_wrapper, ClassCallableDescriptor, ClassDescriptorMember,
+    ClassMemberMetadata, ClassMemberScope, ClassOpDescriptor, ClassOpKind, ClassPropertyDescriptor,
+    ClassRegisterDescriptor, EtsBindingEmission, EtsBindingTarget, ExportPlan, RegisterTarget,
+    WrapperBindingKind,
 };
 use crate::parser::{BindgenAttrs, FinalizeAttrs, InitAttrs};
 use crate::types::{
-    EtsDeclKind, ani_type::AniType, ani_type::WrapperType, class_to_descriptor,
-    current_module_name, ets_public_type_for_ani_type, ets_public_type_for_syn_type,
-    function_requires_nullish_bridge, generate_ctor_signature, generate_fn_ets_binding,
-    generate_fn_signature, module_to_descriptor, namespace_to_descriptor,
-    qualify_member_descriptor,
+    ani_type::AniType, ani_type::WrapperType, class_to_descriptor, current_module_name,
+    ets_public_type_for_ani_type, ets_public_type_for_syn_type, function_requires_nullish_bridge,
+    generate_ctor_signature, generate_fn_ets_binding, generate_fn_signature, module_to_descriptor,
+    namespace_to_descriptor, qualify_member_descriptor, EtsDeclKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1907,11 +1906,9 @@ mod tests {
         let bad_get_err =
             resolve_binding_plan(&bad_get_attrs, "index_get", &bad_get_sig, binding_input)
                 .expect_err("$_get with wrong arity should fail");
-        assert!(
-            bad_get_err
-                .to_string()
-                .contains("exactly one exposed index parameter")
-        );
+        assert!(bad_get_err
+            .to_string()
+            .contains("exactly one exposed index parameter"));
 
         let bad_iterator_attrs = BindgenAttrs {
             class: Some("demo.Widget".to_string()),
@@ -1928,11 +1925,9 @@ mod tests {
             binding_input,
         )
         .expect_err("$_iterator returning primitive should fail");
-        assert!(
-            bad_iterator_err
-                .to_string()
-                .contains("concrete iterator class")
-        );
+        assert!(bad_iterator_err
+            .to_string()
+            .contains("concrete iterator class"));
 
         let bad_next_attrs = BindgenAttrs {
             class: Some("demo.WidgetIndexIterator".to_string()),
@@ -1957,11 +1952,9 @@ mod tests {
         let bad_set_err =
             resolve_binding_plan(&bad_set_attrs, "index_set", &bad_set_sig, binding_input)
                 .expect_err("$_set returning a value should fail");
-        assert!(
-            bad_set_err
-                .to_string()
-                .contains("return type must be `()` or `ani::error::Result<()>`")
-        );
+        assert!(bad_set_err
+            .to_string()
+            .contains("return type must be `()` or `ani::error::Result<()>`"));
     }
 
     #[test]
@@ -1985,10 +1978,9 @@ mod tests {
 
         let err = resolve_binding_plan(&attrs, "iterator", &sig, binding_input)
             .expect_err("static class ops should be rejected");
-        assert!(
-            err.to_string()
-                .contains("only valid on instance class members")
-        );
+        assert!(err
+            .to_string()
+            .contains("only valid on instance class members"));
     }
 
     #[test]

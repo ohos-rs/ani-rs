@@ -288,7 +288,7 @@ impl AniErrorValue {
                     .collect::<Result<BTreeMap<_, _>>>()
                     .map(AniErrorValue::Object);
             }
-            if instance_of("escompat.ArrayBuffer") || instance_of("std.core.ArrayBuffer") {
+            if instance_of("std.core.ArrayBuffer") {
                 let buffer =
                     unsafe { ArrayBuffer::from_ani(env, value.as_raw() as sys::ani_arraybuffer) }?;
                 if buffer.len() > state.limits.max_binary_bytes {
@@ -1000,7 +1000,10 @@ pub fn check_ptr<T>(ptr: *mut T, name: &'static str) -> Result<*mut T> {
 /// ANI Business Error wrapper
 ///
 /// Wraps an [`Error`] and provides methods to throw it into the ANI environment.
-/// This corresponds to the `escompat.BusinessError` class in ANI.
+/// The default materializer creates the OpenHarmony 7.0
+/// `std.core.Error` required by the ArkTS 1.2 static ABI. The Rust type keeps
+/// the `BusinessError` name because it also carries the numeric `code` used by
+/// application-facing OpenHarmony errors.
 ///
 /// # Examples
 ///
@@ -1073,7 +1076,7 @@ impl<S: AsRef<str>> BusinessError<S> {
         let raw = unsafe { self.create_error_object(env.as_raw()) }.ok_or_else(|| {
             Error::new(
                 Status::GenericFailure,
-                "failed to create ArkTS BusinessError",
+                "failed to create OpenHarmony 7.0 std.core.Error",
             )
         })?;
         Ok(unsafe { AniError::from_raw(raw) })
@@ -1091,7 +1094,6 @@ pub unsafe fn throw_error_payload(env: *mut sys::ani_env, payload: &dyn AniError
         return;
     }
     let env_ref = unsafe { Env::from_raw_unchecked(env) };
-    let fallback_message = format!("[{}] {}", payload.ani_status(), payload.ani_message());
     let has_error = crate::ani_call_ret_result!(env_ref, ExistUnhandledError, sys::ani_boolean, 0)
         .map(|r| r != 0)
         .unwrap_or(false);
@@ -1102,13 +1104,9 @@ pub unsafe fn throw_error_payload(env: *mut sys::ani_env, payload: &dyn AniError
         let _ = crate::ani_call!(env_ref, ThrowError, error);
         return;
     }
-    if let Ok(error_string) = env_ref.create_string(&fallback_message) {
-        let _ = crate::ani_call!(
-            env_ref,
-            ThrowError,
-            error_string.into_raw() as sys::ani_error
-        );
-    }
+    eprintln!(
+        "[ani] OpenHarmony 7.0 static ABI mismatch: runtime cannot materialize std.core.Error"
+    );
 }
 
 /// Materialize any custom async/sync error payload without erasing it.
@@ -1122,7 +1120,7 @@ pub fn payload_to_ani_error<'env>(
     let raw = create_error_payload(env, payload).ok_or_else(|| {
         Error::new(
             Status::GenericFailure,
-            "failed to create ArkTS BusinessError",
+            "failed to create OpenHarmony 7.0 std.core.Error",
         )
     })?;
     Ok(unsafe { AniError::from_raw(raw) })
@@ -1184,22 +1182,22 @@ fn attach_error_context(
     context.insert("metadata".to_string(), unsafe {
         AniRef::from_raw(metadata_object.into_raw() as sys::ani_ref)
     });
-    if let Some(cause) = payload.ani_cause()
-        && let Some(cause) = create_error_payload(env, cause)
-    {
-        context.insert("cause".to_string(), unsafe {
-            AniRef::from_raw(cause as sys::ani_ref)
-        });
+    if let Some(payload_cause) = payload.ani_cause() {
+        if let Some(cause) = create_error_payload(env, payload_cause) {
+            context.insert("cause".to_string(), unsafe {
+                AniRef::from_raw(cause as sys::ani_ref)
+            });
+        }
     }
     if let Ok(context) = context.to_ani(env) {
         let context = unsafe { AniRef::from_raw(context.into_raw() as sys::ani_ref) };
         let _ = env.set_property_by_name_ref(object, "cause", &context);
     }
-    if let Some(stack) = payload.ani_stack()
-        && let Ok(stack) = env.create_string(stack)
-    {
-        let stack = unsafe { AniRef::from_raw(stack.into_raw() as sys::ani_ref) };
-        let _ = env.set_property_by_name_ref(object, "stack", &stack);
+    if let Some(stack) = payload.ani_stack() {
+        if let Ok(stack) = env.create_string(stack) {
+            let stack = unsafe { AniRef::from_raw(stack.into_raw() as sys::ani_ref) };
+            let _ = env.set_property_by_name_ref(object, "stack", &stack);
+        }
     }
 }
 
@@ -1214,47 +1212,20 @@ fn create_error_payload(
     let message = payload.ani_message();
     let code = payload.ani_code();
 
-    // Current OpenHarmony runtimes expose the ECMAScript-compatible
-    // throwable as `std.core.Error`. Its constructor takes the message and
-    // an optional ErrorOptions value; `undefined` is the canonical value
-    // when no options are supplied.
-    if let Ok(err_cls) = env_ref.find_class("std.core.Error")
-        && let Ok(err_ctor) =
-            env_ref.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
-        && let Ok(text) = env_ref.create_string(message)
-        && let Ok(undefined) = env_ref.get_undefined_object()
-    {
-        let args = [
-            crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
-            crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
-        ];
-        if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
-            set_error_metadata(env_ref, &err_obj, status, message, code);
-            attach_error_context(env_ref, &err_obj, payload);
-            return Some(err_obj.into_raw() as sys::ani_error);
-        }
-    }
-
-    // Keep compatibility with older runtimes that exposed only the
-    // no-argument BusinessError/escompat.Error constructors.
-    for (class_name, error_name) in [
-        ("@ohos.base.BusinessError", "BusinessError"),
-        ("escompat.Error", "Error"),
-    ] {
-        let err_cls = match env_ref.find_class(class_name) {
-            Ok(cls) => cls,
-            Err(_) => continue,
-        };
-        let err_ctor = match env_ref.find_constructor(&err_cls, ":") {
-            Ok(ctor) => ctor,
-            Err(_) => continue,
-        };
-        let err_obj = match env_ref.new_object(&err_cls, &err_ctor, &[]) {
-            Ok(obj) => obj,
-            Err(_) => continue,
-        };
-
-        let _ = error_name;
+    // OpenHarmony-v7.0-Release defines the ArkTS 1.2 static throwable as
+    // `std.core.Error`. The release ANI tests use this exact constructor and
+    // pass `undefined` when no ErrorOptions value is supplied.
+    let err_cls = env_ref.find_class("std.core.Error").ok()?;
+    let err_ctor = env_ref
+        .find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
+        .ok()?;
+    let text = env_ref.create_string(message).ok()?;
+    let undefined = env_ref.get_undefined_object().ok()?;
+    let args = [
+        crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
+        crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
+    ];
+    if let Ok(err_obj) = env_ref.new_object(&err_cls, &err_ctor, &args) {
         set_error_metadata(env_ref, &err_obj, status, message, code);
         attach_error_context(env_ref, &err_obj, payload);
         return Some(err_obj.into_raw() as sys::ani_error);

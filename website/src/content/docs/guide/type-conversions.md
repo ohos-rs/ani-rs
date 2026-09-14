@@ -28,7 +28,7 @@ description: Rust 类型、ANI 签名与生成 ETS 类型之间的映射。
 | `f64` | `D` | `double` |
 | `String` | string reference | `string` |
 | `BigInt` | `Lstd/core/BigInt;` | `bigint` |
-| `SystemTime` | `Lescompat/Date;` | `Date` |
+| `SystemTime` | `Lstd/core/Date;` | `Date` |
 
 无符号和平台宽度整数都执行范围检查，不会使用 `as` 静默截断。`u8`、`u32`、`usize` 和 `isize` 在 ArkTS 侧使用更宽的有符号类型；`u64`、`i128` 和 `u128` 使用 BigInt。Rust `char` 通过单 Unicode scalar 字符串传输，因此 `🦀` 等非 BMP 字符不会被截断为一个 UTF-16 code unit。
 
@@ -56,7 +56,7 @@ pub fn bigint_from_text(value: String) -> Result<BigInt> {
 
 ## Date
 
-`std::time::SystemTime` 双向映射 ArkTS `Date`（`escompat.Date`），以带符号的 epoch 毫秒为传输表示；早于 Unix epoch 的时间映射为负毫秒。亚毫秒精度会被截断，非有限或超出 ArkTS `Date` 范围（±8.64e15 ms）的毫秒值会返回错误而不是静默截断：
+`std::time::SystemTime` 双向映射 ArkTS `Date`（`std.core.Date`），以带符号的 epoch 毫秒为传输表示；早于 Unix epoch 的时间映射为负毫秒。亚毫秒精度会被截断，非有限或超出 ArkTS `Date` 范围（±8.64e15 ms）的毫秒值会返回错误而不是静默截断：
 
 ```rust
 use std::time::SystemTime;
@@ -153,7 +153,7 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 
 ## TypedArray
 
-`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `OwnedTypedArray<T>`（兼容名 `TypedArray<T>`）的别名。公开 ABI 使用对应的 ArkTS 原生 TypedArray class，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
+`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `OwnedTypedArray<T>`（兼容名 `TypedArray<T>`）的别名。公开 ABI 使用 `OpenHarmony-v7.0-Release` 定义的 `std.core` 原生 TypedArray class，例如 `std.core.Uint16Array`，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
 
 ```rust
 use ani::prelude::*;

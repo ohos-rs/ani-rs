@@ -87,7 +87,9 @@ async fn authenticate(token: String)
 }
 ```
 
-同步 `Result`、`#[ani(async)]`、`AsyncTask`、`Deferred`、`ThreadsafeFunction` 和 async stream 共用这一协议。默认 materializer 创建 ArkTS `Error`：`name` 保存 status，`code` 和 `message` 保持业务值，`stack`、嵌套 `cause` 与 typed metadata 不被字符串化。自定义错误还可以覆盖对象安全的 `materialize_ani_error`，直接构造应用自己的 Error subclass。
+同步 `Result`、`#[ani(async)]`、`AsyncTask`、`Deferred`、`ThreadsafeFunction` 和 async stream 共用这一协议。默认 materializer 按 `OpenHarmony-v7.0-Release` 创建 `std.core.Error`，使用构造器签名 `C{std.core.String}C{std.core.ErrorOptions}:`；`name` 保存 status，`code` 和 `message` 保持业务值，`stack`、嵌套 `cause` 与 typed metadata 不被字符串化。自定义错误还可以覆盖对象安全的 `materialize_ani_error`，直接构造应用自己的 Error subclass。
+
+编译器 stdlib 与设备 boot stdlib 必须来自同一 OpenHarmony 7.0 ABI。运行时缺少 `std.core.Error` 时，ani-rs 会报告 static ABI mismatch，不会回退到已经从 7.0 stdlib 删除的 `escompat.Error`。
 
 ArkTS Promise rejection 进入 Rust 时，生成的 ETS continuation bridge 会把原始 rejection 提升为 global ref，同时读取 name/message/code/stack/cause/metadata。若它再次跨回同一 VM，会优先返回完全相同的 rejection 对象，因此自定义 Error 类型和未知业务字段不会被固定框架结构抹掉。
 

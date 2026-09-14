@@ -14,7 +14,7 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::conversions::{Deferred, PromiseRaw};
-use crate::error::{BusinessError, Error, Result, Status, check_status};
+use crate::error::{check_status, BusinessError, Error, Result, Status};
 use crate::sys;
 use crate::types::*;
 use crate::vm::AniVm;

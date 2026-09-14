@@ -3,9 +3,9 @@
 //! Parses `#[ani(...)]` macro attributes into structured data.
 
 use syn::{
-    Attribute, Ident, LitStr, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
+    Attribute, Ident, LitStr, Token,
 };
 
 // ============================================================================

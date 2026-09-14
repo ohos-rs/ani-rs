@@ -141,12 +141,8 @@ export native function is_terminal(status: Status): boolean;
 export native function next_status(status: Status): Status;
 export native function status_name(status: Status): string;
 export type DirectionalMessage = DirectionalMessageInput | DirectionalMessageOutput;
-export type DirectionalMessageInput =
-  | DirectionalMessageInputLegacyText
-  | DirectionalMessageInputRenamedField;
-export type DirectionalMessageOutput =
-  | DirectionalMessageOutputRenamedField
-  | DirectionalMessageOutputGenerated;
+export type DirectionalMessageInput = DirectionalMessageInputLegacyText | DirectionalMessageInputRenamedField;
+export type DirectionalMessageOutput = DirectionalMessageOutputRenamedField | DirectionalMessageOutputGenerated;
 export type Envelope<T> = EnvelopeInput<T> | EnvelopeOutput<T>;
 export type EnvelopeInput<T> = EnvelopeInputValue<T> | EnvelopeInputEmpty<T>;
 export type EnvelopeOutput<T> = EnvelopeOutputValue<T> | EnvelopeOutputEmpty<T>;

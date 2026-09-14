@@ -101,6 +101,8 @@ static INIT_AFTER_BINDINGS_CALLBACKS: RwLock<Vec<InitRegisterEntry>> = RwLock::n
 static FINALIZE_CALLBACKS: RwLock<Vec<FinalizeRegisterEntry>> = RwLock::new(Vec::new());
 /// Deferred native bindings collected from generated per-function callbacks.
 static PENDING_BINDINGS: RwLock<Vec<PendingBindingEntry>> = RwLock::new(Vec::new());
+/// Deferred support bindings that are installed only when their ETS declarations exist.
+static PENDING_OPTIONAL_BINDINGS: RwLock<Vec<PendingBindingEntry>> = RwLock::new(Vec::new());
 
 /// Register a module export callback
 ///
@@ -249,6 +251,31 @@ pub fn queue_module_binding(
     queue_binding(BindingTarget::Module(descriptor), name, signature, pointer)
 }
 
+/// Queue a generated support binding that a hand-written ETS module may omit.
+pub(crate) fn queue_optional_module_binding(
+    descriptor: &'static str,
+    name: &'static str,
+    signature: &'static str,
+    pointer: *const c_void,
+) -> sys::ani_status {
+    if !name.ends_with('\0') || !signature.ends_with('\0') {
+        eprintln!(
+            "[ani] rejected optional binding without NUL terminator: name={name:?} signature={signature:?}"
+        );
+        return sys::ani_status_ANI_INVALID_ARGS;
+    }
+    PENDING_OPTIONAL_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_OPTIONAL_BINDINGS")
+        .push(PendingBindingEntry {
+            target: BindingTarget::Module(descriptor),
+            name,
+            signature,
+            pointer: pointer as usize,
+        });
+    sys::ani_status_ANI_OK
+}
+
 /// Queue a namespace native function binding.
 #[doc(hidden)]
 pub fn queue_namespace_binding(
@@ -286,7 +313,6 @@ const DEFMODULE_PREFIX: &str = "@defModule.";
 
 fn is_builtin_descriptor(descriptor: &str) -> bool {
     descriptor.starts_with("std.")
-        || descriptor.starts_with("escompat.")
         || descriptor.starts_with("arkts.")
         || descriptor.starts_with("@")
 }
@@ -496,6 +522,64 @@ pub unsafe fn execute_before_bindings_inits(env: *mut sys::ani_env) -> sys::ani_
     sys::ani_status_ANI_OK
 }
 
+unsafe fn bind_optional_module_groups(
+    env: *mut sys::ani_env,
+    pending: &[PendingBindingEntry],
+    debug: bool,
+) -> sys::ani_status {
+    let grouped = match prepare_grouped_bindings(pending, debug) {
+        Ok(grouped) => grouped,
+        Err(status) => return status,
+    };
+    let api = unsafe {
+        // SAFETY: `env` comes from ANI entrypoints and is expected to be a valid
+        // pointer to `ani_env`, whose first field points to API table.
+        &*(*env)
+    };
+
+    for (target, entries) in grouped {
+        let BindingTarget::Module(descriptor) = target else {
+            return sys::ani_status_ANI_INVALID_ARGS;
+        };
+        let functions = entries
+            .iter()
+            .map(|entry| sys::ani_native_function {
+                name: entry.name.as_ptr() as *const c_char,
+                signature: entry.signature.as_ptr() as *const c_char,
+                pointer: entry.pointer as *const c_void,
+            })
+            .collect::<Vec<_>>();
+        let (find_status, module) =
+            unsafe { find_module_with_fallback(api, env, descriptor, debug) };
+        let status = if find_status != sys::ani_status_ANI_OK {
+            find_status
+        } else if module.is_null() {
+            sys::ani_status_ANI_NOT_FOUND
+        } else {
+            match api.Module_BindNativeFunctions {
+                Some(bind) => unsafe { bind(env, module, functions.as_ptr(), functions.len()) },
+                None => sys::ani_status_ANI_ERROR,
+            }
+        };
+
+        if debug {
+            eprintln!(
+                "[ani] optional module bind descriptor={descriptor} count={} status={status}",
+                functions.len()
+            );
+        }
+        if status == sys::ani_status_ANI_NOT_FOUND {
+            unsafe { reset_pending_error_if_any(api, env, debug) };
+            continue;
+        }
+        if status != sys::ani_status_ANI_OK {
+            return status;
+        }
+    }
+
+    sys::ani_status_ANI_OK
+}
+
 /// Execute all registered callbacks
 ///
 /// Called by `ANI_Constructor` to bind all native functions
@@ -508,6 +592,10 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
     PENDING_BINDINGS
         .write()
         .expect("Failed to acquire write lock for PENDING_BINDINGS")
+        .clear();
+    PENDING_OPTIONAL_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_OPTIONAL_BINDINGS")
         .clear();
 
     if debug {
@@ -551,7 +639,10 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         if debug {
             eprintln!("[ani] no pending bindings");
         }
-        return sys::ani_status_ANI_OK;
+        let pending = PENDING_OPTIONAL_BINDINGS
+            .read()
+            .expect("Failed to acquire read lock for PENDING_OPTIONAL_BINDINGS");
+        return unsafe { bind_optional_module_groups(env, &pending, debug) };
     }
 
     let api = unsafe {
@@ -634,15 +725,17 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     } else if module.is_null() {
                         sys::ani_status_ANI_NOT_FOUND
                     } else {
-                        if debug && let Some(find_function) = api.Module_FindFunction {
-                            for (idx, f) in functions.iter().enumerate() {
-                                let mut found: sys::ani_function = core::ptr::null_mut();
-                                let check_status = unsafe {
-                                    find_function(env, module, f.name, f.signature, &mut found)
-                                };
-                                eprintln!(
-                                    "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
-                                );
+                        if debug {
+                            if let Some(find_function) = api.Module_FindFunction {
+                                for (idx, f) in functions.iter().enumerate() {
+                                    let mut found: sys::ani_function = core::ptr::null_mut();
+                                    let check_status = unsafe {
+                                        find_function(env, module, f.name, f.signature, &mut found)
+                                    };
+                                    eprintln!(
+                                        "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
+                                    );
+                                }
                             }
                         }
                         match api.Module_BindNativeFunctions {
@@ -665,7 +758,10 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
         }
     }
 
-    sys::ani_status_ANI_OK
+    let pending = PENDING_OPTIONAL_BINDINGS
+        .read()
+        .expect("Failed to acquire read lock for PENDING_OPTIONAL_BINDINGS");
+    unsafe { bind_optional_module_groups(env, &pending, debug) }
 }
 
 /// Execute init callbacks that should run after native binding registration.
@@ -716,15 +812,56 @@ pub fn clear_registrations() {
         .write()
         .expect("Failed to acquire write lock for PENDING_BINDINGS")
         .clear();
+    PENDING_OPTIONAL_BINDINGS
+        .write()
+        .expect("Failed to acquire write lock for PENDING_OPTIONAL_BINDINGS")
+        .clear();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard};
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+    static RESET_ERROR_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn find_test_module(
+        _env: *mut sys::ani_env,
+        _descriptor: *const c_char,
+        result: *mut sys::ani_module,
+    ) -> sys::ani_status {
+        unsafe {
+            *result = ptr::dangling_mut();
+        }
+        sys::ani_status_ANI_OK
+    }
+
+    unsafe extern "C" fn reject_test_bindings(
+        _env: *mut sys::ani_env,
+        _module: sys::ani_module,
+        _functions: *const sys::ani_native_function,
+        _nr_functions: sys::ani_size,
+    ) -> sys::ani_status {
+        sys::ani_status_ANI_NOT_FOUND
+    }
+
+    unsafe extern "C" fn report_test_error(
+        _env: *mut sys::ani_env,
+        result: *mut sys::ani_boolean,
+    ) -> sys::ani_status {
+        unsafe {
+            *result = 1;
+        }
+        sys::ani_status_ANI_OK
+    }
+
+    unsafe extern "C" fn reset_test_error(_env: *mut sys::ani_env) -> sys::ani_status {
+        RESET_ERROR_CALLS.fetch_add(1, Ordering::SeqCst);
+        sys::ani_status_ANI_OK
+    }
 
     struct TestEnvVarGuard {
         key: String,
@@ -789,6 +926,19 @@ mod tests {
         let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let candidates = descriptor_candidates("std.core.String");
         assert_eq!(candidates, vec!["std.core.String".to_string()]);
+    }
+
+    #[test]
+    fn removed_escompat_namespace_is_not_treated_as_a_runtime_builtin() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
+        let candidates = descriptor_candidates("escompat.Legacy");
+        assert_eq!(
+            candidates,
+            vec![
+                "escompat.Legacy".to_string(),
+                "@defModule.escompat.Legacy".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -895,6 +1045,52 @@ mod tests {
                 ("zeta\0", "I:I\0", 3)
             ]
         );
+    }
+
+    #[test]
+    fn missing_optional_module_bindings_do_not_fail_registration() {
+        let _guard = TEST_LOCK.lock().expect("lock test mutex");
+        clear_registrations();
+        RESET_ERROR_CALLS.store(0, Ordering::SeqCst);
+
+        assert_eq!(
+            queue_module_binding(
+                "demo.Entry",
+                "answer\0",
+                ":I\0",
+                std::ptr::dangling::<c_void>(),
+            ),
+            sys::ani_status_ANI_OK
+        );
+        assert_eq!(
+            queue_optional_module_binding(
+                "demo.Entry",
+                "__ani_rs_promise_resolve\0",
+                "lC{std.core.Object}:\0",
+                2usize as *const c_void,
+            ),
+            sys::ani_status_ANI_OK
+        );
+        assert_eq!(PENDING_BINDINGS.read().expect("read required").len(), 1);
+        let optional = PENDING_OPTIONAL_BINDINGS.read().expect("read optional");
+        assert_eq!(optional.len(), 1);
+
+        // SAFETY: Null function-pointer slots are valid `Option::None` values.
+        // The four slots used by the binding path are populated below.
+        let mut api: sys::__ani_interaction_api = unsafe { std::mem::zeroed() };
+        api.FindModule = Some(find_test_module);
+        api.Module_BindNativeFunctions = Some(reject_test_bindings);
+        api.ExistUnhandledError = Some(report_test_error);
+        api.ResetError = Some(reset_test_error);
+        let api_pointer: sys::ani_env = &api;
+        let mut env = api_pointer;
+
+        let status = unsafe { bind_optional_module_groups(&mut env, &optional, false) };
+        assert_eq!(status, sys::ani_status_ANI_OK);
+        assert_eq!(RESET_ERROR_CALLS.load(Ordering::SeqCst), 1);
+
+        drop(optional);
+        clear_registrations();
     }
 
     #[test]

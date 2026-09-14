@@ -77,8 +77,8 @@ use crate::sys;
 use crate::types::*;
 use crate::vm::AniVm;
 
-use super::AnyValue;
 use super::traits::{FromAni, ToAni, TypeInfo};
+use super::AnyValue;
 
 // ============================================================================
 // Ref<T> - Typed Global Reference

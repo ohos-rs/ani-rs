@@ -374,7 +374,7 @@ impl<'a> ToAniArg for crate::types::AniClass<'a> {
 // Boxing Helpers
 // ============================================================================
 
-use crate::types::{AniObject, ani_value_boolean, ani_value_double, ani_value_int, ani_value_long};
+use crate::types::{ani_value_boolean, ani_value_double, ani_value_int, ani_value_long, AniObject};
 
 /// Create a boxed Int value
 fn create_boxed_int<'a>(env: &Env<'a>, value: i32) -> Result<AniObject<'a>> {
@@ -727,10 +727,10 @@ impl<Return> ThreadsafeCallState<Return> {
             *slot = Some(result);
             self.ready.notify_all();
         }
-        if let Ok(mut waker) = self.waker.lock()
-            && let Some(waker) = waker.take()
-        {
-            waker.wake();
+        if let Ok(mut waker) = self.waker.lock() {
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
         }
     }
 }
@@ -1050,10 +1050,10 @@ where
             .map(|queue| !queue.is_empty())
             .unwrap_or(false);
         if !has_more || inner.draining.swap(true, Ordering::AcqRel) {
-            if inner.closed.load(Ordering::Acquire)
-                && let Ok(mut registration) = inner.registration.lock()
-            {
-                registration.take();
+            if inner.closed.load(Ordering::Acquire) {
+                if let Ok(mut registration) = inner.registration.lock() {
+                    registration.take();
+                }
             }
             return;
         }

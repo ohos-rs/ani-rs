@@ -50,12 +50,13 @@ mod imp {
     }
 
     fn create_runtime() -> Runtime {
-        if IS_USER_DEFINED_RT.get().copied().unwrap_or(false)
-            && let Some(user_defined_rt) = USER_DEFINED_RT
+        if IS_USER_DEFINED_RT.get().copied().unwrap_or(false) {
+            if let Some(user_defined_rt) = USER_DEFINED_RT
                 .get()
                 .and_then(|rt| rt.write().ok().and_then(|mut rt| rt.take()))
-        {
-            return user_defined_rt;
+            {
+                return user_defined_rt;
+            }
         }
 
         ::tokio::runtime::Builder::new_multi_thread()
@@ -317,11 +318,12 @@ mod imp {
     /// Refill the built-in Tokio helper slot after a combined-build drain.
     /// Gated on `RT_CONSTRUCTED` so this never forces a first construction.
     pub(crate) fn refill_drained_tokio_runtime() {
-        if RT_CONSTRUCTED.load(Ordering::SeqCst)
-            && let Ok(mut rt) = RT.write()
-            && rt.is_none()
-        {
-            *rt = Some(create_runtime());
+        if RT_CONSTRUCTED.load(Ordering::SeqCst) {
+            if let Ok(mut rt) = RT.write() {
+                if rt.is_none() {
+                    *rt = Some(create_runtime());
+                }
+            }
         }
     }
 
@@ -346,10 +348,10 @@ mod imp {
     /// [`crate::async_runtime::start_async_runtime`] on the built-in Tokio
     /// path, where constructing the helper runtime is expected.
     pub(crate) fn ensure_tokio_helper_runtime() {
-        if let Ok(mut rt) = RT.write()
-            && rt.is_none()
-        {
-            *rt = Some(create_runtime());
+        if let Ok(mut rt) = RT.write() {
+            if rt.is_none() {
+                *rt = Some(create_runtime());
+            }
         }
     }
 

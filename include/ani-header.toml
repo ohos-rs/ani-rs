@@ -1,9 +1,9 @@
 # Source metadata for the checked-in ANI C API contract.
 repository = "https://gitcode.com/openharmony/interface_sdk_c"
-revision = "860f3d9974f6fa61b8e4c2ebd3fd3bc7cdcff921"
+revision = "5606a8c25984d281d22f4f9f83d6c5111164edca"
 path = "ani/ani.h"
 minimum_api_level = 23
-default_api_level = 24
+default_api_level = 26
 header_api_level = 26
-validated_qemu_release = "ohos-qemu-vpn-20260728"
+validated_qemu_release = "OpenHarmony-v7.0-Release"
 bindgen = "0.72.1"

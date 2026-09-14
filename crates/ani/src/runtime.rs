@@ -2,15 +2,15 @@
 
 use std::time::Duration;
 
-use crate::async_runtime::{AsyncRuntimeMetrics, async_runtime_metrics};
+use crate::async_runtime::{async_runtime_metrics, AsyncRuntimeMetrics};
 use crate::conversions::{
     live_async_stream_count, live_deferred_count, live_managed_resource_count,
     live_promise_observer_count, pending_async_stream_waiter_count,
     pending_threadsafe_function_call_count,
 };
-use crate::env::{ReferenceMetrics, reference_metrics};
+use crate::env::{reference_metrics, ReferenceMetrics};
 use crate::error::{Error, Result, Status};
-use crate::scheduler::{SchedulerMetrics, shared};
+use crate::scheduler::{shared, SchedulerMetrics};
 
 /// One process-wide snapshot of resources owned by ani-rs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

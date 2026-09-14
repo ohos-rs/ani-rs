@@ -54,7 +54,7 @@ use crate::error::{
 use crate::scheduler::{RuntimeCancellable, RuntimeRegistration};
 use crate::sys;
 use crate::types::{
-    AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef, ani_value_long, ani_value_ref,
+    ani_value_long, ani_value_ref, AniError, AniObject, AniRef, AniResolver, AniString, GlobalRef,
 };
 use crate::vm::AniVm;
 use crate::{ani_call, ani_call_2ret};
@@ -93,10 +93,10 @@ fn promise_observers() -> &'static Mutex<PromiseObserverRegistry> {
 /// before native bindings are installed.
 #[doc(hidden)]
 pub fn register_promise_bridge_module(module: &'static str) {
-    if let Ok(mut modules) = promise_bridge_modules().write()
-        && !modules.contains(&module)
-    {
-        modules.push(module);
+    if let Ok(mut modules) = promise_bridge_modules().write() {
+        if !modules.contains(&module) {
+            modules.push(module);
+        }
     }
 }
 
@@ -117,7 +117,7 @@ pub fn queue_registered_promise_bridges() -> sys::ani_status {
                 promise_bridge_reject as *const () as *const c_void,
             ),
         ] {
-            let status = crate::module_register::queue_module_binding(
+            let status = crate::module_register::queue_optional_module_binding(
                 module,
                 name,
                 PROMISE_BRIDGE_SETTLE_SIGNATURE,
@@ -127,7 +127,7 @@ pub fn queue_registered_promise_bridges() -> sys::ani_status {
                 return status;
             }
         }
-        let status = crate::module_register::queue_module_binding(
+        let status = crate::module_register::queue_optional_module_binding(
             module,
             RUNTIME_TASK_CANCEL,
             PROMISE_BRIDGE_SETTLE_SIGNATURE,
@@ -150,10 +150,10 @@ fn register_promise_observer(observer: &Arc<dyn PromiseBridgeObserver>) -> Resul
 }
 
 fn unregister_promise_observer(token: u64) {
-    if token != 0
-        && let Ok(mut observers) = promise_observers().lock()
-    {
-        observers.remove(&token);
+    if token != 0 {
+        if let Ok(mut observers) = promise_observers().lock() {
+            observers.remove(&token);
+        }
     }
 }
 
@@ -703,10 +703,10 @@ impl<T, E: Send + 'static> PromiseFutureState<T, E> {
         if let Ok(mut slot) = self.result.lock() {
             *slot = Some(result);
         }
-        if let Ok(mut waker) = self.waker.lock()
-            && let Some(waker) = waker.take()
-        {
-            waker.wake();
+        if let Ok(mut waker) = self.waker.lock() {
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
         }
     }
 
@@ -899,10 +899,10 @@ impl<T: PromiseFutureValue, E: Send + 'static> std::future::Future for PromiseFu
             let ready = result.take();
             // Publish the waker while holding the result lock so completion
             // cannot occur between the empty check and waker registration.
-            if ready.is_none()
-                && let Ok(mut waker) = self.state.waker.lock()
-            {
-                *waker = Some(context.waker().clone());
+            if ready.is_none() {
+                if let Ok(mut waker) = self.state.waker.lock() {
+                    *waker = Some(context.waker().clone());
+                }
             }
             ready
         } else {
@@ -1095,10 +1095,10 @@ fn decode_promise_rejection(
     error.set_stack(string_property("stack"));
     error.preserve_rejection(RefContainer::new(env, &value).ok());
 
-    if let Ok(context) = env.get_property_by_name_ref(&error_object, "cause")
-        && !env.is_nullish(&context).unwrap_or(true)
-    {
-        decode_error_context(env, &context, &mut error, depth, graph);
+    if let Ok(context) = env.get_property_by_name_ref(&error_object, "cause") {
+        if !env.is_nullish(&context).unwrap_or(true) {
+            decode_error_context(env, &context, &mut error, depth, graph);
+        }
     }
     error
 }
@@ -1651,35 +1651,15 @@ pub(crate) fn create_promise_error<'a>(
     env: &Env<'a>,
     message: &str,
 ) -> Result<crate::types::AniError<'a>> {
-    if let Ok(err_cls) = env.find_class("std.core.Error")
-        && let Ok(err_ctor) =
-            env.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")
-    {
-        let text = env.create_string(message)?;
-        let undefined = env.get_undefined_object()?;
-        let args = [
-            crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
-            crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
-        ];
-        let err_obj = env.new_object(&err_cls, &err_ctor, &args)?;
-        return Ok(unsafe {
-            crate::types::AniError::from_raw(err_obj.into_raw() as sys::ani_error)
-        });
-    }
-
-    // Compatibility fallback for older runtimes.
-    let err_cls = env
-        .find_class("escompat.Error")
-        .or_else(|_| env.find_class("@ohos.base.BusinessError"))?;
-    let err_ctor = env.find_constructor(&err_cls, ":")?;
-    let err_obj = env.new_object(&err_cls, &err_ctor, &[])?;
-
-    let name = env.create_string("Error")?;
+    let err_cls = env.find_class("std.core.Error")?;
+    let err_ctor = env.find_constructor(&err_cls, "C{std.core.String}C{std.core.ErrorOptions}:")?;
     let text = env.create_string(message)?;
-    let name_ref = unsafe { AniRef::from_raw(name.into_raw() as sys::ani_ref) };
-    let text_ref = unsafe { AniRef::from_raw(text.into_raw() as sys::ani_ref) };
-    let _ = env.set_property_by_name_ref(&err_obj, "name", &name_ref);
-    let _ = env.set_property_by_name_ref(&err_obj, "message", &text_ref);
+    let undefined = env.get_undefined_object()?;
+    let args = [
+        crate::types::ani_value_ref(text.as_raw() as sys::ani_ref),
+        crate::types::ani_value_ref(undefined.as_raw() as sys::ani_ref),
+    ];
+    let err_obj = env.new_object(&err_cls, &err_ctor, &args)?;
 
     Ok(unsafe { crate::types::AniError::from_raw(err_obj.into_raw() as sys::ani_error) })
 }

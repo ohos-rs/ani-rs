@@ -3,15 +3,15 @@ title: Cargo Features
 description: 按需启用 ani-rs 的错误集成、异步运行时和 Tokio 功能。
 ---
 
-`ani` 默认启用 `api24`。同步函数、类型转换和引用 API 不需要额外配置。
+`ani` 默认启用 `api26`，对应 `OpenHarmony-v7.0-Release`。同步函数、类型转换和引用 API 不需要额外配置。
 
 ## 功能列表
 
 | Feature | 作用 |
 | --- | --- |
 | `api23` | API 23 兼容路径，不使用 API 24 primitive boxing entry point |
-| `api24` | API 24+ 原生 primitive boxing；默认 profile |
-| `api26` | API 26 发布/QEMU 验证 profile，包含 `api24` |
+| `api24` | API 24+ 原生 primitive boxing；仅用于显式兼容构建 |
+| `api26` | OpenHarmony 7.0 / API 26 发布 profile，包含 `api24`；默认 profile |
 | `error_anyhow` | 将 `anyhow::Error` 转换为 `ani::Error` |
 | `serde-json` | 启用 `Json<T>`、`serde_json::Value` 与结构化 `AniEnum` 的原生 Object bridge |
 | `async-runtime` | 执行器无关的 `AsyncRuntime` / `RuntimeTask` SPI；可注册完全自定义 backend |

@@ -44,7 +44,11 @@ impl ToAniDirect for bool {
     type Output = sys::ani_boolean;
 
     fn to_ani_direct(self) -> Self::Output {
-        if self { 1 } else { 0 }
+        if self {
+            1
+        } else {
+            0
+        }
     }
 }
 

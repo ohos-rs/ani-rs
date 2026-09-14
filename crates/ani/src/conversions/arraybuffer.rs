@@ -291,7 +291,7 @@ impl DerefMut for ArrayBuffer {
 
 impl TypeInfo for ArrayBuffer {
     fn type_signature() -> &'static str {
-        "Lescompat/ArrayBuffer;"
+        "Lstd/core/ArrayBuffer;"
     }
 
     fn ani_c_type() -> &'static str {
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_arraybuffer_type_signature() {
-        assert_eq!(ArrayBuffer::type_signature(), "Lescompat/ArrayBuffer;");
+        assert_eq!(ArrayBuffer::type_signature(), "Lstd/core/ArrayBuffer;");
         assert_eq!(ArrayBuffer::ani_c_type(), "ani_arraybuffer");
     }
 

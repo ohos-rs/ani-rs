@@ -38,7 +38,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -217,10 +217,10 @@ impl RuntimeTaskControlInner {
         if let Some(reject) = reject {
             reject(error);
         }
-        if let Ok(mut waker) = self.waker.lock()
-            && let Some(waker) = waker.take()
-        {
-            waker.wake();
+        if let Ok(mut waker) = self.waker.lock() {
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
         }
         self.finish_terminal(true);
         true
@@ -230,11 +230,11 @@ impl RuntimeTaskControlInner {
         if let Ok(mut registration) = self.registration.lock() {
             registration.take();
         }
-        if let Ok(mut tokens) = self.bridge_tokens.lock()
-            && let Ok(mut registry) = cancel_bridge_registry().lock()
-        {
-            for token in tokens.drain(..) {
-                registry.remove(&token);
+        if let Ok(mut tokens) = self.bridge_tokens.lock() {
+            if let Ok(mut registry) = cancel_bridge_registry().lock() {
+                for token in tokens.drain(..) {
+                    registry.remove(&token);
+                }
             }
         }
         LIVE_TASKS.fetch_sub(1, Ordering::AcqRel);
@@ -246,12 +246,13 @@ impl RuntimeTaskControlInner {
     }
 
     fn register_waker(&self, waker: &Waker) {
-        if let Ok(mut slot) = self.waker.lock()
-            && slot
+        if let Ok(mut slot) = self.waker.lock() {
+            if slot
                 .as_ref()
                 .is_none_or(|current| !current.will_wake(waker))
-        {
-            *slot = Some(waker.clone());
+            {
+                *slot = Some(waker.clone());
+            }
         }
     }
 }
@@ -1449,11 +1450,11 @@ impl ShutdownWatchdog {
 
 impl Drop for ShutdownWatchdog {
     fn drop(&mut self) {
-        if let Some(state) = self.0.take()
-            && let Ok(mut finished) = state.finished.lock()
-        {
-            *finished = true;
-            state.changed.notify_all();
+        if let Some(state) = self.0.take() {
+            if let Ok(mut finished) = state.finished.lock() {
+                *finished = true;
+                state.changed.notify_all();
+            }
         }
     }
 }
@@ -1676,11 +1677,9 @@ mod tests {
         let first_probe = Arc::new(BackendProbe::default());
         let second_probe = Arc::new(BackendProbe::default());
 
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::new(&first_probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::new(&first_probe)))
+            .is_ok());
 
         let (reason, rejected) = registry
             .try_register(Box::new(MockRuntime::new(&second_probe)))
@@ -1731,11 +1730,9 @@ mod tests {
         assert!(registry.commit_selection(false).is_none());
 
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::new(&probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .is_ok());
         assert!(registry.commit_selection(false).is_some());
     }
 
@@ -1780,11 +1777,9 @@ mod tests {
     fn pre_activation_dispatch_starts_backend_before_first_spawn() {
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::new(&probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .is_ok());
 
         let backend = registry
             .commit_selection(cfg!(feature = "tokio_rt"))
@@ -1856,15 +1851,13 @@ mod tests {
         let (deactivate_called_tx, deactivate_called_rx) = mpsc::channel();
 
         let registry = AsyncRuntimeRegistry::new();
-        assert!(
-            registry
-                .try_register(Box::new(GatedStartRuntime {
-                    events: Arc::clone(&events),
-                    start_entered: start_entered_tx,
-                    release_start: Mutex::new(release_start_rx),
-                }))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(GatedStartRuntime {
+                events: Arc::clone(&events),
+                start_entered: start_entered_tx,
+                release_start: Mutex::new(release_start_rx),
+            }))
+            .is_ok());
 
         std::thread::scope(|scope| {
             let starter = scope.spawn(|| assert!(registry.activate()));
@@ -1905,11 +1898,9 @@ mod tests {
     fn completed_teardown_revokes_pending_start_claim() {
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::new(&probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .is_ok());
 
         registry.lock_state().phase = LifecyclePhase::Starting;
         assert!(registry.deactivate());
@@ -1935,11 +1926,9 @@ mod tests {
     fn start_error_triggers_shutdown_rollback() {
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::failing_start(&probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::failing_start(&probe)))
+            .is_ok());
 
         assert!(registry.activate());
         assert_eq!(probe.start_calls.load(Ordering::SeqCst), 1);
@@ -2003,14 +1992,12 @@ mod tests {
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
         let payload_drops = Arc::new(AtomicUsize::new(0));
-        assert!(
-            registry
-                .try_register(Box::new(PanicOnFirstStartRuntime {
-                    probe: Arc::clone(&probe),
-                    payload_drops: Arc::clone(&payload_drops),
-                }))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(PanicOnFirstStartRuntime {
+                probe: Arc::clone(&probe),
+                payload_drops: Arc::clone(&payload_drops),
+            }))
+            .is_ok());
 
         let activated = catch_unwind(AssertUnwindSafe(|| registry.activate()))
             .expect("a panicking payload Drop must not unwind out of the activate path");
@@ -2030,11 +2017,9 @@ mod tests {
     fn within_runtime_starts_dormant_backend_before_enter() {
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(MockRuntime::new(&probe)))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(MockRuntime::new(&probe)))
+            .is_ok());
         assert_eq!(probe.start_calls.load(Ordering::SeqCst), 0);
 
         let ran = registry.within_runtime(|| true);
@@ -2085,13 +2070,11 @@ mod tests {
 
         let registry = AsyncRuntimeRegistry::new();
         let probe = Arc::new(BackendProbe::default());
-        assert!(
-            registry
-                .try_register(Box::new(PanicOnEnterRuntime {
-                    probe: Arc::clone(&probe)
-                }))
-                .is_ok()
-        );
+        assert!(registry
+            .try_register(Box::new(PanicOnEnterRuntime {
+                probe: Arc::clone(&probe)
+            }))
+            .is_ok());
 
         let ran = registry.within_runtime(|| true);
         assert!(ran);
@@ -2247,13 +2230,11 @@ mod tests {
 
         let blocking_done = Arc::new(AtomicUsize::new(0));
         let blocking_in_work = Arc::clone(&blocking_done);
-        assert!(
-            runtime
-                .spawn_blocking(Box::new(move || {
-                    blocking_in_work.fetch_add(1, Ordering::SeqCst);
-                }))
-                .is_ok()
-        );
+        assert!(runtime
+            .spawn_blocking(Box::new(move || {
+                blocking_in_work.fetch_add(1, Ordering::SeqCst);
+            }))
+            .is_ok());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while blocking_done.load(Ordering::SeqCst) == 0 {
             assert!(std::time::Instant::now() < deadline);

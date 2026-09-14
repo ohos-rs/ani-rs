@@ -3,7 +3,7 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{BTreeMap, HashSet, btree_map::Entry};
+use std::collections::{btree_map::Entry, BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -13,15 +13,15 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, GenericParam, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
+    should_skip_in_signature, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
 };
 
 #[cfg(test)]
 use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
-    AniType, ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, WrapperType,
-    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name,
+    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name, AniType,
+    ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, WrapperType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -377,9 +377,18 @@ fn render_class_block(
 ) {
     let pad = " ".repeat(indent);
     let iterator_suffix = if iterator_targets.contains(class_target) {
-        iterator_next_item_type(class)
-            .map(|item_ty| format!(" implements Iterator<{item_ty}>"))
-            .unwrap_or_default()
+        iterator_next_item_type(class).map_or_else(String::new, |item_ty| {
+            let protocol = if class.callable_members.iter().any(|member| {
+                member
+                    .iterator_factory_target()
+                    .is_some_and(|target| target == class_target)
+            }) {
+                "IterableIterator"
+            } else {
+                "Iterator"
+            };
+            format!(" implements {protocol}<{item_ty}>")
+        })
     } else {
         String::new()
     };
@@ -2181,11 +2190,9 @@ mod tests {
         let second = fs::read(&output).expect("generated ETS file should remain readable");
 
         assert_eq!(first, second);
-        assert!(
-            String::from_utf8(second)
-                .expect("generated ETS should be UTF-8")
-                .contains("export native function answer(): int;")
-        );
+        assert!(String::from_utf8(second)
+            .expect("generated ETS should be UTF-8")
+            .contains("export native function answer(): int;"));
         assert!(
             fs::read_dir(output.parent().expect("output should have a parent"))
                 .expect("output directory should be readable")
@@ -2746,6 +2753,48 @@ get age(): int {
     }
 
     #[test]
+    fn test_render_decls_marks_self_returning_iterator_as_iterable() {
+        let owner = "demo.CountdownIterator";
+        let class_members = vec![
+            EtsClassMemberDecl {
+                target: owner.to_string(),
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
+                    metadata: class_member_metadata(
+                        owner,
+                        "$_iterator",
+                        ClassMemberScope::Instance,
+                    ),
+                    native_symbol_name: "$_iterator".to_string(),
+                    kind: ClassOpKind::IteratorFactory {
+                        iterator_class: owner.to_string(),
+                    },
+                })),
+                rendered: "native $_iterator(): CountdownIterator;".to_string(),
+            },
+            EtsClassMemberDecl {
+                target: owner.to_string(),
+                descriptor: Some(ClassDescriptorMember::Op(ClassOpDescriptor {
+                    metadata: class_member_metadata(owner, "next", ClassMemberScope::Instance),
+                    native_symbol_name: "__ani_native_next".to_string(),
+                    kind: ClassOpKind::IteratorNext {
+                        item_type: "int".to_string(),
+                    },
+                })),
+                rendered: generate_iterator_next_ets_binding(
+                    &syn::parse_quote! { fn next() -> Option<i32> },
+                    false,
+                ),
+            },
+        ];
+
+        let rendered = render_decls(&[], &[], &class_members);
+
+        assert!(
+            rendered.contains("export class CountdownIterator implements IterableIterator<int> {")
+        );
+    }
+
+    #[test]
     fn test_render_decls_emits_complete_async_iterator_protocol() {
         let owner = "CounterAsyncIterator";
         let operations = [
@@ -3167,11 +3216,8 @@ set name(name: string | null | undefined) {
         };
         let binding = generate_fn_ets_binding(EtsDeclKind::Global, &sig, "identity", false, false);
         assert!(binding.contains("native function __ani_native_identity(value: Object): Object;"));
-        assert!(
-            binding.contains(
-                "export function identity(value: EnvelopeInput<int>): EnvelopeOutput<int>"
-            )
-        );
+        assert!(binding
+            .contains("export function identity(value: EnvelopeInput<int>): EnvelopeOutput<int>"));
     }
 
     #[test]

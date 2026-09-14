@@ -6,9 +6,15 @@
 use ani::prelude::*;
 use ani_derive::ani;
 
-const RUNTIME_BOX_CLASS: &str = "arkvm_test.RuntimeBox";
 const RUNTIME_BOX_CTOR_SIG: &str = "iC{std.core.String}:";
 const RUNTIME_BOX_DESCRIBE_SIG: &str = ":C{std.core.String}";
+
+fn runtime_box_class() -> String {
+    let module = option_env!("ANI_MODULE_DESCRIPTOR")
+        .or(option_env!("ANI_TEST_MODULE_NAME"))
+        .unwrap_or("arkvm_test");
+    format!("{module}.RuntimeBox")
+}
 
 fn ref_to_string(env: &Env<'_>, value: AniRef<'_>) -> Result<String> {
     let string = unsafe { AniString::from_raw(value.into_raw() as ani::sys::ani_string) };
@@ -17,7 +23,7 @@ fn ref_to_string(env: &Env<'_>, value: AniRef<'_>) -> Result<String> {
 
 #[ani]
 pub fn create_runtime_box(env: &Env<'_>, value: i32, label: String) -> Result<String> {
-    let cls = env.find_class(RUNTIME_BOX_CLASS)?;
+    let cls = env.find_class(&runtime_box_class())?;
     let ctor = env.find_constructor(&cls, RUNTIME_BOX_CTOR_SIG)?;
     let label = ani::conversions::ToAni::to_ani(label, env)?;
     let args = [
@@ -63,7 +69,7 @@ pub fn clear_label_by_name(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> 
 
 #[ani]
 pub fn describe_by_handle(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
-    let cls = env.find_class(RUNTIME_BOX_CLASS)?;
+    let cls = env.find_class(&runtime_box_class())?;
     let method = env.find_method(&cls, "describe", RUNTIME_BOX_DESCRIBE_SIG)?;
     let result = env.call_method_ref(&obj, &method, &[])?;
     ref_to_string(env, result)
@@ -71,14 +77,14 @@ pub fn describe_by_handle(env: &Env<'_>, obj: AniObject<'_>) -> Result<String> {
 
 #[ani]
 pub fn is_runtime_box_instance(env: &Env<'_>, obj: AniObject<'_>) -> Result<bool> {
-    let cls = env.find_class(RUNTIME_BOX_CLASS)?;
+    let cls = env.find_class(&runtime_box_class())?;
     env.is_instance_of(&obj, &cls)
 }
 
 #[ani]
 pub fn runtime_box_assignable_to_base(env: &Env<'_>, obj: AniObject<'_>) -> Result<bool> {
     let obj_ty = env.get_object_type(&obj)?;
-    let base_cls = env.find_class(RUNTIME_BOX_CLASS)?;
+    let base_cls = env.find_class(&runtime_box_class())?;
     let base_ty: AniType<'_> = base_cls.into();
     env.is_assignable_from(&obj_ty, &base_ty)
 }
@@ -106,7 +112,7 @@ mod tests {
         let _ = is_runtime_box_instance;
         let _ = runtime_box_assignable_to_base;
         let _ = runtime_box_has_super;
-        assert_eq!(RUNTIME_BOX_CLASS, "arkvm_test.RuntimeBox");
+        assert!(runtime_box_class().ends_with(".RuntimeBox"));
         assert_eq!(RUNTIME_BOX_CTOR_SIG, "iC{std.core.String}:");
         assert_eq!(RUNTIME_BOX_DESCRIBE_SIG, ":C{std.core.String}");
     }

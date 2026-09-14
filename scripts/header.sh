@@ -62,7 +62,7 @@ generate_bindings() {
     --no-layout-tests
 }
 
-validate_api24() {
+validate_openharmony_7_release() {
   local symbol
   for symbol in \
     Primitive_Box_Boolean Primitive_Unbox_Boolean \
@@ -72,9 +72,11 @@ validate_api24() {
     Primitive_Box_Int Primitive_Unbox_Int \
     Primitive_Box_Long Primitive_Unbox_Long \
     Primitive_Box_Float Primitive_Unbox_Float \
-    Primitive_Box_Double Primitive_Unbox_Double; do
+    Primitive_Box_Double Primitive_Unbox_Double \
+    FixedArray_New_Int FixedArray_GetRegion_Int FixedArray_SetRegion_Int \
+    Any_InstanceOf Any_Call Any_New; do
     if ! grep -q "$symbol" "$HEADER_PATH"; then
-      echo "error: pinned header is missing ANI API 24 symbol: $symbol" >&2
+      echo "error: pinned header is missing OpenHarmony 7.0 Release ANI symbol: $symbol" >&2
       return 1
     fi
   done
@@ -105,7 +107,7 @@ case "$mode" in
       exit 1
     fi
 
-    validate_api24
+    validate_openharmony_7_release
     generated="$(mktemp "${TMPDIR:-/tmp}/ani-sys.XXXXXX.rs")"
     trap 'rm -f "$generated"' EXIT
     generate_bindings "$HEADER_PATH" "$generated"
@@ -123,7 +125,7 @@ case "$mode" in
     fi
     source_header="$(resolve_header "$source_arg")"
     install -m 0644 "$source_header" "$HEADER_PATH"
-    validate_api24
+    validate_openharmony_7_release
 
     generated="$(mktemp "$REPO_ROOT/crates/sys/src/lib.rs.XXXXXX")"
     trap 'rm -f "$generated"' EXIT
@@ -133,7 +135,7 @@ case "$mode" in
 
     actual_hash="$(sha256 "$HEADER_PATH")"
     printf '%s  ani.h\n' "$actual_hash" > "$HEADER_HASH_PATH"
-    echo "Updated ANI API 24 header and bindings ($actual_hash)"
+    echo "Updated OpenHarmony 7.0 Release ANI header and bindings ($actual_hash)"
     ;;
   *)
     usage

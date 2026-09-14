@@ -2,13 +2,26 @@
 //!
 //! Provides a safe wrapper for `ani_vm`, similar to `JavaVM` in jni-rs.
 
-use std::ffi::{CString, c_void};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::{c_void, CString};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 
 use crate::env::Env;
-use crate::error::{Error, Result, Status, check_status};
+use crate::error::{check_status, Error, Result, Status};
 use crate::sys;
+
+#[derive(Clone, Copy)]
+struct SharedThreadAttachment {
+    env: *mut sys::ani_env,
+    holders: usize,
+}
+
+thread_local! {
+    static SHARED_THREAD_ATTACHMENTS: RefCell<HashMap<usize, SharedThreadAttachment>> =
+        RefCell::new(HashMap::new());
+}
 
 /// VM creation/attach options.
 ///
@@ -217,6 +230,63 @@ impl AniVm {
         })
     }
 
+    /// Acquires a shared attachment lease for the current thread.
+    ///
+    /// ANI rejects a second `AttachCurrentThread` call on an already attached
+    /// thread. Async executors can concurrently poll several local futures on
+    /// one OS thread, so generated async bindings use this lease to retain one
+    /// attachment until the last local future releases it. An attachment that
+    /// existed before the first lease is reused and is never detached here.
+    pub fn acquire_thread_attachment<'vm>(&'vm self) -> Result<ThreadAttachment<'vm>> {
+        let key = self.raw as usize;
+        let shared_env =
+            SHARED_THREAD_ATTACHMENTS.with(|attachments| -> Result<Option<*mut sys::ani_env>> {
+                let mut attachments = attachments.borrow_mut();
+                let Some(attachment) = attachments.get_mut(&key) else {
+                    return Ok(None);
+                };
+                attachment.holders = attachment.holders.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        Status::OutOfRange,
+                        "ANI thread attachment lease count overflow",
+                    )
+                })?;
+                Ok(Some(attachment.env))
+            })?;
+
+        if let Some(raw_env) = shared_env {
+            return Ok(ThreadAttachment {
+                vm: self,
+                env: unsafe { Env::from_raw(raw_env)? },
+                shared_key: Some(key),
+            });
+        }
+
+        if let Ok(env) = self.get_env() {
+            return Ok(ThreadAttachment {
+                vm: self,
+                env,
+                shared_key: None,
+            });
+        }
+
+        let env = self.attach_raw(None, sys::ANI_VERSION_1)?;
+        SHARED_THREAD_ATTACHMENTS.with(|attachments| {
+            attachments.borrow_mut().insert(
+                key,
+                SharedThreadAttachment {
+                    env: env.as_raw(),
+                    holders: 1,
+                },
+            );
+        });
+        Ok(ThreadAttachment {
+            vm: self,
+            env,
+            shared_key: Some(key),
+        })
+    }
+
     /// Attaches current thread permanently and returns `Env` using the
     /// default version (`ANI_VERSION_1`).
     ///
@@ -380,9 +450,110 @@ impl Drop for AttachGuard<'_> {
     }
 }
 
+/// A reference-counted attachment lease for local async work on one thread.
+pub struct ThreadAttachment<'vm> {
+    vm: &'vm AniVm,
+    env: Env<'vm>,
+    shared_key: Option<usize>,
+}
+
+impl<'vm> ThreadAttachment<'vm> {
+    /// Returns the environment for the attached thread.
+    pub fn env(&self) -> &Env<'vm> {
+        &self.env
+    }
+}
+
+impl<'vm> Deref for ThreadAttachment<'vm> {
+    type Target = Env<'vm>;
+
+    fn deref(&self) -> &Self::Target {
+        self.env()
+    }
+}
+
+impl Drop for ThreadAttachment<'_> {
+    fn drop(&mut self) {
+        let Some(key) = self.shared_key else {
+            return;
+        };
+        let detach = SHARED_THREAD_ATTACHMENTS.with(|attachments| {
+            let mut attachments = attachments.borrow_mut();
+            let Some(attachment) = attachments.get_mut(&key) else {
+                return false;
+            };
+            attachment.holders -= 1;
+            if attachment.holders == 0 {
+                attachments.remove(&key);
+                true
+            } else {
+                false
+            }
+        });
+        if detach {
+            let _ = self.vm.detach_current_thread();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    thread_local! {
+        static MOCK_THREAD_ATTACHED: Cell<bool> = const { Cell::new(false) };
+    }
+    static MOCK_ATTACH_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static MOCK_DETACH_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn mock_get_env(
+        _vm: *mut sys::ani_vm,
+        _version: u32,
+        result: *mut *mut sys::ani_env,
+    ) -> sys::ani_status {
+        if !MOCK_THREAD_ATTACHED.get() {
+            return sys::ani_status_ANI_ERROR;
+        }
+        unsafe {
+            *result = ptr::NonNull::<sys::ani_env>::dangling().as_ptr();
+        }
+        sys::ani_status_ANI_OK
+    }
+
+    unsafe extern "C" fn mock_attach_current_thread(
+        _vm: *mut sys::ani_vm,
+        _options: *const sys::ani_options,
+        _version: u32,
+        result: *mut *mut sys::ani_env,
+    ) -> sys::ani_status {
+        if MOCK_THREAD_ATTACHED.replace(true) {
+            return sys::ani_status_ANI_ERROR;
+        }
+        MOCK_ATTACH_CALLS.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            *result = ptr::NonNull::<sys::ani_env>::dangling().as_ptr();
+        }
+        sys::ani_status_ANI_OK
+    }
+
+    unsafe extern "C" fn mock_detach_current_thread(_vm: *mut sys::ani_vm) -> sys::ani_status {
+        if !MOCK_THREAD_ATTACHED.replace(false) {
+            return sys::ani_status_ANI_ERROR;
+        }
+        MOCK_DETACH_CALLS.fetch_add(1, Ordering::SeqCst);
+        sys::ani_status_ANI_OK
+    }
+
+    fn mock_vm_api() -> sys::__ani_vm_api {
+        let mut api: sys::__ani_vm_api = unsafe { std::mem::zeroed() };
+        api.GetEnv = Some(mock_get_env);
+        api.AttachCurrentThread = Some(mock_attach_current_thread);
+        api.DetachCurrentThread = Some(mock_detach_current_thread);
+        api
+    }
 
     #[test]
     fn vm_options_push_and_len() {
@@ -411,5 +582,30 @@ mod tests {
             detach_on_drop: true,
         };
         let _env = guard.into_env();
+    }
+
+    #[test]
+    fn shared_thread_attachment_detaches_after_last_concurrent_lease() {
+        MOCK_THREAD_ATTACHED.set(false);
+        MOCK_ATTACH_CALLS.store(0, Ordering::SeqCst);
+        MOCK_DETACH_CALLS.store(0, Ordering::SeqCst);
+
+        let api = mock_vm_api();
+        let mut raw_vm: sys::ani_vm = &api;
+        let vm = unsafe { AniVm::from_raw_unchecked(&mut raw_vm) };
+        let first = vm
+            .acquire_thread_attachment()
+            .expect("first async task attaches the worker");
+        let second = vm
+            .acquire_thread_attachment()
+            .expect("concurrent async task shares the worker attachment");
+
+        assert_eq!(MOCK_ATTACH_CALLS.load(Ordering::SeqCst), 1);
+        drop(first);
+        assert_eq!(MOCK_DETACH_CALLS.load(Ordering::SeqCst), 0);
+        assert!(MOCK_THREAD_ATTACHED.get());
+        drop(second);
+        assert_eq!(MOCK_DETACH_CALLS.load(Ordering::SeqCst), 1);
+        assert!(!MOCK_THREAD_ATTACHED.get());
     }
 }

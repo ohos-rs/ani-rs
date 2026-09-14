@@ -7,20 +7,21 @@ use std::collections::BTreeSet;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Expr, ExprLit, Field, Fields, GenericParam, Generics, Ident, Index,
-    ItemStruct, Lit, Member, Token, Variant, punctuated::Punctuated,
+    punctuated::Punctuated, Data, DeriveInput, Expr, ExprLit, Field, Fields, GenericParam,
+    Generics, Ident, Index, ItemStruct, Lit, Member, Token, Variant,
 };
 
 use crate::parser::{AniAttrs, AttrItem, AttrValue, BindgenAttrs};
 use crate::types::ani_type::{
-    AniType, ObjectMemberAccessKind, ObjectMemberDescriptor, PrimitiveType,
     register_exact_type_alias, register_object_type_alias, register_object_type_members,
-    register_structured_type_alias,
+    register_structured_type_alias, AniType, ObjectMemberAccessKind, ObjectMemberDescriptor,
+    PrimitiveType,
 };
 use crate::types::{
-    EtsDeclKind, EtsObjectMemberDecl, EtsObjectMemberKind, current_module_name,
-    emit_compile_ets_object, emit_compile_ets_rendered_decl, ets_public_type_for_syn_type,
-    generate_object_field_ets_decl, generate_object_property_ets_decl, qualify_member_descriptor,
+    current_module_name, emit_compile_ets_object, emit_compile_ets_rendered_decl,
+    ets_public_type_for_syn_type, generate_object_field_ets_decl,
+    generate_object_property_ets_decl, qualify_member_descriptor, EtsDeclKind, EtsObjectMemberDecl,
+    EtsObjectMemberKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1676,9 +1677,7 @@ mod tests {
         };
 
         let expanded = expand_class_derive(input).to_string();
-        assert!(
-            expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile")
-        );
+        assert!(expanded.contains("impl ani :: conversions :: TypeInfo for ExplicitDerivedProfile"));
         assert!(expanded.contains("pub const fn arkts_name () -> & 'static str"));
         assert!(expanded.contains("models.ExplicitDerivedProfile"));
         assert!(expanded.contains(
