@@ -8,8 +8,8 @@ use quote::{format_ident, quote};
 use syn::{FnArg, Pat, ReturnType, Type, TypePath};
 
 use super::ani_type::{
-    AniType, PrimitiveType, StringType, WrapperType, extract_transparent_wrapper_inner_type,
-    is_custom_object_type_path,
+    extract_transparent_wrapper_inner_type, is_custom_object_type_path, AniType, PrimitiveType,
+    StringType, WrapperType,
 };
 
 // ============================================================================
@@ -1040,11 +1040,8 @@ mod tests {
         let on_error_return = quote! { return Default::default(); };
         let code = generate_param_conversions(&[&arg], &on_error_return).to_string();
         assert!(code.contains("FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
-        assert!(
-            code.contains(
-                "cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"
-            )
-        );
+        assert!(code
+            .contains("cb as < FunctionRef < (i32 ,) , String > as ani :: conversions :: FromAni"));
         assert!(code.contains(":: Input"));
     }
 

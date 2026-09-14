@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
@@ -142,10 +142,10 @@ pub fn encode_structured_enum(
                 }
             }
             for field in fields {
-                if let Some(value) = values.remove(field.rust_name)
-                    && field.output
-                {
-                    output.insert(field.arkts_name.to_string(), value);
+                if let Some(value) = values.remove(field.rust_name) {
+                    if field.output {
+                        output.insert(field.arkts_name.to_string(), value);
+                    }
                 }
             }
             if !values.is_empty() {

@@ -4,7 +4,7 @@
 //! memory address. Handles are monotonically allocated and are never reused,
 //! so a stale ArkTS `long` cannot become valid for a different allocation.
 
-use std::any::{Any, TypeId, type_name};
+use std::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};

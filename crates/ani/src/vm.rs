@@ -4,12 +4,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{CString, c_void};
+use std::ffi::{c_void, CString};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 
 use crate::env::Env;
-use crate::error::{Error, Result, Status, check_status};
+use crate::error::{check_status, Error, Result, Status};
 use crate::sys;
 
 #[derive(Clone, Copy)]

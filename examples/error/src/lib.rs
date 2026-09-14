@@ -151,8 +151,8 @@ fn read_config(path: String) -> Result<String> {
 // ===========================================================================
 
 /// Demonstrates using BusinessError for throwing exceptions.
-/// All ANI errors inherit from escompat.BusinessError.
-/// Note: The error will be converted to BusinessError when the function returns Err.
+/// OpenHarmony 7.0 materializes returned failures as `std.core.Error`.
+/// The numeric application error code remains available through the wrapper.
 #[ani]
 fn check_array_bounds(index: i32, length: i32) -> Result<()> {
     if index < 0 {

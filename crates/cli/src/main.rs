@@ -208,7 +208,7 @@ fn print_support() {
 
 fn scaffold_manifest(package_name: &str) -> String {
     format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nani = {{ git = \"{ANI_RS_REPOSITORY}\", features = [\"api24\"] }}\nani-derive = {{ git = \"{ANI_RS_REPOSITORY}\" }}\n"
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nani = {{ git = \"{ANI_RS_REPOSITORY}\", features = [\"api26\"] }}\nani-derive = {{ git = \"{ANI_RS_REPOSITORY}\" }}\n"
     )
 }
 
@@ -410,8 +410,9 @@ mod tests {
     fn scaffold_uses_the_project_repository_instead_of_a_crates_io_name_collision() {
         let manifest = scaffold_manifest("demo-addon");
         assert!(manifest.contains("name = \"demo-addon\""));
+        assert!(manifest.contains("edition = \"2021\""));
         assert!(manifest.contains(
-            "ani = { git = \"https://github.com/ohos-rs/ani-rs\", features = [\"api24\"] }"
+            "ani = { git = \"https://github.com/ohos-rs/ani-rs\", features = [\"api26\"] }"
         ));
         assert!(manifest.contains("ani-derive = { git = \"https://github.com/ohos-rs/ani-rs\" }"));
         assert!(!manifest.contains("ani = { version"));

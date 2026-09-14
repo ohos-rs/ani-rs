@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniArrayBuffer, AniObject, ani_value_int, ani_value_ref};
+use crate::types::{ani_value_int, ani_value_ref, AniArrayBuffer, AniObject};
 
 use super::{ArrayBuffer, Boxable, FromAni, ToAni, TypeInfo};
 
@@ -180,9 +180,11 @@ impl<T: TypedArrayElement> TypedArray<T> {
                 ),
             ));
         }
-        Ok(Self::new(
-            bytes.chunks_exact(T::WIDTH).map(T::decode).collect(),
-        ))
+        let mut values = Vec::with_capacity(bytes.len() / T::WIDTH);
+        for offset in (0..bytes.len()).step_by(T::WIDTH) {
+            values.push(T::decode(&bytes[offset..offset + T::WIDTH]));
+        }
+        Ok(Self::new(values))
     }
 }
 

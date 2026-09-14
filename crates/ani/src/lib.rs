@@ -87,40 +87,40 @@ pub mod prelude {
     #[cfg(not(feature = "tokio_rt"))]
     pub use crate::async_runtime::within_runtime_if_available;
     pub use crate::async_runtime::{
+        block_on_future, register_async_runtime, register_cancellation_error_factory,
+        runtime_cancellation_error, shutdown_async_runtime, shutdown_runtime_domain, spawn_future,
+        spawn_future_result, spawn_local_future, spawn_local_future_result,
+        spawn_local_future_with_handle, start_async_runtime, try_register_async_runtime,
         AsyncRuntime, AsyncRuntimeGuard, AsyncRuntimeMetrics, AsyncRuntimeRejection,
-        RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle, block_on_future,
-        register_async_runtime, register_cancellation_error_factory, runtime_cancellation_error,
-        shutdown_async_runtime, shutdown_runtime_domain, spawn_future, spawn_future_result,
-        spawn_local_future, spawn_local_future_result, spawn_local_future_with_handle,
-        start_async_runtime, try_register_async_runtime,
+        RuntimeBlockingTask, RuntimeCancelReason, RuntimeTask, RuntimeTaskHandle,
     };
     pub use crate::env::{AutoLocal, Env, LocalScopeGuard};
     pub use crate::error::{
-        AniErrorPayload, AniErrorValue, BusinessError, DynAniError, Error, PreservedArktsError,
-        Result, Status, check_status,
+        check_status, AniErrorPayload, AniErrorValue, BusinessError, DynAniError, Error,
+        PreservedArktsError, Result, Status,
     };
-    pub use crate::runtime::{RuntimeMetrics, assert_no_runtime_leaks, runtime_metrics};
-    pub use crate::scheduler::{RuntimeKernel, SchedulerMetrics, runtime_kernel, shutdown_runtime};
+    pub use crate::runtime::{assert_no_runtime_leaks, runtime_metrics, RuntimeMetrics};
+    pub use crate::scheduler::{runtime_kernel, shutdown_runtime, RuntimeKernel, SchedulerMetrics};
     #[cfg(feature = "tokio_rt")]
     pub use crate::tokio::{
         block_on, create_custom_tokio_runtime, spawn, spawn_blocking, within_runtime_if_available,
     };
     pub use crate::types::{
-        AniArray, AniArrayBuffer, AniClass, AniEnum, AniEnumItem, AniError, AniField,
-        AniFixedArray, AniFixedArrayBoolean, AniFixedArrayByte, AniFixedArrayChar,
-        AniFixedArrayDouble, AniFixedArrayFloat, AniFixedArrayInt, AniFixedArrayLong,
-        AniFixedArrayRef, AniFixedArrayShort, AniFnObject, AniFunction, AniMethod, AniModule,
-        AniNamespace, AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString,
-        AniTupleValue, AniType, AniVariable, GlobalRef, WeakRef, ani_value_boolean, ani_value_byte,
-        ani_value_char, ani_value_double, ani_value_float, ani_value_int, ani_value_long,
-        ani_value_ref, ani_value_short, native_function,
+        ani_value_boolean, ani_value_byte, ani_value_char, ani_value_double, ani_value_float,
+        ani_value_int, ani_value_long, ani_value_ref, ani_value_short, native_function, AniArray,
+        AniArrayBuffer, AniClass, AniEnum, AniEnumItem, AniError, AniField, AniFixedArray,
+        AniFixedArrayBoolean, AniFixedArrayByte, AniFixedArrayChar, AniFixedArrayDouble,
+        AniFixedArrayFloat, AniFixedArrayInt, AniFixedArrayLong, AniFixedArrayRef,
+        AniFixedArrayShort, AniFnObject, AniFunction, AniMethod, AniModule, AniNamespace,
+        AniObject, AniRef, AniResolver, AniStaticField, AniStaticMethod, AniString, AniTupleValue,
+        AniType, AniVariable, GlobalRef, WeakRef,
     };
     pub use crate::vm::{AniVm, AttachGuard, VmOptions};
 
     // Export all conversion types/traits/helpers.
     pub use crate::conversions::*;
 
-    pub use crate::sys::{ANI_VERSION_1, ani_status_ANI_OK as ANI_OK};
+    pub use crate::sys::{ani_status_ANI_OK as ANI_OK, ANI_VERSION_1};
 }
 
 /// ANI version info

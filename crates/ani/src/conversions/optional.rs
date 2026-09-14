@@ -178,7 +178,11 @@ impl OptionHelper {
     /// Convert null to None, non-null to Some
     #[inline]
     pub fn null_to_none(value: sys::ani_ref) -> Option<sys::ani_ref> {
-        if value.is_null() { None } else { Some(value) }
+        if value.is_null() {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     /// Convert Option to nullable pointer

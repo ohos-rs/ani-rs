@@ -46,10 +46,6 @@ if [[ ! -d "$ark_src_root/static_core/plugins/ets/stdlib/std" ]]; then
   echo "ARK_SRC_NOT_FOUND: $ark_src_root/static_core/plugins/ets/stdlib/std"
   exit 1
 fi
-if [[ ! -d "$ark_src_root/static_core/plugins/ets/stdlib/escompat" ]]; then
-  echo "ARK_SRC_NOT_FOUND: $ark_src_root/static_core/plugins/ets/stdlib/escompat"
-  exit 1
-fi
 if [[ ! -d "$ark_src_root/static_core/plugins/ets/sdk/api" ]]; then
   echo "ARK_SRC_NOT_FOUND: $ark_src_root/static_core/plugins/ets/sdk/api"
   exit 1
@@ -68,7 +64,6 @@ check_nonempty_tree() {
 }
 
 check_nonempty_tree "$ark_src_root/static_core/plugins/ets/stdlib/std"
-check_nonempty_tree "$ark_src_root/static_core/plugins/ets/stdlib/escompat"
 check_nonempty_tree "$ark_src_root/static_core/plugins/ets/sdk/api"
 check_nonempty_tree "$ark_src_root/static_core/plugins/ets/sdk/arkts"
 
@@ -193,7 +188,6 @@ cat > "$arkts_cfg" <<EOF
     "baseUrl": "/arkcompiler_runtime_core/static_core",
     "paths": {
       "std": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/std"],
-      "escompat": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/escompat"],
       "arkruntime": ["/arkcompiler_runtime_core/static_core/plugins/ets/stdlib/arkruntime"],
       "api": ["/arkcompiler_runtime_core/static_core/plugins/ets/sdk/api"],
       "arkts": ["/arkcompiler_runtime_core/static_core/plugins/ets/sdk/arkts"]

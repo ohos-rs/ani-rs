@@ -3,7 +3,7 @@
 //! Stubs are emitted during macro expansion (compile phase) so no runtime
 //! registration/writing is required.
 
-use std::collections::{BTreeMap, HashSet, btree_map::Entry};
+use std::collections::{btree_map::Entry, BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -13,15 +13,15 @@ use std::sync::{Mutex, OnceLock};
 use syn::{FnArg, GenericParam, Pat, ReturnType, Signature, Type};
 
 use crate::codegen::{
-    ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor, should_skip_in_signature,
+    should_skip_in_signature, ClassDescriptorMember, ClassMemberScope, ClassPropertyDescriptor,
 };
 
 #[cfg(test)]
 use crate::codegen::{ClassCallableDescriptor, ClassOpDescriptor, ClassOpKind};
 
 use super::ani_type::{
-    AniType, ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, WrapperType,
-    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name,
+    is_custom_object_name, resolve_object_type_alias, type_path_qualified_name, AniType,
+    ArrayHandleType, FunctionType, PrimitiveType, RuntimeHandleType, WrapperType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2190,11 +2190,9 @@ mod tests {
         let second = fs::read(&output).expect("generated ETS file should remain readable");
 
         assert_eq!(first, second);
-        assert!(
-            String::from_utf8(second)
-                .expect("generated ETS should be UTF-8")
-                .contains("export native function answer(): int;")
-        );
+        assert!(String::from_utf8(second)
+            .expect("generated ETS should be UTF-8")
+            .contains("export native function answer(): int;"));
         assert!(
             fs::read_dir(output.parent().expect("output should have a parent"))
                 .expect("output directory should be readable")
@@ -3218,11 +3216,8 @@ set name(name: string | null | undefined) {
         };
         let binding = generate_fn_ets_binding(EtsDeclKind::Global, &sig, "identity", false, false);
         assert!(binding.contains("native function __ani_native_identity(value: Object): Object;"));
-        assert!(
-            binding.contains(
-                "export function identity(value: EnvelopeInput<int>): EnvelopeOutput<int>"
-            )
-        );
+        assert!(binding
+            .contains("export function identity(value: EnvelopeInput<int>): EnvelopeOutput<int>"));
     }
 
     #[test]

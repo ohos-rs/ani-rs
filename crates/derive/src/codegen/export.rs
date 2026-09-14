@@ -2,9 +2,10 @@ use syn::Signature;
 
 use crate::codegen::RegisterTarget;
 use crate::types::{
-    EtsDeclKind, emit_compile_ets_class_member, emit_compile_ets_rendered_decl,
+    emit_compile_ets_class_member, emit_compile_ets_rendered_decl,
     generate_async_iterator_next_ets_binding, generate_ctor_ets_binding, generate_fn_ets_binding,
     generate_getter_ets_decl, generate_iterator_next_ets_binding, generate_setter_ets_decl,
+    EtsDeclKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

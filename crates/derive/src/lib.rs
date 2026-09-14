@@ -81,7 +81,7 @@
 
 use proc_macro::TokenStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use syn::{DeriveInput, ItemFn, ItemImpl, ItemStruct, parse_macro_input};
+use syn::{parse_macro_input, DeriveInput, ItemFn, ItemImpl, ItemStruct};
 
 // Module organization following napi-rs pattern
 mod codegen;

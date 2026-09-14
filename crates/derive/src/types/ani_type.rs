@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::{GenericArgument, PathArguments, Type, TypePath};
 
 // ============================================================================
@@ -436,10 +436,10 @@ impl AniType {
             Type::Path(type_path) => Self::parse_type_path_with_type_params(type_path, type_params),
             Type::Reference(type_ref) => {
                 // Handle &str specially, otherwise preserve the referenced surface type.
-                if let Type::Path(inner_path) = type_ref.elem.as_ref()
-                    && is_path_ident(inner_path, "str")
-                {
-                    return AniType::String(StringType::Str);
+                if let Type::Path(inner_path) = type_ref.elem.as_ref() {
+                    if is_path_ident(inner_path, "str") {
+                        return AniType::String(StringType::Str);
+                    }
                 }
                 AniType::from_syn_type_with_type_params(type_ref.elem.as_ref(), type_params)
             }
@@ -644,25 +644,25 @@ impl AniType {
             return AniType::FixedArray(elem);
         }
 
-        if ident == "Box"
-            && let Some(inner) = extract_first_generic_type(&segment.arguments)
-        {
-            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
-                return AniType::String(StringType::BoxStr);
-            }
-            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
-                return AniType::String(StringType::BoxPath);
+        if ident == "Box" {
+            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                    return AniType::String(StringType::BoxStr);
+                }
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                    return AniType::String(StringType::BoxPath);
+                }
             }
         }
 
-        if ident == "Cow"
-            && let Some(inner) = extract_first_generic_type(&segment.arguments)
-        {
-            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
-                return AniType::String(StringType::CowStr);
-            }
-            if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
-                return AniType::String(StringType::CowPath);
+        if ident == "Cow" {
+            if let Some(inner) = extract_first_generic_type(&segment.arguments) {
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "str")) {
+                    return AniType::String(StringType::CowStr);
+                }
+                if matches!(&inner, Type::Path(inner_path) if is_path_ident(inner_path, "Path")) {
+                    return AniType::String(StringType::CowPath);
+                }
             }
         }
 
@@ -705,24 +705,24 @@ impl AniType {
         }
 
         // HashMap<String, V> maps to ArkTS Record<string, V>
-        if ident == "HashMap"
-            && let Some(record) = parse_record_type(&segment.arguments, type_params)
-        {
-            return AniType::Record(record);
+        if ident == "HashMap" {
+            if let Some(record) = parse_record_type(&segment.arguments, type_params) {
+                return AniType::Record(record);
+            }
         }
 
         // HashSet<T> and BTreeSet<T> map to ArkTS Set<T>
-        if (ident == "HashSet" || ident == "BTreeSet")
-            && let Some(set) = parse_set_type(&segment.arguments, type_params)
-        {
-            return AniType::Set(set);
+        if ident == "HashSet" || ident == "BTreeSet" {
+            if let Some(set) = parse_set_type(&segment.arguments, type_params) {
+                return AniType::Set(set);
+            }
         }
 
         // BTreeMap<K, V> maps to ArkTS Map<K, V>
-        if ident == "BTreeMap"
-            && let Some(map) = parse_map_type(&segment.arguments, type_params)
-        {
-            return AniType::Map(map);
+        if ident == "BTreeMap" {
+            if let Some(map) = parse_map_type(&segment.arguments, type_params) {
+                return AniType::Map(map);
+            }
         }
 
         // Check for generic wrapper types
@@ -1634,7 +1634,6 @@ fn qualify_custom_type_descriptor(name: &str) -> String {
     if trimmed.is_empty()
         || trimmed.starts_with('@')
         || trimmed.starts_with("std.")
-        || trimmed.starts_with("escompat.")
         || trimmed.starts_with("arkts.")
     {
         return trimmed.to_string();
@@ -2587,6 +2586,14 @@ mod tests {
 
         let fixed_ref = AniType::from_syn_type(&syn::parse_quote!(AniFixedArrayRef<'_>));
         assert_eq!(fixed_ref.to_signature(), "A{C{std.core.Object}}");
+    }
+
+    #[test]
+    fn removed_escompat_namespace_is_not_treated_as_a_runtime_builtin() {
+        assert_eq!(
+            qualify_custom_type_descriptor("escompat.Legacy"),
+            "ani_derive.escompat.Legacy"
+        );
     }
 
     #[test]

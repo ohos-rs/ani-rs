@@ -10,7 +10,7 @@ keywords = ["ani", "arkts", "ohos", "harmonyos", "ffi"]
 categories = ["api-bindings", "development-tools::ffi"]
 
 [features]
-default = ["api24"]
+default = ["api26"]
 # Minimum-runtime contracts. `api26` is the release-validation profile and
 # includes every ANI operation available in the pinned API 26 header.  The ANI
 # ABI itself only added primitive boxing/unboxing after API 23, in API 24.

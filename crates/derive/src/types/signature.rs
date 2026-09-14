@@ -310,7 +310,6 @@ pub fn qualify_member_descriptor(name: &str, module_name: &str) -> String {
     if trimmed.is_empty()
         || trimmed.starts_with('@')
         || trimmed.starts_with("std.")
-        || trimmed.starts_with("escompat.")
         || trimmed.starts_with("arkts.")
         || trimmed.starts_with(&format!("{module_name}."))
     {
@@ -351,6 +350,10 @@ mod tests {
         assert_eq!(
             qualify_member_descriptor("std.core.String", "ani_example_new_class"),
             "std.core.String"
+        );
+        assert_eq!(
+            qualify_member_descriptor("escompat.Legacy", "ani_example_new_class"),
+            "ani_example_new_class.escompat.Legacy"
         );
     }
 

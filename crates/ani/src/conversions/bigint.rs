@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniClass, AniObject, AniString, ani_value_ref};
+use crate::types::{ani_value_ref, AniClass, AniObject, AniString};
 
 use super::{FromAni, ToAni, ToAniArg, TypeInfo};
 
@@ -191,8 +191,6 @@ impl TypeInfo for BigInt {
 
 fn find_bigint_class<'env>(env: &Env<'env>) -> Result<AniClass<'env>> {
     env.find_class("std.core.BigInt")
-        .or_else(|_| env.find_class("escompat.BigInt"))
-        .or_else(|_| env.find_class("Lescompat/BigInt;"))
 }
 
 impl<'env> ToAni<'env> for BigInt {
@@ -200,9 +198,7 @@ impl<'env> ToAni<'env> for BigInt {
 
     fn to_ani(self, env: &Env<'env>) -> Result<Self::Output> {
         let class = find_bigint_class(env)?;
-        let constructor = env
-            .find_constructor(&class, "C{std.core.String}:")
-            .or_else(|_| env.find_constructor(&class, "Lstd/core/String;:V"))?;
+        let constructor = env.find_constructor(&class, "C{std.core.String}:")?;
         let decimal = env.create_string(&self.decimal)?;
         let args = [ani_value_ref(decimal.as_raw() as sys::ani_ref)];
         Ok(env.new_object(&class, &constructor, &args)?.into_raw())

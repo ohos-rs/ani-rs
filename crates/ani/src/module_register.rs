@@ -313,7 +313,6 @@ const DEFMODULE_PREFIX: &str = "@defModule.";
 
 fn is_builtin_descriptor(descriptor: &str) -> bool {
     descriptor.starts_with("std.")
-        || descriptor.starts_with("escompat.")
         || descriptor.starts_with("arkts.")
         || descriptor.starts_with("@")
 }
@@ -726,15 +725,17 @@ pub unsafe fn execute_registrations(env: *mut sys::ani_env) -> sys::ani_status {
                     } else if module.is_null() {
                         sys::ani_status_ANI_NOT_FOUND
                     } else {
-                        if debug && let Some(find_function) = api.Module_FindFunction {
-                            for (idx, f) in functions.iter().enumerate() {
-                                let mut found: sys::ani_function = core::ptr::null_mut();
-                                let check_status = unsafe {
-                                    find_function(env, module, f.name, f.signature, &mut found)
-                                };
-                                eprintln!(
-                                    "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
-                                );
+                        if debug {
+                            if let Some(find_function) = api.Module_FindFunction {
+                                for (idx, f) in functions.iter().enumerate() {
+                                    let mut found: sys::ani_function = core::ptr::null_mut();
+                                    let check_status = unsafe {
+                                        find_function(env, module, f.name, f.signature, &mut found)
+                                    };
+                                    eprintln!(
+                                        "[ani]   precheck module fn[{idx}] find_status={check_status} ptr={found:p}"
+                                    );
+                                }
                             }
                         }
                         match api.Module_BindNativeFunctions {
@@ -925,6 +926,19 @@ mod tests {
         let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
         let candidates = descriptor_candidates("std.core.String");
         assert_eq!(candidates, vec!["std.core.String".to_string()]);
+    }
+
+    #[test]
+    fn removed_escompat_namespace_is_not_treated_as_a_runtime_builtin() {
+        let _guard = TestEnvVarGuard::unset("ANI_TEST_MODULE_NAME");
+        let candidates = descriptor_candidates("escompat.Legacy");
+        assert_eq!(
+            candidates,
+            vec![
+                "escompat.Legacy".to_string(),
+                "@defModule.escompat.Legacy".to_string()
+            ]
+        );
     }
 
     #[test]

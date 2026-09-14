@@ -31,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniClass, AniObject, ani_value_ref};
+use crate::types::{ani_value_ref, AniClass, AniObject};
 
 use super::either::ValidateFromAni;
 use super::{Boxable, FromAni, ToAni, ToAniArg, TypeInfo};

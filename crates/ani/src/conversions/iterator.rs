@@ -40,7 +40,7 @@ use crate::error::{Error, Result, Status};
 use crate::sys;
 use crate::types::{AniClass, AniMethod, AniObject};
 
-use super::collections::{RecordValue, find_method_no_signature};
+use super::collections::{find_method_no_signature, RecordValue};
 use super::{FromAni, ToAni, ToAniArg, TypeInfo};
 
 /// Lazily consumes an ArkTS `Iterable<T>` / `Iterator<T>` from Rust.
@@ -83,7 +83,7 @@ impl<'env, T> AniIterator<'env, T> {
     /// Resolves an iterator from an iterable object.
     ///
     /// Tries `$_iterator()` (the ArkTS 1.2 lowering of `Symbol.iterator`),
-    /// then `values()` (escompat containers), and finally falls back to
+    /// then a collection's `values()`, and finally falls back to
     /// treating the object itself as an iterator.
     pub fn from_iterable(env: &Env<'env>, iterable: AniObject<'env>) -> Result<Self> {
         if iterable.is_null() {

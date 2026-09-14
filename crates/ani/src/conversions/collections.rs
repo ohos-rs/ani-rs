@@ -471,7 +471,7 @@ where
 
 impl TypeInfo for (i32, i32) {
     fn type_signature() -> &'static str {
-        "Lescompat/Tuple2;"
+        "Lstd/core/Tuple2;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
@@ -480,7 +480,7 @@ impl TypeInfo for (i32, i32) {
 
 impl TypeInfo for (i32, i32, i32) {
     fn type_signature() -> &'static str {
-        "Lescompat/Tuple3;"
+        "Lstd/core/Tuple3;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
@@ -489,7 +489,7 @@ impl TypeInfo for (i32, i32, i32) {
 
 impl TypeInfo for (String, String) {
     fn type_signature() -> &'static str {
-        "Lescompat/Tuple2;"
+        "Lstd/core/Tuple2;"
     }
     fn ani_c_type() -> &'static str {
         "ani_object"
@@ -686,6 +686,13 @@ mod tests {
     #[test]
     fn test_btreemap_type_signature() {
         assert_eq!(<BTreeMap<String, i32>>::type_signature(), "Lstd/core/Map;");
+    }
+
+    #[test]
+    fn tuples_use_openharmony_7_std_core_descriptors() {
+        assert_eq!(<(i32, i32)>::type_signature(), "Lstd/core/Tuple2;");
+        assert_eq!(<(i32, i32, i32)>::type_signature(), "Lstd/core/Tuple3;");
+        assert_eq!(<(String, String)>::type_signature(), "Lstd/core/Tuple2;");
     }
 
     #[test]
