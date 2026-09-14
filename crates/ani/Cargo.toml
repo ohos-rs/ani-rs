@@ -1,7 +1,7 @@
 [package]
 name = "ani"
 version = "0.1.0-alpha.3"
-edition = "2024"
+edition = "2021"
 rust-version.workspace = true
 description = "ANI bindings for Rust - like napi-rs for ArkTS-Static"
 license = "MIT OR Apache-2.0"

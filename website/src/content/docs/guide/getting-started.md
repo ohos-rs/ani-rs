@@ -37,7 +37,7 @@ cd my-ani-module
 [package]
 name = "my-ani-module"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
