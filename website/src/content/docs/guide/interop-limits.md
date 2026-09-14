@@ -18,7 +18,7 @@ ani-rs 的 API 设计对齐 napi-rs 与 jni-rs 的成熟约定，但 ANI C API �
 | 局部引用作用域 | jni `with_local_frame` | `env.create_local_scope`（RAII guard） |
 | 原生资源句柄 | napi `External` / `wrap` | `NativePointer` / `ManagedResource` |
 | serde 集成 | napi `serde-json` | `Json` / `serde_json::Value` 转换 |
-| Date | napi `Date` | `SystemTime` / `chrono::DateTime<Utc>` ↔ `escompat.Date` |
+| Date | napi `Date` | `SystemTime` / `chrono::DateTime<Utc>` ↔ `std.core.Date` |
 | 同步迭代器 | JS 迭代协议 | `AniIterator<T>`（消费）+ `*Iterator` class 绑定（生产） |
 | 异步迭代器 | napi 异步迭代 | `#[ani]` AsyncIterator class 绑定 |
 | VM 线程挂载 | jni `attach_current_thread`（scoped/permanent） | `attach_current_thread` / `attach_current_thread_permanently` |

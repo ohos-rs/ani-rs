@@ -1,10 +1,10 @@
-//! ArkTS `Date` (`escompat.Date`) values.
+//! ArkTS `Date` (`std.core.Date`) values.
 //!
 //! Maps `std::time::SystemTime` to ArkTS `Date` in both directions with
 //! millisecond precision, mirroring napi-rs' `Date` support:
 //!
 //! - **Rust → ArkTS**: constructs `new Date(milliseconds)`.
-//! - **ArkTS → Rust**: validates the object is an `escompat.Date` and reads
+//! - **ArkTS → Rust**: validates the object is a `std.core.Date` and reads
 //!   `getTime()`.
 //!
 //! Sub-millisecond precision is truncated because ArkTS `Date` stores whole
@@ -31,18 +31,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::env::Env;
 use crate::error::{Error, Result, Status};
 use crate::sys;
-use crate::types::{AniClass, AniObject, ani_value_double};
+use crate::types::{AniClass, AniObject, ani_value_ref};
 
 use super::either::ValidateFromAni;
-use super::{FromAni, ToAni, ToAniArg, TypeInfo};
+use super::{Boxable, FromAni, ToAni, ToAniArg, TypeInfo};
 
 /// Largest absolute millisecond value an ArkTS/JS `Date` can represent
 /// (±100,000,000 days around the epoch, per ECMA-262).
 const MAX_DATE_MILLIS: f64 = 8.64e15;
+const DATE_CLASS_DESCRIPTOR: &str = "std.core.Date";
+const DATE_TYPE_SIGNATURE: &str = "Lstd/core/Date;";
+const DATE_VALUE_CONSTRUCTOR_SIGNATURE: &str =
+    "X{C{std.core.Date}C{std.core.Long}C{std.core.String}}:";
 
 fn find_date_class<'env>(env: &Env<'env>) -> Result<AniClass<'env>> {
-    env.find_class("escompat.Date")
-        .or_else(|_| env.find_class("Lescompat/Date;"))
+    env.find_class(DATE_CLASS_DESCRIPTOR)
 }
 
 /// Converts a [`SystemTime`] into signed milliseconds since the Unix epoch,
@@ -102,10 +105,9 @@ pub fn millis_to_system_time(millis: f64) -> Result<SystemTime> {
 
 fn date_object_from_millis<'env>(env: &Env<'env>, millis: f64) -> Result<sys::ani_object> {
     let class = find_date_class(env)?;
-    let constructor = env
-        .find_constructor(&class, "d:")
-        .or_else(|_| env.find_constructor(&class, "D:V"))?;
-    let args = [ani_value_double(millis)];
+    let constructor = env.find_constructor(&class, DATE_VALUE_CONSTRUCTOR_SIGNATURE)?;
+    let millis = (millis as i64).box_value(env)?;
+    let args = [ani_value_ref(millis.as_raw() as sys::ani_ref)];
     Ok(env.new_object(&class, &constructor, &args)?.into_raw())
 }
 
@@ -121,15 +123,13 @@ fn millis_from_date_object<'env>(env: &Env<'env>, value: sys::ani_object) -> Res
             "value is not an ArkTS Date",
         ));
     }
-    let method = env
-        .find_method(&class, "getTime", ":d")
-        .or_else(|_| env.find_method(&class, "getTime", ":D"))?;
-    env.call_method_double(&object, &method, &[])
+    let method = env.find_method(&class, "getTime", ":l")?;
+    Ok(env.call_method_long(&object, &method, &[])? as f64)
 }
 
 impl TypeInfo for SystemTime {
     fn type_signature() -> &'static str {
-        "Lescompat/Date;"
+        DATE_TYPE_SIGNATURE
     }
 
     fn ani_c_type() -> &'static str {
@@ -159,7 +159,7 @@ impl ToAniArg for SystemTime {
     }
 
     fn arg_signature() -> &'static str {
-        "Lescompat/Date;"
+        DATE_TYPE_SIGNATURE
     }
 }
 
@@ -184,7 +184,7 @@ mod chrono_impl {
 
     impl TypeInfo for DateTime<Utc> {
         fn type_signature() -> &'static str {
-            "Lescompat/Date;"
+            DATE_TYPE_SIGNATURE
         }
 
         fn ani_c_type() -> &'static str {
@@ -226,7 +226,7 @@ mod chrono_impl {
         }
 
         fn arg_signature() -> &'static str {
-            "Lescompat/Date;"
+            DATE_TYPE_SIGNATURE
         }
     }
 
@@ -240,6 +240,17 @@ mod chrono_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn date_uses_the_api_26_static_runtime_descriptor() {
+        assert_eq!(SystemTime::type_signature(), "Lstd/core/Date;");
+        assert_eq!(SystemTime::arg_signature(), "Lstd/core/Date;");
+        assert_eq!(DATE_CLASS_DESCRIPTOR, "std.core.Date");
+        assert_eq!(
+            DATE_VALUE_CONSTRUCTOR_SIGNATURE,
+            "X{C{std.core.Date}C{std.core.Long}C{std.core.String}}:"
+        );
+    }
 
     #[test]
     fn epoch_maps_to_zero_millis() {

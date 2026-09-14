@@ -184,7 +184,7 @@ pub enum AniType {
     String(StringType),
     /// Arbitrary-precision ArkTS bigint.
     BigInt,
-    /// ArkTS `escompat.Date` (Rust `std::time::SystemTime` or
+    /// ArkTS `std.core.Date` (Rust `std::time::SystemTime` or
     /// `chrono::DateTime<Utc>`).
     Date,
     /// ArkTS synchronous iterator protocol (`AniIterator<T>`), rendered as
@@ -591,7 +591,7 @@ impl AniType {
         }
 
         // std::time::SystemTime and chrono::DateTime<Utc> both map to
-        // escompat.Date via millisecond timestamps.
+        // std.core.Date via millisecond timestamps.
         if ident == "SystemTime" || ident == "DateTime" {
             return AniType::Date;
         }
@@ -1066,7 +1066,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_signature(),
             AniType::String(_) => "Lstd/core/String;".to_string(),
             AniType::BigInt => "Lstd/core/BigInt;".to_string(),
-            AniType::Date => "Lescompat/Date;".to_string(),
+            AniType::Date => "Lstd/core/Date;".to_string(),
             AniType::Iterator(_) => "Lstd/core/Object;".to_string(),
             AniType::Unit => "V".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
@@ -1136,7 +1136,7 @@ impl AniType {
             AniType::Primitive(p) => p.to_boxed_new_signature().to_string(),
             AniType::String(_) => "C{std.core.String}".to_string(),
             AniType::BigInt => "C{std.core.BigInt}".to_string(),
-            AniType::Date => "C{escompat.Date}".to_string(),
+            AniType::Date => "C{std.core.Date}".to_string(),
             AniType::Iterator(_) => "C{std.core.Object}".to_string(),
             AniType::Null => "C{std.core.Null}".to_string(),
             AniType::Undefined => "U".to_string(),
@@ -2156,7 +2156,7 @@ mod tests {
         let ty: Type = syn::parse_quote!(std::time::SystemTime);
         let ani_type = AniType::from_syn_type(&ty);
         assert!(matches!(ani_type, AniType::Date));
-        assert_eq!(ani_type.to_signature(), "Lescompat/Date;");
+        assert_eq!(ani_type.to_signature(), "Lstd/core/Date;");
 
         let ty: Type = syn::parse_quote!(chrono::DateTime<chrono::Utc>);
         let ani_type = AniType::from_syn_type(&ty);

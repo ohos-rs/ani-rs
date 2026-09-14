@@ -19,7 +19,7 @@ api24 = []
 api26 = ["api24"]
 # Enable anyhow error integration
 error_anyhow = ["dep:anyhow"]
-# Map chrono::DateTime<Utc> to ArkTS escompat.Date.
+# Map chrono::DateTime<Utc> to ArkTS std.core.Date.
 chrono = ["dep:chrono"]
 # Map serde values to native ArkTS Record/Array/boxed primitive object graphs.
 serde-json = ["dep:serde", "dep:serde_json"]
