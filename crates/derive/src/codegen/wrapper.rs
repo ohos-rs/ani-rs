@@ -562,7 +562,7 @@ fn generate_async_promise_injected_vars(
     binding_kind: WrapperBindingKind,
 ) -> TokenStream {
     let mut vars = vec![quote! {
-        let __ani_attach = __ani_vm.attach_current_thread()
+        let __ani_attach = __ani_vm.acquire_thread_attachment()
             .map_err(|e| -> ani::error::DynAniError { Box::new(e) })?;
         let __ani_env = __ani_attach.env();
         let env = __ani_env.as_raw();
