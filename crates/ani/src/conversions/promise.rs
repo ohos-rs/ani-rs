@@ -117,7 +117,7 @@ pub fn queue_registered_promise_bridges() -> sys::ani_status {
                 promise_bridge_reject as *const () as *const c_void,
             ),
         ] {
-            let status = crate::module_register::queue_module_binding(
+            let status = crate::module_register::queue_optional_module_binding(
                 module,
                 name,
                 PROMISE_BRIDGE_SETTLE_SIGNATURE,
@@ -127,7 +127,7 @@ pub fn queue_registered_promise_bridges() -> sys::ani_status {
                 return status;
             }
         }
-        let status = crate::module_register::queue_module_binding(
+        let status = crate::module_register::queue_optional_module_binding(
             module,
             RUNTIME_TASK_CANCEL,
             PROMISE_BRIDGE_SETTLE_SIGNATURE,
