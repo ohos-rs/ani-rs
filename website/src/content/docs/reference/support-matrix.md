@@ -8,15 +8,15 @@ description: ANI-RS 的 API、架构、运行时和验证层级。
 | 项目 | 支持范围 |
 | --- | --- |
 | 最低 ANI 能力 | API 23（`--no-default-features --features api23`） |
-| 默认能力 | API 24（`api24`） |
-| 发布验证能力 | API 26（`api26`） |
-| 当前基准头文件 | OpenHarmony API 26 源码中的 `interface/sdk_c/ani/ani.h` |
+| 默认能力 | API 26（`api26`） |
+| 发布验证能力 | OpenHarmony 7.0 Release / API 26（`api26`） |
+| 当前基准头文件 | `interface_sdk_c` 的 `OpenHarmony-v7.0-Release:ani/ani.h` |
 | 兼容模式 | `api23` 使用 class constructor/method primitive wrapper 路径 |
 | ArkTS | ArkTS 1.2 / ETS |
 
 API 23/24 当前声明为“交叉编译兼容”；只有 API 26 具有真实 guest 运行时证据。常规 `.github/workflows/ci.yml` 只执行格式检查、全 feature Clippy、workspace 单测和一次依赖安全审计。`.github/workflows/qemu.yml` 使用 GitHub-hosted Ubuntu/macOS runner，由 action 安装 OpenHarmony SDK 与系统 QEMU，并固定下载、校验 [`harmony-contrib/ohos-qemu` `v20260731`](https://github.com/harmony-contrib/ohos-qemu/releases/tag/v20260731)。每个架构 leg 依次检查 API 23/24/26 编译 profile，再对 API 26 的 ARM64/x86_64/ARMv7A 镜像执行同一 commit、同一 52 场景、HAP、JIT 50/100 轮内存压力与性能报告。其他检查脚本保留为本地或发布诊断工具，不再拆成常规 Actions job。
 
-`scripts/header.sh --check` 会同时验证头文件校验和、API 24 符号和 bindgen 输出漂移。
+`scripts/header.sh --check` 会同时验证头文件校验和、OpenHarmony 7.0 Release 所需符号和 bindgen 输出漂移。
 
 ## 目标架构
 

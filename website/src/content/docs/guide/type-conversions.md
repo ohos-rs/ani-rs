@@ -153,7 +153,7 @@ pub fn zeros(size: i32) -> ArrayBuffer {
 
 ## TypedArray
 
-`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `OwnedTypedArray<T>`（兼容名 `TypedArray<T>`）的别名。公开 ABI 使用对应的 ArkTS 原生 TypedArray class，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
+`Int8Array`、`Uint8Array`、`Uint8ClampedArray`、`Int16Array`、`Uint16Array`、`Int32Array`、`Uint32Array`、`BigInt64Array`、`BigUint64Array`、`Float32Array` 和 `Float64Array` 是 `OwnedTypedArray<T>`（兼容名 `TypedArray<T>`）的别名。公开 ABI 使用 `OpenHarmony-v7.0-Release` 定义的 `std.core` 原生 TypedArray class，例如 `std.core.Uint16Array`，并校验 `buffer`、`byteOffset`、`byteLength`、元素宽度和对齐。
 
 ```rust
 use ani::prelude::*;
